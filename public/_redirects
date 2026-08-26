@@ -1,2 +1,11 @@
-# Netlify SPA fallback — every deep link serves the app shell
-/*    /index.html   200
+# Netlify redirects — order matters, the SPA fallback must stay last.
+
+# API → serverless function
+/api/*            /.netlify/functions/api/:splat   200
+
+# Dynamic SEO assets generated from the live published catalog
+/sitemap.xml      /.netlify/functions/api/sitemap.xml   200
+/robots.txt       /.netlify/functions/api/robots.txt    200
+
+# SPA fallback — every other deep link serves the app shell
+/*                /index.html                     200

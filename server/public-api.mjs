@@ -1,4 +1,4 @@
-import { dbApi, dbConfigMissing, enc } from "./db.mjs";
+import { dbApi, dbConfigMissing, enc, hasSlugColumn } from "./db.mjs";
 import { json, clientIp, sha256hex, ENV } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -6,8 +6,13 @@ import { json, clientIp, sha256hex, ENV } from "./util.mjs";
  * Only exposes rows with status = 'published'.
  * ────────────────────────────────────────────────────────────── */
 
-const VIDEO_COLS =
-  "id,slug,title,description,status,duration_s,views,like_ratio,tags,thumbnail_url,video_url,hls_url,featured,trending,editors_pick,seo_title,seo_description,published_at,created_at,source_size,category_id";
+const VIDEO_COLS_BASE =
+  "id,title,description,status,duration_s,views,like_ratio,tags,thumbnail_url,video_url,hls_url,featured,trending,editors_pick,seo_title,seo_description,published_at,created_at,source_size,category_id";
+
+/** Adds `slug` only when migration 0002 has been applied. */
+async function videoCols() {
+  return (await hasSlugColumn()) ? `${VIDEO_COLS_BASE},slug` : VIDEO_COLS_BASE;
+}
 
 let catCache = { at: 0, list: [] };
 
@@ -53,17 +58,17 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,79}$/i;
 
 /** Resolve a published video by its SEO slug or, as a fallback, its uuid. */
-async function findPublished(ref, cols = VIDEO_COLS) {
+async function findPublished(ref, cols) {
   if (!ref) return null;
-  if (SLUG_RE.test(ref)) {
-    const bySlug = await dbApi.one(
-      "videos",
-      `slug=eq.${encodeURIComponent(ref)}&status=eq.published&select=${cols}`
-    );
+  const select = cols ?? (await videoCols());
+  if ((await hasSlugColumn()) && SLUG_RE.test(ref)) {
+    const bySlug = await dbApi
+      .one("videos", `slug=eq.${encodeURIComponent(ref)}&status=eq.published&select=${select}`)
+      .catch(() => null);
     if (bySlug) return bySlug;
   }
   if (UUID_RE.test(ref)) {
-    return dbApi.one("videos", `id=eq.${ref}&status=eq.published&select=${cols}`);
+    return dbApi.one("videos", `id=eq.${ref}&status=eq.published&select=${select}`).catch(() => null);
   }
   return null;
 }
@@ -81,7 +86,14 @@ export async function handlePublic(req, url, path) {
      the dynamic catalog and the built-in demo dataset. Never throws. */
   if (first === "health" && req.method === "GET") {
     const missing = dbConfigMissing() ? ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"].filter((k) => !ENV(k)) : [];
-    return json({ ok: missing.length === 0, backend: "supabase", missing });
+    const ok = missing.length === 0;
+    return json({
+      ok,
+      backend: "supabase",
+      missing,
+      // Surfaces whether migration 0002 (SEO slugs) has been applied.
+      slugs: ok ? await hasSlugColumn().catch(() => false) : false,
+    });
   }
 
   if (dbConfigMissing()) return json({ error: "Backend not configured", code: "config" }, { status: 503 });
@@ -118,7 +130,7 @@ export async function handlePublic(req, url, path) {
   if (first === "videos" && seg.length === 1 && req.method === "GET") {
     const limit = Math.min(Number(url.searchParams.get("limit") ?? 200) || 200, 500);
     const offset = Math.max(Number(url.searchParams.get("offset") ?? 0) || 0, 0);
-    const parts = ["status=eq.published", `select=${VIDEO_COLS}`];
+    const parts = ["status=eq.published", `select=${await videoCols()}`];
 
     const category = url.searchParams.get("category");
     const cats = await categoryIndex();

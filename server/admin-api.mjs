@@ -1,4 +1,4 @@
-import { dbApi, objectKey } from "./db.mjs";
+import { dbApi, objectKey, hasSlugColumn } from "./db.mjs";
 import {
   createMultipartUpload, presignPart, presignSinglePut, completeMultipartUpload,
   abortMultipartUpload, putObject, deleteObject, publicUrlFor, r2ConfigMissing,
@@ -68,16 +68,26 @@ async function getVideoOr404(id) {
  * therefore gets its own crawlable, canonical page automatically.
  */
 async function uniqueSlug(title, excludeId = null) {
+  // No-op until migration 0002 adds the column — uploads must never fail.
+  if (!(await hasSlugColumn())) return null;
   const base = slugify(title || "") || "video";
   for (let attempt = 0; attempt < 40; attempt++) {
     const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
-    const query = `slug=eq.${encodeURIComponent(candidate)}&select=id&limit=1`;
-    const { data } = await dbApi.select("videos", query);
-    const taken = data.find((r) => r.id !== excludeId);
-    if (!taken) return candidate;
+    try {
+      const { data } = await dbApi.select(
+        "videos",
+        `slug=eq.${encodeURIComponent(candidate)}&select=id&limit=1`
+      );
+      if (!data.find((r) => r.id !== excludeId)) return candidate;
+    } catch {
+      return null;
+    }
   }
   return `${base}-${Date.now().toString(36)}`;
 }
+
+/** Adds `slug` to a patch/insert only when the column exists. */
+const withSlug = (obj, slug) => (slug ? { ...obj, slug } : obj);
 
 async function withCategory(row) {
   const cats = await categoryIndex();
@@ -266,12 +276,16 @@ async function patchVideo(req, id) {
     patch.title = t;
     // Keep published URLs stable for SEO; refresh the slug while still a draft.
     if (t !== row.title && (row.status !== "published" || !row.slug)) {
-      patch.slug = await uniqueSlug(t, row.id);
+      const s = await uniqueSlug(t, row.id);
+      if (s) patch.slug = s;
     }
   }
   if ("slug" in body) {
     const requested = slugify(cleanText(body.slug, 80));
-    if (requested && requested !== row.slug) patch.slug = await uniqueSlug(requested, row.id);
+    if (requested && requested !== row.slug) {
+      const s = await uniqueSlug(requested, row.id);
+      if (s) patch.slug = s;
+    }
   }
   if ("description" in body) patch.description = cleanText(body.description, 2000);
   if ("tags" in body) patch.tags = cleanTags(body.tags);
@@ -311,13 +325,20 @@ async function setStatus(req, id, action) {
   if (action === "publish") {
     if (!row.video_url && !row.hls_url) throw badRequest("This video has no media attached — upload a file first");
     if (["uploading", "processing"].includes(row.status)) throw badRequest("Video is still uploading or processing");
-    const updated = await dbApi.update("videos", `id=eq.${row.id}`, {
-      status: "published",
-      // Guarantee a canonical slug exists before the page goes live.
-      ...(row.slug ? {} : { slug: await uniqueSlug(row.title, row.id) }),
-      published_at: row.published_at ?? nowIso(),
-      updated_at: nowIso(),
-    });
+    // Guarantee a canonical slug exists before the page goes live.
+    const ensuredSlug = row.slug ? null : await uniqueSlug(row.title, row.id);
+    const updated = await dbApi.update(
+      "videos",
+      `id=eq.${row.id}`,
+      withSlug(
+        {
+          status: "published",
+          published_at: row.published_at ?? nowIso(),
+          updated_at: nowIso(),
+        },
+        ensuredSlug
+      )
+    );
     await logActivity(admin.sub, "video.publish", "video", row.id, { title: row.title });
     return json({ video: await withCategory(updated?.[0] ?? row) });
   }
@@ -419,18 +440,23 @@ async function createUpload(req) {
     row = updated?.[0] ?? existing;
   } else {
     const initialTitle = fileName.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ").slice(0, 120);
-    row = await dbApi.insert("videos", {
-      title: initialTitle,
-      // Every upload gets its own /watch/{slug} page from the very first save.
-      slug: await uniqueSlug(initialTitle),
-      status: "uploading",
-      upload_key: key,
-      upload_id: uploadId,
-      source_size: size,
-      content_type: contentType,
-      duration_s: Number(body.durationS) > 0 ? Math.round(Number(body.durationS)) : null,
-      tags: [],
-    });
+    // Every upload gets its own /watch/{slug} page once migration 0002 is applied.
+    row = await dbApi.insert(
+      "videos",
+      withSlug(
+        {
+          title: initialTitle,
+          status: "uploading",
+          upload_key: key,
+          upload_id: uploadId,
+          source_size: size,
+          content_type: contentType,
+          duration_s: Number(body.durationS) > 0 ? Math.round(Number(body.durationS)) : null,
+          tags: [],
+        },
+        await uniqueSlug(initialTitle)
+      )
+    );
   }
 
   await logActivity(admin.sub, "upload.start", "video", row.id, { fileName, size, mode: uploadId ? "multipart" : "single" });

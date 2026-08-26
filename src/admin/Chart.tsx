@@ -159,7 +159,7 @@ export function ViewsChart({
   };
 
   return (
-    <section className={cn("rounded-2xl border border-white/6 bg-ink-900/60 p-5", className)}>
+    <section className={cn("min-w-0 overflow-hidden rounded-2xl border border-white/6 bg-ink-900/60 p-5", className)}>
       <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -179,13 +179,15 @@ export function ViewsChart({
         {actions}
       </header>
 
-      <div ref={ref} className="relative w-full" style={{ height }}>
+      <div ref={ref} className="relative w-full min-w-0" style={{ height }}>
         <svg
           width={width}
           height={height}
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
           role="img"
           aria-label={`${title} chart — ${stats.total} total views over ${data.length} days`}
-          className="touch-pan-y overflow-visible"
+          className="block max-w-full touch-pan-y"
           onPointerMove={onMove}
           onPointerLeave={() => setHover(null)}
         >

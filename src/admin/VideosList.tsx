@@ -121,7 +121,7 @@ export default function VideosList() {
       />
 
       {/* Filters */}
-      <div className="mb-4 grid grid-cols-2 gap-2 md:grid-cols-[1fr_180px_190px_170px]">
+      <div className="mb-4 grid min-w-0 grid-cols-2 gap-2 md:grid-cols-[minmax(0,1fr)_170px_180px_165px]">
         <SearchInput value={q} onChange={(v) => { setQ(v); setPage(1); }} placeholder="Search title or description…" className="col-span-2 md:col-span-1" />
         <Field label="">
           <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} aria-label="Filter by status">
@@ -178,7 +178,7 @@ export default function VideosList() {
       ) : (
         <>
           {/* Desktop table */}
-          <div className="hidden overflow-hidden rounded-2xl border border-white/6 md:block">
+          <div className="hidden min-w-0 overflow-x-auto rounded-2xl border border-white/6 md:block">
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-white/6 bg-ink-900/80 text-[11px] uppercase tracking-wider text-fog-600">

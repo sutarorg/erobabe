@@ -264,8 +264,8 @@ function AdminLayout() {
         </div>
       )}
 
-      <main className="lg:pl-60">
-        <div className="mx-auto max-w-[1200px] px-4 py-6 md:px-8 md:py-8">
+      <main className="overflow-x-hidden lg:pl-60">
+        <div className="mx-auto w-full max-w-[1200px] min-w-0 px-4 py-6 md:px-8 md:py-8">
           <Outlet />
         </div>
       </main>

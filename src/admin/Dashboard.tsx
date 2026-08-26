@@ -42,7 +42,7 @@ export default function Dashboard() {
         <StatCard icon={BarChart3} label="Views (14d)" value={fmtViews(last14)} sub="last two weeks" />
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-[1.65fr_1fr]">
+      <div className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
         <ViewsChart
           data={data.series}
           title="Views — last 14 days"
@@ -51,7 +51,7 @@ export default function Dashboard() {
           actions={<BtnLink to="/admin/analytics" variant="subtle" size="sm">Full analytics</BtnLink>}
         />
 
-        <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+        <section className="min-w-0 rounded-2xl border border-white/6 bg-ink-900/60 p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-white">Top videos</h2>
             <BtnLink to="/admin/videos" variant="ghost" size="sm">All</BtnLink>
@@ -88,7 +88,7 @@ export default function Dashboard() {
         </section>
       </div>
 
-      <div className="mt-6 rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+      <div className="mt-6 min-w-0 rounded-2xl border border-white/6 bg-ink-900/60 p-5">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-white">Recent activity</h2>
           <BtnLink to="/admin/analytics" variant="ghost" size="sm">Full log</BtnLink>

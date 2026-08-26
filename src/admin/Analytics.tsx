@@ -32,8 +32,8 @@ function OverviewTab({ days }: { days: number }) {
         height={280}
       />
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+      <div className="grid min-w-0 gap-6 lg:grid-cols-2">
+        <section className="min-w-0 rounded-2xl border border-white/6 bg-ink-900/60 p-5">
           <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
             <Trophy className="size-4 text-brand-400" aria-hidden />
             Top videos in this period
@@ -46,7 +46,7 @@ function OverviewTab({ days }: { days: number }) {
           />
         </section>
 
-        <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+        <section className="min-w-0 rounded-2xl border border-white/6 bg-ink-900/60 p-5">
           <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
             <BarChart3 className="size-4 text-brand-400" aria-hidden />
             All-time leaders
@@ -55,7 +55,7 @@ function OverviewTab({ days }: { days: number }) {
         </section>
       </div>
 
-      <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+      <section className="min-w-0 overflow-hidden rounded-2xl border border-white/6 bg-ink-900/60 p-5">
         <h2 className="mb-4 text-sm font-semibold text-white">Performance detail</h2>
         {data.topVideos.length === 0 ? (
           <p className="py-8 text-center text-xs text-fog-600">No videos yet.</p>

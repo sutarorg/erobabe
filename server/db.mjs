@@ -103,6 +103,33 @@ export const dbApi = {
   },
 };
 
+/* ──────────────────────────────────────────────────────────────
+ * Schema capability probe.
+ *
+ * The `slug` column arrives with migration 0002. Until it is run the
+ * whole API must keep working (videos must never disappear), so we
+ * probe once, cache the answer, and re-probe periodically so the
+ * feature lights up automatically the moment the migration lands.
+ * ────────────────────────────────────────────────────────────── */
+
+let slugSupport = null;
+let slugCheckedAt = 0;
+const SLUG_RECHECK_MS = 60_000;
+
+export async function hasSlugColumn() {
+  const now = Date.now();
+  if (slugSupport === true) return true;
+  if (slugSupport === false && now - slugCheckedAt < SLUG_RECHECK_MS) return false;
+  try {
+    await dbApi.select("videos", "select=slug&limit=1");
+    slugSupport = true;
+  } catch {
+    slugSupport = false;
+  }
+  slugCheckedAt = now;
+  return slugSupport;
+}
+
 /** Time-safe unique-ish object key for R2. */
 export function objectKey(prefix, originalName = "") {
   const clean = originalName.replace(/[^a-zA-Z0-9._-]/g, "-").slice(-60);

@@ -1,4 +1,4 @@
-import { dbApi, dbConfigMissing } from "./db.mjs";
+import { dbApi, dbConfigMissing, hasSlugColumn } from "./db.mjs";
 import { ENV } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -69,13 +69,14 @@ export async function handleSitemap() {
 
   if (!dbConfigMissing()) {
     try {
+      const slugs = await hasSlugColumn();
+      const videoCols = `id,${slugs ? "slug," : ""}published_at,updated_at,title`;
       const [cats, vids] = await Promise.all([
         dbApi.select("categories", "order=sort.asc&select=slug,name"),
         dbApi.select(
           "videos",
           // Only published videos are ever exposed to search engines.
-          "status=eq.published&select=id,slug,published_at,updated_at,thumbnail_url,title" +
-            "&order=published_at.desc.nullslast&limit=5000"
+          `status=eq.published&select=${videoCols}&order=published_at.desc.nullslast&limit=5000`
         ),
       ]);
       categories = cats.data ?? [];
