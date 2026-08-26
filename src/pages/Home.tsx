@@ -1,13 +1,13 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, Clock, Compass, Eye, Flame, Play, Sparkles, ThumbsUp, Trophy } from "lucide-react";
 import {
-  featuredVideo, HERO_IMAGE, BROWSE_CATEGORIES, editorsPicks, trendingVideos,
+  featuredVideo, BROWSE_CATEGORIES, editorsPicks, trendingVideos,
   popularVideos, newVideos, mostViewed, categoryCount, categoryName, type Video,
 } from "@/data/videos";
 import { Carousel, CategoryCard, RankList, SectionHeader, VideoGrid, Tag } from "@/components/Sections";
 import { AgeBadge } from "@/components/Brand";
 import { publicSettings } from "@/data/dynamic";
-import { useDocumentTitle } from "@/hooks/store";
+import { siteOrigin, useSEO, websiteSchema } from "@/lib/seo";
 
 function Hero({ video }: { video: Video }) {
   return (
@@ -16,14 +16,14 @@ function Hero({ video }: { video: Video }) {
       className="relative overflow-hidden rounded-2xl ring-1 ring-white/10 animate-fade-up md:rounded-3xl"
     >
       <img
-        src={HERO_IMAGE}
-        alt=""
-        aria-hidden
+        src={video.thumbnail}
+        alt={`${video.title} thumbnail`}
         fetchPriority="high"
         className="absolute inset-0 h-full w-full object-cover animate-zoom-slow"
       />
-      <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/45 to-ink-950/10" aria-hidden />
-      <div className="absolute inset-0 bg-gradient-to-r from-ink-950/85 via-ink-950/25 to-transparent" aria-hidden />
+      <div className="absolute inset-0 bg-ink-950/25" aria-hidden />
+      <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/70 to-ink-950/15" aria-hidden />
+      <div className="absolute inset-0 bg-gradient-to-r from-ink-950/90 via-ink-950/35 to-transparent" aria-hidden />
 
       <div className="relative flex min-h-[380px] max-w-3xl flex-col justify-end p-5 sm:min-h-[440px] sm:p-8 md:min-h-[520px] md:p-12">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-300">
@@ -71,7 +71,12 @@ function Hero({ video }: { video: Video }) {
 }
 
 export default function Home() {
-  useDocumentTitle("");
+  useSEO({
+    description:
+      "EroBabe — watch premium 18+ adult videos online. Trending videos, popular categories, new releases and editor's picks streamed in a fast, cinematic player. Adults only.",
+    canonical: `${siteOrigin()}/`,
+    schema: websiteSchema(siteOrigin()),
+  });
   return (
     <div className="mx-auto max-w-[1600px] space-y-10 px-4 pt-4 md:space-y-14 md:px-8 md:pt-6">
       {featuredVideo && publicSettings.heroEnabled && <Hero video={featuredVideo} />}

@@ -1,10 +1,14 @@
 import { LayoutGrid } from "lucide-react";
 import { CATEGORIES, categoryCount, TOTAL_VIDEOS } from "@/data/videos";
 import { CategoryCard } from "@/components/Sections";
-import { useDocumentTitle } from "@/hooks/store";
+import { useSEO } from "@/lib/seo";
 
 export default function Categories() {
-  useDocumentTitle("Categories");
+  useSEO({
+    title: "Adult Video Categories — EroBabe",
+    description:
+      "Browse every 18+ video category on EroBabe — studio productions, premium, couples, solo, amateur, compilations and curated collections.",
+  });
   return (
     <div className="mx-auto max-w-[1600px] px-4 pt-4 md:px-8 md:pt-6">
       <header className="mb-6 animate-fade-up md:mb-8">

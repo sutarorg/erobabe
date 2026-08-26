@@ -1,16 +1,15 @@
 [
   {
     "AllowedOrigins": [
-      "https://erobabe.com",
-      "https://www.erobabe.com",
-      "https://*.netlify.app",
-      "https://*.vercel.app",
+      "http://localhost:3000",
+      "http://localhost:8888",
       "http://localhost:5173",
-      "http://localhost:8888"
+      "https://erobabe.com",
+      "https://www.erobabe.com"
     ],
     "AllowedMethods": ["PUT", "GET", "HEAD"],
     "AllowedHeaders": ["*"],
-    "ExposeHeaders": ["ETag"],
+    "ExposeHeaders": ["ETag", "Content-Length", "Content-Range", "Accept-Ranges"],
     "MaxAgeSeconds": 3600
   }
 ]

@@ -1,6 +1,6 @@
 import { VideoGrid } from "@/components/Sections";
 import { popularVideos, newVideos } from "@/data/videos";
-import { useDocumentTitle } from "@/hooks/store";
+import { useSEO } from "@/lib/seo";
 import { Clock, TrendingUp, type LucideIcon } from "lucide-react";
 
 const CONFIG = {
@@ -21,7 +21,19 @@ const CONFIG = {
 export default function ListPage({ kind }: { kind: keyof typeof CONFIG }) {
   const cfg = CONFIG[kind];
   const Icon = cfg.icon;
-  useDocumentTitle(cfg.title);
+  useSEO(
+    kind === "popular"
+      ? {
+          title: "Popular 18+ Videos — EroBabe",
+          description:
+            "The most-watched adult videos on EroBabe — ranked by all-time views and the content viewers keep coming back to.",
+        }
+      : {
+          title: "New 18+ Video Releases — EroBabe",
+          description:
+            "Fresh 18+ adult video releases on EroBabe — the latest uploads from the last few days, newest first.",
+        }
+  );
   const videos = cfg.videos();
 
   return (

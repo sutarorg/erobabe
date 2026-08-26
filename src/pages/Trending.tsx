@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Clock, Eye, Flame, Play, TrendingUp } from "lucide-react";
 import { trendingVideos, newVideos, BROWSE_CATEGORIES, categoryCount, type Video } from "@/data/videos";
 import { Carousel, CategoryCard, RankList, SectionHeader } from "@/components/Sections";
-import { useDocumentTitle } from "@/hooks/store";
+import { useSEO } from "@/lib/seo";
 import { cn } from "@/lib/format";
 
 function RankCard({ video, rank, size = "md" }: { video: Video; rank: number; size?: "lg" | "md" }) {
@@ -57,7 +57,11 @@ function RankCard({ video, rank, size = "md" }: { video: Video; rank: number; si
 }
 
 export default function Trending() {
-  useDocumentTitle("Trending");
+  useSEO({
+    title: "Trending 18+ Videos — EroBabe",
+    description:
+      "The hottest trending adult videos on EroBabe this week — the #1 chart, rising videos and popular categories, updated daily.",
+  });
   const list = trendingVideos;
   const top = list.slice(0, 3);
 

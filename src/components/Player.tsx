@@ -302,6 +302,24 @@ export function Player({
         </div>
       )}
 
+      {/* Player title belongs to the top edge, independent of the bottom controls. */}
+      {title && !error && (
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-x-0 top-0 z-10 h-24 transition-opacity duration-300",
+            visible ? "opacity-100" : "opacity-0"
+          )}
+        >
+          <div
+            aria-hidden
+            className="absolute inset-0 bg-gradient-to-b from-black/85 via-black/45 to-transparent"
+          />
+          <p className="relative truncate px-4 pt-3.5 text-sm font-medium text-white/95 drop-shadow-md sm:px-5 sm:pt-4 sm:text-[15px]">
+            {title}
+          </p>
+        </div>
+      )}
+
       {/* ── Control surface ── */}
       <div
         className={cn(
@@ -309,20 +327,6 @@ export function Player({
           visible ? "opacity-100" : "pointer-events-none opacity-0"
         )}
       >
-        {/* Title scrim */}
-        {title && (
-          <div
-            aria-hidden
-            className={cn(
-              "pointer-events-none absolute inset-x-0 -top-24 h-24 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-300",
-              visible ? "opacity-100" : "opacity-0"
-            )}
-          />
-        )}
-        {title && (
-          <p className="absolute inset-x-0 -top-16 truncate px-4 text-sm font-medium text-white/90">{title}</p>
-        )}
-
         {/* Seek bar */}
         <div
           ref={seekRef}

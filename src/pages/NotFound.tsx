@@ -1,9 +1,13 @@
 import { Link } from "react-router-dom";
 import { Compass, Flame, Home } from "lucide-react";
-import { useDocumentTitle } from "@/hooks/store";
+import { useSEO } from "@/lib/seo";
 
 export default function NotFound() {
-  useDocumentTitle("404");
+  useSEO({
+    title: "404 — Page Not Found — EroBabe",
+    description: "The page you are looking for doesn't exist on EroBabe.",
+    robots: "noindex",
+  });
   return (
     <div className="mx-auto flex min-h-[60vh] max-w-2xl flex-col items-center justify-center px-4 py-16 text-center">
       <p className="text-gradient select-none text-[110px] font-bold leading-none tracking-tight sm:text-[150px] animate-flicker">

@@ -1,5 +1,6 @@
 import { handlePublic } from "./public-api.mjs";
 import { handleAdmin } from "./admin-api.mjs";
+import { handleSitemap, handleRobots } from "./sitemap.mjs";
 import { json, toError } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -14,6 +15,13 @@ export async function handle(request) {
   try {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204 });
+    }
+    // Dynamic SEO assets (generated from the live published catalog)
+    if (path === "/sitemap.xml" || path === "/api/sitemap.xml" || path === "/api/sitemap") {
+      return await handleSitemap(request);
+    }
+    if (path === "/robots.txt" || path === "/api/robots.txt") {
+      return handleRobots(request);
     }
     if (path.startsWith("/api/public")) return await handlePublic(request, url, path);
     if (path.startsWith("/api/admin")) return await handleAdmin(request, url, path);

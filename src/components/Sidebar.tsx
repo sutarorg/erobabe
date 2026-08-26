@@ -100,7 +100,7 @@ function SidebarNav({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?
         <div className="mx-3 mt-2 rounded-2xl border border-white/6 bg-ink-800/60 p-3.5">
           <AgeBadge />
           <p className="mt-2 text-[11px] leading-relaxed text-fog-600">
-            Adults only. All demo content is fictional and used solely for interface demonstration.
+            Adults only. All content is intended for users aged 18 or older and should be accessed only where legally permitted.
           </p>
         </div>
       )}

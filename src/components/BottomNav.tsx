@@ -90,7 +90,7 @@ function MoreSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
           ))}
         </div>
         <p className="px-6 pt-4 text-[11px] leading-relaxed text-fog-600">
-          18+ Adults Only · All demo content is fictional and used for interface demonstration purposes.
+          18+ Adults Only
         </p>
       </div>
     </div>

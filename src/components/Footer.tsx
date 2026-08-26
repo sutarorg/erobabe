@@ -76,8 +76,8 @@ export function Footer() {
         </div>
 
         <div className="mt-10 flex flex-col gap-3 border-t border-white/6 pt-6 text-xs text-fog-600 md:flex-row md:items-center md:justify-between">
-          <p>© {new Date().getFullYear()} EroBabe — a static front-end demo. No real services are provided.</p>
-          <p className="font-medium text-fog-500">18+ Adults Only · Fictional demo content</p>
+          <p>© {new Date().getFullYear()} EroBabe</p>
+          <p className="font-medium text-fog-500">18+ Adults Only</p>
         </div>
       </div>
     </footer>

@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { Logo } from "@/components/Brand";
+import { applySEO } from "@/lib/seo";
 import { cn } from "@/lib/format";
 
 /* ── auth context ── */
@@ -291,6 +292,11 @@ function RequireAuth() {
 }
 
 export default function AdminApp() {
+  useEffect(() => {
+    applySEO({ title: "Admin — EroBabe", robots: "noindex, nofollow" });
+    return () => applySEO();
+  }, []);
+
   return (
     <AuthProvider>
       <Routes>

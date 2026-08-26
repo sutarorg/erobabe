@@ -6,7 +6,8 @@ import {
 } from "lucide-react";
 import { CAPTIONS_URL, categoryName, getVideoById, relatedVideos, type Video } from "@/data/videos";
 import { trackView } from "@/data/dynamic";
-import { useDocumentTitle, useHistory, useLikes, useSaved } from "@/hooks/store";
+import { useHistory, useLikes, useSaved } from "@/hooks/store";
+import { absUrl, isoDuration, siteOrigin, useSEO } from "@/lib/seo";
 import { Player } from "@/components/Player";
 import { ShareModal } from "@/components/ShareModal";
 import { EmptyState, Tag } from "@/components/Sections";
@@ -83,7 +84,46 @@ export default function Watch() {
   const [shareOpen, setShareOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  useDocumentTitle(video ? video.title : "Video unavailable");
+  const watchTitle = video ? `${video.title} — EroBabe 18+` : "Video unavailable — EroBabe";
+  const watchDescription = video
+    ? (video.description || `Watch ${video.title} online on EroBabe.`).replace(/\s+/g, " ").slice(0, 155)
+    : undefined;
+  const uploadDate = video ? new Date(Date.now() - video.daysAgo * 86_400_000).toISOString() : undefined;
+
+  useSEO(
+    video
+      ? {
+          title: watchTitle,
+          description: watchDescription,
+          canonical: `${siteOrigin()}/watch/${video.id}`,
+          type: "video.other",
+          image: video.thumbnail,
+          video: {
+            url: absUrl(video.videoUrl),
+            durationS: video.duration,
+            publishedAt: uploadDate,
+          },
+          schema: {
+            "@context": "https://schema.org",
+            "@type": "VideoObject",
+            name: video.title,
+            description: watchDescription,
+            thumbnailUrl: [absUrl(video.thumbnail)],
+            uploadDate,
+            datePublished: uploadDate,
+            duration: isoDuration(video.duration),
+            contentUrl: absUrl(video.videoUrl),
+            embedUrl: `${siteOrigin()}/watch/${video.id}`,
+            isFamilyFriendly: false,
+            interactionStatistic: {
+              "@type": "InteractionCounter",
+              interactionType: { "@type": "WatchAction" },
+              userInteractionCount: video.views,
+            },
+          },
+        }
+      : { title: watchTitle, robots: "noindex" }
+  );
 
   useEffect(() => {
     if (video) {

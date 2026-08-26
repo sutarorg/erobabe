@@ -449,4 +449,4 @@ export function suggest(query: string, limit = 7): { label: string; kind: "video
 }
 
 export const demoNotice =
-  "All titles, performers and statistics are fictional. Thumbnails are tasteful stock photography and playback uses openly licensed placeholder video files — this site is an interface demonstration only.";
+  "An 18+ adult-content website featuring videos and media intended exclusively for adults. Please use the website responsibly and ensure your access complies with applicable laws in your jurisdiction.";

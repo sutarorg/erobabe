@@ -22,7 +22,15 @@
       "destination": "/api/index"
     },
     {
-      "source": "/((?!api/|assets/|favicon|robots.txt|sitemap.xml|site.webmanifest).*)",
+      "source": "/sitemap.xml",
+      "destination": "/api/index?path=sitemap.xml"
+    },
+    {
+      "source": "/robots.txt",
+      "destination": "/api/index?path=robots.txt"
+    },
+    {
+      "source": "/((?!api/|assets/|favicon|site.webmanifest).*)",
       "destination": "/index.html"
     }
   ]

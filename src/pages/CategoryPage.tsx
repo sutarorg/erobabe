@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, FolderSearch } from "lucide-react";
 import { BROWSE_CATEGORIES, byCategory, categoryBySlug, type Video } from "@/data/videos";
 import { EmptyState, VideoGrid, categoryIcon } from "@/components/Sections";
-import { useDocumentTitle } from "@/hooks/store";
+import { siteOrigin, useSEO } from "@/lib/seo";
 import { cn } from "@/lib/format";
 
 type Sort = "popular" | "newest" | "views";
@@ -27,12 +27,20 @@ export default function CategoryPage() {
   const isReal = category && !category.href && BROWSE_CATEGORIES.some((c) => c.slug === slug);
   const [sort, setSort] = useState<Sort>("popular");
 
-  useDocumentTitle(isReal ? category.name : "Category not found");
-
   const videos = useMemo(
     () => (isReal ? sortVideos(byCategory(category.slug), sort) : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [isReal, category?.slug, sort]
+  );
+
+  useSEO(
+    isReal && category
+      ? {
+          title: `${category.name} Videos (18+) — EroBabe`,
+          description: `${category.blurb} Watch ${videos.length} ${category.name.toLowerCase()} videos online on EroBabe.`,
+          canonical: `${siteOrigin()}/category/${category.slug}`,
+        }
+      : { title: "Category not found — EroBabe", robots: "noindex" }
   );
 
   if (!isReal) {

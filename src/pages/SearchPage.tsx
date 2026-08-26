@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowUpDown, CalendarDays, Eye, Search, SearchX, X } from "lucide-react";
 import { popularTags, searchVideos } from "@/data/videos";
-import { useDocumentTitle, useRecentSearches } from "@/hooks/store";
+import { useRecentSearches } from "@/hooks/store";
+import { useSEO } from "@/lib/seo";
 import { SearchBar } from "@/components/SearchBar";
 import { EmptyState, FilterChips, Tag, VideoGrid, type ChipOption } from "@/components/Sections";
 
@@ -18,7 +19,13 @@ export default function SearchPage() {
   const [sort, setSort] = useState("relevance");
   const { list: recent, clear: clearRecent } = useRecentSearches();
 
-  useDocumentTitle(q ? `Search: ${q}` : "Search");
+  useSEO({
+    title: q ? `"${q}" — Search — EroBabe` : "Search — EroBabe",
+    description: q
+      ? `Search results for "${q}" on EroBabe — 18+ adult videos, categories and tags.`
+      : "Search the EroBabe 18+ adult video catalog by title, category, tag or keyword.",
+    robots: "noindex, follow",
+  });
   useEffect(() => setSort("relevance"), [q]);
 
   const results = useMemo(() => {

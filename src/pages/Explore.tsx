@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { CalendarDays, Clock, Compass, Eye, Flame, LayoutGrid, TrendingUp } from "lucide-react";
 import { CATEGORIES, VIDEOS, trendingVideos, popularVideos, newVideos, editorsPicks, categoryCount } from "@/data/videos";
 import { Carousel, CategoryCard, FilterChips, RankList, SectionHeader, VideoGrid, type ChipOption } from "@/components/Sections";
-import { useDocumentTitle } from "@/hooks/store";
+import { useSEO } from "@/lib/seo";
 
 const CHIPS: ChipOption[] = [
   { key: "all", label: "All", icon: LayoutGrid },
@@ -14,7 +14,11 @@ const CHIPS: ChipOption[] = [
 ];
 
 export default function Explore() {
-  useDocumentTitle("Explore");
+  useSEO({
+    title: "Explore 18+ Adult Videos — EroBabe",
+    description:
+      "Browse the full EroBabe catalog — filter trending videos, new releases, popular categories, most-viewed content and editor's picks in one place.",
+  });
   const [filter, setFilter] = useState("all");
 
   const videos = useMemo(() => {

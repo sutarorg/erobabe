@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Compass, History as HistoryIcon, Trash2, X } from "lucide-react";
 import { getVideoById, categoryName } from "@/data/videos";
-import { useDocumentTitle, useHistory } from "@/hooks/store";
+import { useHistory } from "@/hooks/store";
+import { useSEO } from "@/lib/seo";
 import { EmptyState } from "@/components/Sections";
 import { cn, timeAgo } from "@/lib/format";
 
@@ -17,7 +18,7 @@ function watchedAgo(at: number): string {
 }
 
 export default function History() {
-  useDocumentTitle("Watch History");
+  useSEO({ title: "Watch History — EroBabe", robots: "noindex, follow" });
   const { list, remove, clear } = useHistory();
   const [confirming, setConfirming] = useState(false);
 

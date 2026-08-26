@@ -13,6 +13,19 @@
   status = 200
   force = true
 
+# Dynamic SEO assets (generated from the live published catalog)
+[[redirects]]
+  from = "/sitemap.xml"
+  to = "/.netlify/functions/api/sitemap.xml"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/robots.txt"
+  to = "/.netlify/functions/api/robots.txt"
+  status = 200
+  force = true
+
 # SPA fallback so /watch/:id, /admin, /category/:slug never 404
 [[redirects]]
   from = "/*"

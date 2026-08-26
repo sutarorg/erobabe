@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { HardDrive, Save, ShieldCheck, Server } from "lucide-react";
+import { FileDown, HardDrive, Save, ShieldCheck, Server } from "lucide-react";
 import { api, type AdminVideo, type SiteSettings } from "./api";
 import {
   Btn, EmptyBlock, Field, Input, PageHeader, Select, Spinner, Textarea, Toggle, useFetch,
 } from "./ui";
 import { fmtBytes } from "./uploader";
+import { downloadR2SetupGuide } from "./r2GuidePdf";
 import { toast } from "@/components/Feedback";
 
 export default function Settings() {
@@ -14,6 +15,7 @@ export default function Settings() {
 
   const [form, setForm] = useState<SiteSettings>({});
   const [saving, setSaving] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
@@ -59,7 +61,29 @@ export default function Settings() {
       <PageHeader
         title="Settings"
         sub="Site-wide configuration, applied to the public website immediately."
-        actions={<Btn variant="primary" icon={Save} busy={saving} disabled={!dirty} onClick={save}>Save settings</Btn>}
+        actions={
+          <>
+            <Btn
+              variant="outline"
+              icon={FileDown}
+              busy={pdfBusy}
+              onClick={async () => {
+                setPdfBusy(true);
+                try {
+                  await downloadR2SetupGuide();
+                  toast("R2 setup guide downloaded");
+                } catch {
+                  toast("Could not generate the PDF", "info");
+                } finally {
+                  setPdfBusy(false);
+                }
+              }}
+            >
+              Download R2 setup guide (.pdf)
+            </Btn>
+            <Btn variant="primary" icon={Save} busy={saving} disabled={!dirty} onClick={save}>Save settings</Btn>
+          </>
+        }
       />
 
       <div className="space-y-6">
