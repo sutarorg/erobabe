@@ -142,6 +142,21 @@
   -webkit-backdrop-filter: blur(18px) saturate(150%);
 }
 
+/* Seek-bar preview: show the frame only — never native media chrome. */
+.eb-no-media-ui::-webkit-media-controls,
+.eb-no-media-ui::-webkit-media-controls-enclosure,
+.eb-no-media-ui::-webkit-media-controls-panel,
+.eb-no-media-ui::-webkit-media-controls-start-playback-button,
+.eb-no-media-ui::-webkit-media-controls-overlay-play-button,
+.eb-no-media-ui::-webkit-media-controls-timeline,
+.eb-no-media-ui::-webkit-media-controls-current-time-display,
+.eb-no-media-ui::-webkit-media-controls-time-remaining-display {
+  display: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+  opacity: 0 !important;
+}
+
 /* Shimmering loading block */
 @utility skeleton {
   position: relative;

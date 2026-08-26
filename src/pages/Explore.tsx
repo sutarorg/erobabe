@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CalendarDays, Clock, Compass, Eye, Flame, LayoutGrid, TrendingUp } from "lucide-react";
-import { CATEGORIES, VIDEOS, trendingVideos, popularVideos, newVideos, editorsPicks, categoryCount } from "@/data/videos";
+import { CATEGORIES, VIDEOS, trendingVideos, risingVideos, popularVideos, newVideos, editorsPicks, categoryCount } from "@/data/videos";
 import { Carousel, CategoryCard, FilterChips, RankList, SectionHeader, VideoGrid, type ChipOption } from "@/components/Sections";
 import { useSEO } from "@/lib/seo";
 
@@ -82,7 +82,13 @@ export default function Explore() {
         </section>
         <section aria-label="Rising now">
           <SectionHeader eyebrow="Gaining momentum" title="Rising Now" href="/trending" />
-          <Carousel videos={newVideos.filter((v) => v.score > 500_000).slice(0, 8)} />
+          {risingVideos.length > 0 ? (
+            <Carousel videos={risingVideos} />
+          ) : (
+            <p className="rounded-3xl border border-white/6 bg-ink-900/40 px-4 py-10 text-center text-sm text-fog-600">
+              Rising videos appear here as new content gains momentum.
+            </p>
+          )}
         </section>
       </div>
     </div>

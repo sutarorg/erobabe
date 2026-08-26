@@ -1,4 +1,5 @@
 import { formatDuration, formatViews, timeAgo } from "@/lib/format";
+import { rankSections, sectionsFromIds, type DiscoverySections } from "@/lib/ranking";
 
 /**
  * ─────────────────────────────────────────────────────────────
@@ -334,12 +335,18 @@ export const getVideoById = (id: string) => byId.get(id) ?? VIDEOS.find((v) => v
 export const byCategory = (slug: string) => VIDEOS.filter((v) => v.category === slug);
 export const categoryCount = (slug: string) => byCategory(slug).length;
 
-export let trendingVideos = [...VIDEOS].filter((v) => v.trending).sort((a, b) => b.score - a.score);
+/* ── Static rails (unchanged behaviour) ── */
 export let popularVideos = [...VIDEOS].sort((a, b) => b.views - a.views);
 export let newVideos = [...VIDEOS].sort((a, b) => a.daysAgo - b.daysAgo);
 export let mostViewed = popularVideos.slice(0, 10);
-export let editorsPicks = VIDEOS.filter((v) => v.editorsPick);
-export let featuredVideo = VIDEOS.find((v) => v.featured) ?? VIDEOS[0];
+
+/* ── Algorithm-driven discovery sections (limits enforced centrally) ── */
+const initialSections: DiscoverySections = rankSections(VIDEOS);
+export let featuredVideos: Video[] = initialSections.featured;   // max 5
+export let trendingVideos: Video[] = initialSections.trending;   // max 8
+export let risingVideos: Video[] = initialSections.rising;       // max 3
+export let editorsPicks: Video[] = initialSections.editors;      // max 5
+export let featuredVideo: Video = featuredVideos[0] ?? VIDEOS[0];
 
 export let TOTAL_VIDEOS = VIDEOS.length;
 export let TOTAL_VIEWS = VIDEOS.reduce((n, v) => n + v.views, 0);
@@ -352,14 +359,42 @@ export let TOTAL_VIEWS = VIDEOS.reduce((n, v) => n + v.views, 0);
 export function installCatalog(videos: Video[]) {
   VIDEOS = videos;
   byId = new Map(videos.map((v) => [v.id, v]));
-  trendingVideos = videos.filter((v) => v.trending).sort((a, b) => b.score - a.score);
   popularVideos = [...videos].sort((a, b) => b.views - a.views);
   newVideos = [...videos].sort((a, b) => a.daysAgo - b.daysAgo);
   mostViewed = popularVideos.slice(0, 10);
-  editorsPicks = videos.filter((v) => v.editorsPick);
-  featuredVideo = videos.find((v) => v.featured) ?? videos[0];
+  applySections(rankSections(videos));
   TOTAL_VIDEOS = videos.length;
   TOTAL_VIEWS = videos.reduce((n, v) => n + v.views, 0);
+}
+
+function applySections(next: DiscoverySections) {
+  featuredVideos = next.featured;
+  trendingVideos = next.trending;
+  risingVideos = next.rising;
+  editorsPicks = next.editors;
+  featuredVideo = next.featured[0] ?? VIDEOS[0];
+}
+
+/**
+ * Install the server-ranked line-ups produced by the analytics scoring
+ * engine (`/api/public/discovery`). Ordering and limits come straight
+ * from the algorithm; unresolved ids are skipped.
+ */
+export function applyDiscovery(ids: {
+  featured: string[];
+  trending: string[];
+  rising: string[];
+  editors: string[];
+}) {
+  const ranked = sectionsFromIds(VIDEOS, ids);
+  const local = rankSections(VIDEOS);
+  // Fall back per-section so a cold analytics window never blanks a rail.
+  applySections({
+    featured: ranked.featured.length ? ranked.featured : local.featured,
+    trending: ranked.trending.length ? ranked.trending : local.trending,
+    rising: ranked.rising.length ? ranked.rising : local.rising,
+    editors: ranked.editors,
+  });
 }
 
 /** Merge backend categories into the display catalog (names, blurbs, gradients, covers). */

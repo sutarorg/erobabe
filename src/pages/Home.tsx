@@ -1,7 +1,8 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Clock, Compass, Eye, Flame, Play, Sparkles, ThumbsUp, Trophy } from "lucide-react";
 import {
-  featuredVideo, BROWSE_CATEGORIES, editorsPicks, trendingVideos,
+  featuredVideo, featuredVideos, BROWSE_CATEGORIES, editorsPicks, trendingVideos,
   popularVideos, newVideos, mostViewed, categoryCount, categoryName, type Video,
 } from "@/data/videos";
 import { Carousel, CategoryCard, RankList, SectionHeader, VideoGrid, Tag } from "@/components/Sections";
@@ -10,23 +11,54 @@ import { publicSettings } from "@/data/dynamic";
 import { siteOrigin, useSEO, websiteSchema } from "@/lib/seo";
 import { cn } from "@/lib/format";
 
-function Hero({ video }: { video: Video }) {
+const HERO_INTERVAL = 3000;
+
+function Hero({ videos }: { videos: Video[] }) {
+  const [index, setIndex] = useState(0);
+  const count = videos.length;
+
+  // Auto-advance through every Featured video, looping forever.
+  useEffect(() => {
+    if (count <= 1) return;
+    setIndex((i) => (i < count ? i : 0));
+    const id = window.setInterval(() => setIndex((i) => (i + 1) % count), HERO_INTERVAL);
+    return () => window.clearInterval(id);
+  }, [count]);
+
+  const active = Math.min(index, Math.max(count - 1, 0));
+  const video = videos[active];
+  if (!video) return null;
+
   return (
     <section
       aria-label="Featured video"
+      aria-roledescription="carousel"
       className="relative overflow-hidden rounded-2xl ring-1 ring-white/10 animate-fade-up md:rounded-3xl"
     >
-      <img
-        src={video.thumbnail}
-        alt={`${video.title} thumbnail`}
-        fetchPriority="high"
-        className="absolute inset-0 h-full w-full object-cover animate-zoom-slow"
-      />
+      {/* All artwork stays mounted and cross-fades — no layout shift, no flicker. */}
+      {videos.map((v, i) => (
+        <img
+          key={v.id}
+          src={v.thumbnail}
+          alt={i === active ? `${v.title} thumbnail` : ""}
+          aria-hidden={i !== active}
+          loading={i === 0 ? "eager" : "lazy"}
+          decoding="async"
+          fetchPriority={i === 0 ? "high" : "low"}
+          className={cn(
+            "absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ease-in-out",
+            i === active ? "animate-zoom-slow opacity-100" : "opacity-0"
+          )}
+        />
+      ))}
       <div className="absolute inset-0 bg-ink-950/25" aria-hidden />
       <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/70 to-ink-950/15" aria-hidden />
       <div className="absolute inset-0 bg-gradient-to-r from-ink-950/90 via-ink-950/35 to-transparent" aria-hidden />
 
-      <div className="relative flex min-h-[380px] max-w-3xl flex-col justify-end p-5 sm:min-h-[440px] sm:p-8 md:min-h-[520px] md:p-12">
+      <div
+        key={video.id}
+        className="relative flex min-h-[380px] max-w-3xl animate-fade-in flex-col justify-end p-5 sm:min-h-[440px] sm:p-8 md:min-h-[520px] md:p-12"
+      >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-300">
           <Flame className="size-3.5" aria-hidden />
           <span>Featured tonight</span>
@@ -67,11 +99,34 @@ function Hero({ video }: { video: Video }) {
           </Link>
         </div>
       </div>
+
+      {/* Progress dots — also let viewers jump straight to a featured video. */}
+      {count > 1 && (
+        <div className="absolute bottom-4 right-4 flex items-center gap-1.5 sm:bottom-6 sm:right-6">
+          {videos.map((v, i) => (
+            <button
+              key={v.id}
+              type="button"
+              aria-label={`Show featured video ${i + 1}: ${v.title}`}
+              aria-current={i === active}
+              onClick={() => setIndex(i)}
+              className={cn(
+                "h-1.5 rounded-full transition-all duration-300",
+                i === active ? "w-6 bg-brand-400" : "w-1.5 bg-white/40 hover:bg-white/70"
+              )}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
 export default function Home() {
+  // Every CMS "Featured" video takes part in the hero rotation; fall back to
+  // the newest video so the homepage is never empty.
+  const heroVideos = featuredVideos.length ? featuredVideos : featuredVideo ? [featuredVideo] : [];
+
   useSEO({
     description:
       "EroBabe — watch premium 18+ adult videos online. Trending videos, popular categories, new releases and editor's picks streamed in a fast, cinematic player. Adults only.",
@@ -80,7 +135,7 @@ export default function Home() {
   });
   return (
     <div className="mx-auto max-w-[1600px] space-y-10 px-4 pt-4 md:space-y-14 md:px-8 md:pt-6">
-      {featuredVideo && publicSettings.heroEnabled && <Hero video={featuredVideo} />}
+      {publicSettings.heroEnabled && heroVideos.length > 0 && <Hero videos={heroVideos} />}
 
       <section aria-label="Trending now">
         <SectionHeader eyebrow="Hot right now" title="Trending Now" href="/trending" icon={Flame} />

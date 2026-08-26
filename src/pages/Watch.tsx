@@ -1,11 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   BadgeCheck, Bookmark, CalendarDays, ChevronDown, Eye, Flame, Link2,
   Share2, ThumbsUp, VideoOff, type LucideIcon,
 } from "lucide-react";
 import { CAPTIONS_URL, categoryName, getVideoById, relatedVideos, type Video } from "@/data/videos";
-import { trackView } from "@/data/dynamic";
+import { trackLike, trackProgress, trackView } from "@/data/dynamic";
 import { useHistory, useLikes, useSaved } from "@/hooks/store";
 import { absUrl, isoDuration, siteOrigin, useSEO, SITE_DESCRIPTION } from "@/lib/seo";
 import { Player } from "@/components/Player";
@@ -147,6 +147,45 @@ export default function Watch() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video?.id]);
 
+  /* ── Watch-time + completion signals for the ranking engine ── */
+  const watchRef = useRef({ watched: 0, completion: 0, sent: 0 });
+  const trackRef = useRef<string | null>(null);
+  trackRef.current = video ? video.uuid ?? video.id : null;
+
+  const flushProgress = useCallback(() => {
+    const id = trackRef.current;
+    const s = watchRef.current;
+    if (!id || s.watched < 3 || s.watched <= s.sent + 2) return;
+    s.sent = s.watched;
+    trackProgress(id, s.watched, s.completion);
+  }, []);
+
+  const handleProgress = useCallback(
+    (currentTime: number, dur: number) => {
+      const s = watchRef.current;
+      s.watched = Math.max(s.watched, currentTime);
+      if (dur > 0) s.completion = Math.min(100, (currentTime / dur) * 100);
+      // Heartbeat every ~15s of playback.
+      if (s.watched - s.sent >= 15) flushProgress();
+    },
+    [flushProgress]
+  );
+
+  useEffect(() => {
+    watchRef.current = { watched: 0, completion: 0, sent: 0 };
+  }, [video?.id]);
+
+  useEffect(() => {
+    const onHide = () => flushProgress();
+    window.addEventListener("pagehide", onHide);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      document.removeEventListener("visibilitychange", onHide);
+      flushProgress();
+    };
+  }, [flushProgress]);
+
   if (!video) {
     return (
       <div className="mx-auto max-w-3xl px-4 pt-16 md:px-8">
@@ -187,7 +226,13 @@ export default function Watch() {
       <div className="grid gap-8 xl:grid-cols-[1fr_380px]">
         {/* ── Main column ── */}
         <div className="min-w-0">
-          <Player src={video.videoUrl} poster={video.thumbnail} title={video.title} captionsUrl={CAPTIONS_URL} />
+          <Player
+            src={video.videoUrl}
+            poster={video.thumbnail}
+            title={video.title}
+            captionsUrl={CAPTIONS_URL}
+            onProgress={handleProgress}
+          />
 
           <h1 className="mt-4 text-lg font-semibold leading-snug tracking-tight text-white md:text-2xl">
             {video.title}
@@ -220,6 +265,7 @@ export default function Watch() {
               active={liked}
               onClick={() => {
                 likes.toggle(video.id);
+                trackLike(video.uuid ?? video.id, !liked);
                 toast(liked ? "Removed like" : "Added to liked videos");
               }}
             />

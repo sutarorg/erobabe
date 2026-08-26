@@ -291,16 +291,11 @@ async function patchVideo(req, id) {
   if ("tags" in body) patch.tags = cleanTags(body.tags);
   if ("durationS" in body) patch.duration_s = Math.min(Math.max(Number(body.durationS) || 0, 0), 86400);
   if ("likeRatio" in body) patch.like_ratio = Math.min(Math.max(Number(body.likeRatio) || 0, 0), 100);
-  // Accept both camelCase (used by the CMS UI) and snake_case (raw API).
-  const FLAGS = [
-    ["featured", ["featured"]],
-    ["trending", ["trending"]],
-    ["editors_pick", ["editorsPick", "editors_pick"]],
-  ];
-  for (const [column, aliases] of FLAGS) {
-    const key = aliases.find((a) => a in body);
-    if (key !== undefined) patch[column] = !!body[key];
-  }
+  // Editor's Pick is the only manual discovery control. Featured / Trending /
+  // Rising Now are decided by the ranking engine from live analytics, so any
+  // inbound values for them are deliberately ignored.
+  const pickKey = ["editorsPick", "editors_pick"].find((a) => a in body);
+  if (pickKey !== undefined) patch.editors_pick = !!body[pickKey];
   if ("seoTitle" in body) patch.seo_title = cleanText(body.seoTitle, 150) || null;
   if ("seoDescription" in body) patch.seo_description = cleanText(body.seoDescription, 300) || null;
   if ("categoryId" in body) {
@@ -384,12 +379,6 @@ async function bulk(req, body) {
         }
       } else if (action === "unpublish") {
         await dbApi.update("videos", `id=eq.${id}`, { status: "unpublished", updated_at: nowIso() });
-        done++;
-      } else if (action === "feature" || action === "unfeature") {
-        await dbApi.update("videos", `id=eq.${id}`, { featured: action === "feature", updated_at: nowIso() });
-        done++;
-      } else if (action === "trending" || action === "untrending") {
-        await dbApi.update("videos", `id=eq.${id}`, { trending: action === "trending", updated_at: nowIso() });
         done++;
       } else if (action === "delete") {
         await deleteVideo(req, id);

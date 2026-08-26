@@ -140,7 +140,8 @@ export interface MultiPlan {
 }
 export type UploadPlan = SinglePlan | MultiPlan;
 
-export type BulkAction = "publish" | "unpublish" | "delete" | "feature" | "unfeature" | "trending" | "untrending";
+/** Featured/Trending are algorithm-controlled — no manual bulk actions for them. */
+export type BulkAction = "publish" | "unpublish" | "delete";
 
 export interface SiteSettings {
   site_title?: string;

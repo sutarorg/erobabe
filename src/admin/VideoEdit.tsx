@@ -54,8 +54,6 @@ export default function VideoEdit() {
         description: video.description ?? "",
         categoryId: video.category_id,
         tags: video.tags ?? [],
-        featured: video.featured,
-        trending: video.trending,
         editorsPick: video.editors_pick,
         seoTitle: video.seo_title ?? "",
         seoDescription: video.seo_description ?? "",
@@ -224,10 +222,18 @@ export default function VideoEdit() {
           </section>
 
           <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
-            <h2 className="mb-3 text-sm font-semibold text-white">Curation</h2>
-            <FlagRow label="Featured" hint="Promoted in hero/featured placements" checked={!!form.featured} onChange={(v) => set("featured", v)} />
-            <FlagRow label="Trending" hint="Included in trending sections" checked={!!form.trending} onChange={(v) => set("trending", v)} />
-            <FlagRow label="Editor's pick" hint="Shown in staff-selection rails" checked={!!form.editorsPick} onChange={(v) => set("editorsPick", v)} />
+            <h2 className="text-sm font-semibold text-white">Curation</h2>
+            <p className="mb-1 mt-1.5 text-xs leading-relaxed text-fog-500">
+              Featured, Trending and Rising Now are chosen automatically by the ranking engine from live
+              analytics — views, growth, watch time, completion and engagement. Marking a video as an
+              Editor's pick adds it to the curated pool; the algorithm ranks that pool and shows the top 5.
+            </p>
+            <FlagRow
+              label="Editor's pick"
+              hint="Adds this video to the Editor's Picks candidate pool"
+              checked={!!form.editorsPick}
+              onChange={(v) => set("editorsPick", v)}
+            />
           </section>
 
           <section className="space-y-5 rounded-2xl border border-white/6 bg-ink-900/60 p-5">

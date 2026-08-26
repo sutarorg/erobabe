@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Film, SquarePen, Trash2, UploadCloud, Globe, EyeOff, Star, Flame } from "lucide-react";
+import { Film, SquarePen, Trash2, UploadCloud, Globe, EyeOff } from "lucide-react";
 import { api, type AdminVideo, type BulkAction } from "./api";
 import {
   Btn, BtnLink, Confirm, EmptyBlock, Field, PageHeader, Pagination, SearchInput,
@@ -155,8 +155,6 @@ export default function VideosList() {
           <span className="mx-1 h-5 w-px bg-white/10" aria-hidden />
           <Btn size="sm" variant="subtle" busy={busy} icon={Globe} onClick={() => doBulk("publish")}>Publish</Btn>
           <Btn size="sm" variant="subtle" busy={busy} icon={EyeOff} onClick={() => doBulk("unpublish")}>Unpublish</Btn>
-          <Btn size="sm" variant="subtle" busy={busy} icon={Star} onClick={() => doBulk("feature")}>Feature</Btn>
-          <Btn size="sm" variant="subtle" busy={busy} icon={Flame} onClick={() => doBulk("trending")}>Trending</Btn>
           <Btn size="sm" variant="danger" busy={busy} icon={Trash2} onClick={() => doBulk("delete")}>Delete</Btn>
           <button type="button" onClick={() => setSelected(new Set())} className="ml-auto text-xs font-medium text-fog-500 hover:text-white">
             Clear

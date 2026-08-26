@@ -53,7 +53,8 @@ Both run the Vite dev server **and** the serverless functions locally.
 
 1. Create a project at [supabase.com](https://supabase.com) (free tier is enough).
 2. Open **SQL Editor → New query**, paste the contents of **`supabase/migrations/0001_init.sql`**, and run it. This creates tables (`videos`, `categories`, `analytics_events`, `settings`, `activity_log`), indexes, RLS policies, the atomic `track_view` function, and seeds categories.
-   Then run **`supabase/migrations/0002_video_slugs.sql`** — it adds the unique `slug` column that powers every `/watch/{video-slug}` page and the dynamic sitemap. Both scripts are safe to re-run.
+   Then run **`supabase/migrations/0002_video_slugs.sql`** — it adds the unique `slug` column that powers every `/watch/{video-slug}` page and the dynamic sitemap.
+   Finally run **`supabase/migrations/0003_engagement_signals.sql`** — it adds watch-time, completion and likes tracking that feed the discovery ranking engine. All scripts are safe to re-run.
 3. From **Project Settings → API**, copy:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY` (the **service_role** secret — server-only)
@@ -113,11 +114,37 @@ Import the repo. `netlify.toml` configures the build (`npm run build` → `dist`
 
 Every mutation writes to the **activity log**; **views** are tracked through a deduplicating Postgres function (one view per viewer/IP-hash/day) and power the Analytics dashboard (daily series, range totals, top videos, storage).
 
+## Discovery ranking engine
+
+Featured, Trending, Rising Now and Editor's Pick are **fully automatic**. A single scoring service
+(`server/ranking.mjs`, mirrored client-side in `src/lib/ranking.ts`) ranks every eligible video from
+live analytics and enforces hard section limits:
+
+| Section | Limit | Optimizes for |
+| --- | --- | --- |
+| Featured | 5 | Balanced popularity + recent performance + engagement + quality + recency + momentum |
+| Trending | 8 | Recent views, velocity and acceleration — lifetime views barely count |
+| Rising Now | 3 | Acceleration, growth and performance relative to age (popularity actively penalized) |
+| Editor's Pick | 5 | Admin-flagged pool, ranked on quality, engagement and recent performance |
+
+**Signals**: 1/3/7/14/30-day view windows, unique viewers, watch time, completion rate, likes,
+engagement rate, velocity, acceleration, age-adjusted performance, recency and log-damped lifetime
+popularity. Every signal is **percentile-normalized**, so one viral video cannot flatten the catalog,
+and Rising Now applies an explicit popularity penalty plus excludes the top of Trending — historically
+huge videos can never permanently occupy every slot.
+
+Scores are recomputed whenever new analytics arrive (views, watch-time beacons and likes invalidate a
+60-second cache), and ineligible videos — unpublished, deleted or without playable media — are filtered
+out automatically. Missing migrations degrade gracefully: whatever signals exist are used.
+
+Tune the model in one place — `SECTION_WEIGHTS` and `SECTION_LIMITS` in `server/ranking.mjs` — and every
+discovery surface follows without UI changes.
+
 ## Admin features map
 
 - **Dashboard** — totals (videos/published/drafts/processing/views/storage), 14-day chart, top videos, recent activity
 - **Videos** — search, status/category filters, sorting, pagination, bulk publish/unpublish/feature/trending/delete, quick publish toggles
-- **Editor** — full metadata, curation flags (featured/trending/editor's pick), SEO fields, thumbnail replace, **video file replace**, live preview, publish/unpublish/delete
+- **Editor** — full metadata, Editor's Pick flag (the only manual discovery control), SEO fields, thumbnail replace, **video file replace**, live preview, publish/unpublish/delete
 - **Categories & Tags** — CRUD with slugs/gradients/cover uploads, sort order, usage counts, safe delete protection, tag cleanup
 - **Analytics** — 7/14/30-day series, lifetime totals, storage monitoring, top-performers, full audit log
 - **Settings** — site title, announcement, homepage hero toggle, pinned featured video, age-gate copy, infrastructure status

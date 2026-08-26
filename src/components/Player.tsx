@@ -26,12 +26,15 @@ export function Player({
   title,
   captionsUrl,
   onEnded,
+  onProgress,
 }: {
   src: string;
   poster?: string;
   title?: string;
   captionsUrl?: string;
   onEnded?: () => void;
+  /** Playback heartbeat used for watch-time / completion analytics. */
+  onProgress?: (currentTime: number, duration: number) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewRef = useRef<HTMLVideoElement>(null);
@@ -61,8 +64,10 @@ export function Player({
   const [visible, setVisible] = useState(true);
   const [scrubbing, setScrubbing] = useState(false);
   const [scrubTime, setScrubTime] = useState(0);
-  const [preview, setPreview] = useState<{ x: number; t: number } | null>(null);
+  const [preview, setPreview] = useState<{ x: number; t: number; barW: number } | null>(null);
   const [previewReady, setPreviewReady] = useState(false);
+  /** Preview card width — kept in JS so edge clamping is pixel-exact. */
+  const [previewW, setPreviewW] = useState(160);
 
   const video = () => videoRef.current;
   const canPreviewFrames = Boolean(src) && !isHls(src);
@@ -183,6 +188,15 @@ export function Player({
     setCcOn(show);
   }, []);
 
+  /* Preview card is 128px on small screens, 160px from `sm` upwards. */
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 640px)");
+    const sync = () => setPreviewW(mq.matches ? 160 : 128);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
   useEffect(() => {
     const onFs = () => setFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener("fullscreenchange", onFs);
@@ -246,7 +260,7 @@ export function Player({
     if (!bar || !duration) return;
     const rect = bar.getBoundingClientRect();
     const t = ratio * duration;
-    setPreview({ x: clamp(clientX - rect.left, 0, rect.width), t });
+    setPreview({ x: clamp(clientX - rect.left, 0, rect.width), t, barW: rect.width });
 
     if (!canPreviewFrames) return;
     if (previewRaf.current) cancelAnimationFrame(previewRaf.current);
@@ -360,6 +374,7 @@ export function Player({
         }}
         onTimeUpdate={(e) => {
           if (!scrubbing) setTime(e.currentTarget.currentTime);
+          onProgress?.(e.currentTarget.currentTime, e.currentTarget.duration || 0);
         }}
         onProgress={(e) => {
           const b = e.currentTarget.buffered;
@@ -472,12 +487,15 @@ export function Player({
               )}
               style={{ width: `${playedPct}%` }}
             />
+            {/* Handle: centred with a transform so its position is exact at
+                0% and 100%, and never animated so it tracks the finger 1:1. */}
             <div
               className={cn(
-                "absolute top-1/2 -translate-y-1/2 rounded-full bg-white shadow-lg transition-all duration-150",
+                "absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-lg",
+                "transition-[width,height,opacity] duration-150",
                 scrubbing ? "size-4 opacity-100" : "size-3.5 opacity-0 group-hover/seek:opacity-100"
               )}
-              style={{ left: `calc(${playedPct}% - ${scrubbing ? 8 : 7}px)` }}
+              style={{ left: `${playedPct}%` }}
             />
           </div>
 
@@ -486,16 +504,24 @@ export function Player({
           <div
             aria-hidden
             className={cn(
-              "pointer-events-none absolute bottom-full z-20 mb-2 -translate-x-1/2 transition-opacity duration-150",
+              "pointer-events-none absolute bottom-full z-20 mb-2.5 transition-opacity duration-150",
               preview && duration > 0 ? "opacity-100" : "opacity-0"
             )}
             style={{
-              left: clamp(preview?.x ?? 0, 66, Math.max(66, (seekRef.current?.clientWidth ?? 320) - 66)),
+              // Clamp against the real card width so the 16:9 frame keeps its
+              // exact size at both ends of the bar instead of being squeezed.
+              left: clamp(
+                preview?.x ?? 0,
+                previewW / 2,
+                Math.max(previewW / 2, (preview?.barW ?? previewW) - previewW / 2)
+              ),
+              transform: "translateX(-50%)",
+              width: previewW,
               visibility: preview && duration > 0 ? "visible" : "hidden",
             }}
           >
             {canPreviewFrames && (
-              <div className="overflow-hidden rounded-lg border border-white/20 bg-black shadow-2xl">
+              <div className="aspect-video w-full overflow-hidden rounded-lg border border-white/20 bg-black shadow-2xl">
                 <video
                   ref={previewRef}
                   src={src}
@@ -504,13 +530,16 @@ export function Player({
                   preload="metadata"
                   crossOrigin="anonymous"
                   tabIndex={-1}
-                  className="block h-[72px] w-32 object-cover transition-opacity duration-150 sm:h-[90px] sm:w-40"
+                  controls={false}
+                  disablePictureInPicture
+                  disableRemotePlayback
+                  className="eb-no-media-ui block h-full w-full object-cover transition-opacity duration-150"
                   style={{ opacity: previewReady ? 1 : 0.25 }}
                   onLoadedData={() => setPreviewReady(true)}
                 />
               </div>
             )}
-            <p className="mt-1 rounded-md bg-black/85 px-2 py-0.5 text-center text-[11px] font-semibold tabular-nums text-white shadow">
+            <p className="mx-auto mt-1 w-fit rounded-md bg-black/85 px-2 py-0.5 text-center text-[11px] font-semibold tabular-nums text-white shadow">
               {formatDuration(preview?.t ?? 0)}
             </p>
           </div>

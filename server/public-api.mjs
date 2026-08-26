@@ -1,4 +1,5 @@
 import { dbApi, dbConfigMissing, enc, hasSlugColumn } from "./db.mjs";
+import { computeDiscovery, invalidateDiscovery, SECTION_LIMITS } from "./ranking.mjs";
 import { json, clientIp, sha256hex, ENV } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -163,6 +164,16 @@ export async function handlePublic(req, url, path) {
     return json({ video: shapeVideo(row, cats) });
   }
 
+  /* ── GET /api/public/discovery — algorithm-ranked section line-ups ── */
+  if (first === "discovery" && req.method === "GET") {
+    try {
+      return json(await computeDiscovery());
+    } catch (e) {
+      console.error("[discovery]", e);
+      return json({ featured: [], trending: [], rising: [], editors: [], limits: SECTION_LIMITS });
+    }
+  }
+
   /* ── POST /api/public/videos/:idOrSlug/view — real tracking with daily dedupe ── */
   if (first === "videos" && seg.length === 3 && seg[2] === "view" && req.method === "POST") {
     const ref = decodeURIComponent(seg[1]);
@@ -173,8 +184,55 @@ export async function handlePublic(req, url, path) {
     ).slice(0, 32);
     try {
       await dbApi.rpc("track_view", { v: row.id, h: hash });
+      // New analytics arrived — the next ranking read recomputes.
+      invalidateDiscovery();
     } catch {
       /* View tracking must never break playback */
+    }
+    return json({ ok: true });
+  }
+
+  /* ── POST /api/public/videos/:idOrSlug/progress — watch time + completion ── */
+  if (first === "videos" && seg.length === 3 && seg[2] === "progress" && req.method === "POST") {
+    const ref = decodeURIComponent(seg[1]);
+    const row = await findPublished(ref, "id");
+    if (!row) return json({ ok: false }, { status: 404 });
+    let body = {};
+    try {
+      body = await req.json();
+    } catch {
+      body = {};
+    }
+    const watch = Math.min(Math.max(Math.round(Number(body.watchSeconds) || 0), 0), 86_400);
+    const completion = Math.min(Math.max(Math.round(Number(body.completion) || 0), 0), 100);
+    const hash = sha256hex(
+      `${clientIp(req.headers)}|${req.headers.get("user-agent") ?? ""}|${row.id}`
+    ).slice(0, 32);
+    try {
+      await dbApi.rpc("track_engagement", { v: row.id, h: hash, w: watch, c: completion });
+      invalidateDiscovery();
+    } catch {
+      /* Requires migration 0003 — ignored until it is applied. */
+    }
+    return json({ ok: true });
+  }
+
+  /* ── POST /api/public/videos/:idOrSlug/like — engagement signal ── */
+  if (first === "videos" && seg.length === 3 && seg[2] === "like" && req.method === "POST") {
+    const ref = decodeURIComponent(seg[1]);
+    const row = await findPublished(ref, "id");
+    if (!row) return json({ ok: false }, { status: 404 });
+    let body = {};
+    try {
+      body = await req.json();
+    } catch {
+      body = {};
+    }
+    try {
+      await dbApi.rpc("track_like", { v: row.id, delta: body.liked === false ? -1 : 1 });
+      invalidateDiscovery();
+    } catch {
+      /* Requires migration 0003 — ignored until it is applied. */
     }
     return json({ ok: true });
   }

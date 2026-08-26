@@ -1,4 +1,4 @@
-import { installCatalog, mergeRemoteCategories, THUMBS, type Video, type CategorySlug } from "./videos";
+import { applyDiscovery, installCatalog, mergeRemoteCategories, THUMBS, type Video, type CategorySlug } from "./videos";
 import { formatDuration, formatViews, timeAgo } from "@/lib/format";
 
 /**
@@ -103,10 +103,20 @@ export async function bootstrapCatalog(): Promise<void> {
     dynamic = true;
 
     const mapped = vData.videos.map(mapRemote);
-    if (vData.featuredId) {
-      for (const v of mapped) v.featured = v.id === vData.featuredId;
-    }
     installCatalog(mapped);
+
+    // Discovery line-ups come from the analytics ranking engine.
+    try {
+      const dRes = await fetch("/api/public/discovery", { cache: "no-store" });
+      if (dRes.ok) {
+        const d = (await dRes.json()) as {
+          featured: string[]; trending: string[]; rising: string[]; editors: string[];
+        };
+        applyDiscovery(d);
+      }
+    } catch {
+      /* Local ranking already installed as the fallback. */
+    }
 
     if (cRes.ok) {
       const c = (await cRes.json()) as {
@@ -136,6 +146,42 @@ export function trackView(videoId: string) {
   if (!dynamic) return;
   try {
     void fetch(`/api/public/videos/${videoId}/view`, { method: "POST", keepalive: true }).catch(() => {});
+  } catch {
+    /* no-op */
+  }
+}
+
+/** Watch-time + completion signals that feed the ranking engine. */
+export function trackProgress(videoId: string, watchSeconds: number, completion: number) {
+  if (!dynamic || watchSeconds < 3) return;
+  const body = JSON.stringify({ watchSeconds: Math.round(watchSeconds), completion: Math.round(completion) });
+  const url = `/api/public/videos/${videoId}/progress`;
+  try {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+      return;
+    }
+    void fetch(url, {
+      method: "POST",
+      body,
+      keepalive: true,
+      headers: { "content-type": "application/json" },
+    }).catch(() => {});
+  } catch {
+    /* no-op */
+  }
+}
+
+/** Like / unlike engagement signal. */
+export function trackLike(videoId: string, liked: boolean) {
+  if (!dynamic) return;
+  try {
+    void fetch(`/api/public/videos/${videoId}/like`, {
+      method: "POST",
+      body: JSON.stringify({ liked }),
+      keepalive: true,
+      headers: { "content-type": "application/json" },
+    }).catch(() => {});
   } catch {
     /* no-op */
   }

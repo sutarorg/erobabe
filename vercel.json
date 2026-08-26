@@ -7,6 +7,19 @@
   },
   "headers": [
     {
+      "source": "/sitemap.xml",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "X-Robots-Tag", "value": "noindex, follow" }
+      ]
+    },
+    {
+      "source": "/robots.txt",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
       "source": "/(.*)",
       "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" },
@@ -16,18 +29,22 @@
       ]
     }
   ],
+  "redirects": [
+    {
+      "source": "/sitemap.xml",
+      "destination": "/api/sitemap.xml",
+      "permanent": false
+    },
+    {
+      "source": "/robots.txt",
+      "destination": "/api/robots.txt",
+      "permanent": false
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/:path*",
       "destination": "/api/index"
-    },
-    {
-      "source": "/sitemap.xml",
-      "destination": "/api/index?path=sitemap.xml"
-    },
-    {
-      "source": "/robots.txt",
-      "destination": "/api/index?path=robots.txt"
     },
     {
       "source": "/((?!api/|assets/|favicon|site.webmanifest).*)",

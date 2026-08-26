@@ -112,23 +112,28 @@ export const dbApi = {
  * feature lights up automatically the moment the migration lands.
  * ────────────────────────────────────────────────────────────── */
 
-let slugSupport = null;
-let slugCheckedAt = 0;
-const SLUG_RECHECK_MS = 60_000;
+const columnCache = new Map();
+const COLUMN_RECHECK_MS = 60_000;
 
-export async function hasSlugColumn() {
+/** Cached probe: does `table.column` exist yet? Missing migrations degrade gracefully. */
+export async function hasColumn(table, column) {
+  const key = `${table}.${column}`;
   const now = Date.now();
-  if (slugSupport === true) return true;
-  if (slugSupport === false && now - slugCheckedAt < SLUG_RECHECK_MS) return false;
+  const cached = columnCache.get(key);
+  if (cached?.value === true) return true;
+  if (cached && cached.value === false && now - cached.at < COLUMN_RECHECK_MS) return false;
+  let value = false;
   try {
-    await dbApi.select("videos", "select=slug&limit=1");
-    slugSupport = true;
+    await dbApi.select(table, `select=${column}&limit=1`);
+    value = true;
   } catch {
-    slugSupport = false;
+    value = false;
   }
-  slugCheckedAt = now;
-  return slugSupport;
+  columnCache.set(key, { value, at: now });
+  return value;
 }
+
+export const hasSlugColumn = () => hasColumn("videos", "slug");
 
 /** Time-safe unique-ish object key for R2. */
 export function objectKey(prefix, originalName = "") {
