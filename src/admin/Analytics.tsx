@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { BarChart3, Eye, Film, HardDrive, Users, Clock } from "lucide-react";
+import { BarChart3, Eye, Film, HardDrive, Users, Clock, Trophy } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "./api";
-import { BarsChart, EmptyBlock, PageHeader, Select, Spinner, StatCard, Tabs, useFetch, fmtViews, fmtDur, fmtDateTime } from "./ui";
+import { EmptyBlock, PageHeader, Select, Spinner, StatCard, Tabs, useFetch, fmtViews, fmtDur, fmtDateTime } from "./ui";
+import { ViewsChart, TopBars } from "./Chart";
 import { fmtBytes } from "./uploader";
 
 function OverviewTab({ days }: { days: number }) {
@@ -11,6 +12,9 @@ function OverviewTab({ days }: { days: number }) {
   if (error || !data) return <EmptyBlock title="Couldn't load analytics" body={error ?? undefined} />;
 
   const rangeTopMap = new Map(data.rangeTop.map((r) => [r.id, r.views]));
+  const avgPerVideo = data.storage.objects
+    ? Math.round(data.storage.lifetimeViews / data.storage.objects)
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -18,16 +22,41 @@ function OverviewTab({ days }: { days: number }) {
         <StatCard icon={Eye} label={`Views (${days}d)`} value={fmtViews(data.rangeViews)} accent />
         <StatCard icon={BarChart3} label="Lifetime views" value={fmtViews(data.storage.lifetimeViews)} />
         <StatCard icon={HardDrive} label="Storage used" value={fmtBytes(data.storage.bytes)} sub={`${data.storage.objects} objects`} />
-        <StatCard icon={Film} label="Avg / video" value={fmtViews(data.storage.lifetimeViews ? Math.round(data.storage.lifetimeViews / Math.max(data.storage.objects, 1)) : 0)} />
+        <StatCard icon={Film} label="Avg / video" value={fmtViews(avgPerVideo)} sub="lifetime" />
       </div>
 
-      <div className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
-        <h2 className="mb-4 text-sm font-semibold text-white">Daily views</h2>
-        <BarsChart data={data.series} className="h-44" />
+      <ViewsChart
+        data={data.series}
+        title="Daily views"
+        subtitle={`${days} days`}
+        height={280}
+      />
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+          <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
+            <Trophy className="size-4 text-brand-400" aria-hidden />
+            Top videos in this period
+          </h2>
+          <TopBars
+            items={data.topVideos
+              .map((v) => ({ id: v.id, label: v.title, value: rangeTopMap.get(v.id) ?? 0 }))
+              .sort((a, b) => b.value - a.value)
+              .slice(0, 8)}
+          />
+        </section>
+
+        <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+          <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
+            <BarChart3 className="size-4 text-brand-400" aria-hidden />
+            All-time leaders
+          </h2>
+          <TopBars items={data.topVideos.slice(0, 8).map((v) => ({ id: v.id, label: v.title, value: v.views }))} />
+        </section>
       </div>
 
-      <div className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
-        <h2 className="mb-4 text-sm font-semibold text-white">Performing videos</h2>
+      <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+        <h2 className="mb-4 text-sm font-semibold text-white">Performance detail</h2>
         {data.topVideos.length === 0 ? (
           <p className="py-8 text-center text-xs text-fog-600">No videos yet.</p>
         ) : (
@@ -37,7 +66,7 @@ function OverviewTab({ days }: { days: number }) {
                 <tr className="border-b border-white/6 text-[11px] uppercase tracking-wider text-fog-600">
                   <th className="py-2.5 pr-3 font-semibold">#</th>
                   <th className="py-2.5 pr-3 font-semibold">Video</th>
-                  <th className="py-2.5 pr-3 font-semibold">Views (range)</th>
+                  <th className="py-2.5 pr-3 font-semibold">Range</th>
                   <th className="py-2.5 pr-3 font-semibold">Lifetime</th>
                   <th className="py-2.5 font-semibold">Duration</th>
                 </tr>
@@ -63,7 +92,7 @@ function OverviewTab({ days }: { days: number }) {
             </table>
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }

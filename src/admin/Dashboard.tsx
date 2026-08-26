@@ -1,11 +1,13 @@
 import { Film, HardDrive, Hourglass, UploadCloud, Users, Eye, BarChart3, Clock, CheckCircle2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "./api";
-import { BarsChart, BtnLink, EmptyBlock, PageHeader, Spinner, StatCard, useFetch, fmtViews } from "./ui";
+import { BtnLink, EmptyBlock, PageHeader, Spinner, StatCard, useFetch, fmtViews } from "./ui";
+import { ViewsChart, TopBars } from "./Chart";
 import { fmtBytes } from "./uploader";
+import { Btn } from "./ui";
 
 export default function Dashboard() {
-  const { data, loading, error } = useFetch(() => api.overview(), []);
+  const { data, loading, error, reload } = useFetch(() => api.overview(), []);
 
   if (loading) return <Spinner label="Loading overview…" />;
   if (error || !data) {
@@ -14,13 +16,14 @@ export default function Dashboard() {
         <EmptyBlock
           title="Couldn't load the dashboard"
           body={error ?? "Check that environment variables are set (see README)."}
-          action={<BtnLink to="/admin/settings" variant="subtle">Open settings</BtnLink>}
+          action={<Btn variant="subtle" onClick={reload}>Retry</Btn>}
         />
       </div>
     );
   }
 
   const t = data.totals;
+  const last14 = data.series.reduce((n, d) => n + d.views, 0);
 
   return (
     <div>
@@ -36,43 +39,53 @@ export default function Dashboard() {
         <StatCard icon={Hourglass} label="Processing" value={String(t.processing)} sub="uploading + processing" />
         <StatCard icon={Eye} label="Lifetime views" value={fmtViews(t.views)} sub="tracked plays" />
         <StatCard icon={HardDrive} label="Storage used" value={fmtBytes(t.storageBytes)} sub="tracked originals" />
-        <StatCard icon={BarChart3} label="Views (14d)" value={fmtViews(data.series.reduce((n, d) => n + d.views, 0))} sub="last two weeks" />
+        <StatCard icon={BarChart3} label="Views (14d)" value={fmtViews(last14)} sub="last two weeks" />
       </div>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-[1.6fr_1fr]">
-        <div className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-white">Views — last 14 days</h2>
-            <BtnLink to="/admin/analytics" variant="ghost" size="sm">Details</BtnLink>
-          </div>
-          <BarsChart data={data.series} />
-        </div>
+      <div className="mt-6 grid gap-6 lg:grid-cols-[1.65fr_1fr]">
+        <ViewsChart
+          data={data.series}
+          title="Views — last 14 days"
+          subtitle="14 days"
+          height={244}
+          actions={<BtnLink to="/admin/analytics" variant="subtle" size="sm">Full analytics</BtnLink>}
+        />
 
-        <div className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
-          <h2 className="mb-4 text-sm font-semibold text-white">Top videos</h2>
+        <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-white">Top videos</h2>
+            <BtnLink to="/admin/videos" variant="ghost" size="sm">All</BtnLink>
+          </div>
           {data.topVideos.length === 0 ? (
             <p className="py-8 text-center text-xs text-fog-600">No published videos yet.</p>
           ) : (
-            <ol className="space-y-3">
-              {data.topVideos.map((v, i) => (
-                <li key={v.id}>
-                  <Link to={`/admin/videos/${v.id}`} className="group flex items-center gap-3">
-                    <span className="w-5 text-center text-sm font-bold text-fog-600">{i + 1}</span>
-                    <div className="relative aspect-video w-20 shrink-0 overflow-hidden rounded-md bg-ink-800 ring-1 ring-white/8">
-                      {v.thumbnail_url && (
-                        <img src={v.thumbnail_url} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover" />
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-fog-100 group-hover:text-brand-300">{v.title}</p>
-                      <p className="text-xs text-fog-600">{fmtViews(v.views)} views</p>
-                    </div>
-                  </Link>
-                </li>
-              ))}
-            </ol>
+            <>
+              <ol className="mb-5 space-y-3">
+                {data.topVideos.slice(0, 3).map((v, i) => (
+                  <li key={v.id}>
+                    <Link to={`/admin/videos/${v.id}`} className="group flex items-center gap-3">
+                      <span className="w-4 text-center text-sm font-bold text-fog-600">{i + 1}</span>
+                      <div className="relative aspect-video w-20 shrink-0 overflow-hidden rounded-md bg-ink-800 ring-1 ring-white/8">
+                        {v.thumbnail_url && (
+                          <img src={v.thumbnail_url} alt="" loading="lazy" className="absolute inset-0 h-full w-full object-cover" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-fog-100 group-hover:text-brand-300">{v.title}</p>
+                        <p className="text-xs text-fog-600">{fmtViews(v.views)} views</p>
+                      </div>
+                    </Link>
+                  </li>
+                ))}
+              </ol>
+              {data.topVideos.length > 3 && (
+                <TopBars
+                  items={data.topVideos.slice(3).map((v) => ({ id: v.id, label: v.title, value: v.views }))}
+                />
+              )}
+            </>
           )}
-        </div>
+        </section>
       </div>
 
       <div className="mt-6 rounded-2xl border border-white/6 bg-ink-900/60 p-5">

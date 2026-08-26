@@ -274,26 +274,6 @@ export function Confirm({
   );
 }
 
-/* ── chart (pure CSS bars) ── */
-export function BarsChart({ data, className }: { data: { day: string; views: number }[]; className?: string }) {
-  const max = Math.max(...data.map((d) => d.views), 1);
-  return (
-    <div className={cn("flex h-36 items-end gap-1", className)} role="img" aria-label="Daily views chart">
-      {data.map((d) => (
-        <div key={d.day} className="group relative flex-1">
-          <div
-            className="w-full rounded-t-md bg-gradient-to-t from-brand-500/70 to-violet-500/70 transition-all group-hover:from-brand-500 group-hover:to-violet-500"
-            style={{ height: `${Math.max((d.views / max) * 100, d.views > 0 ? 4 : 1.5)}%` }}
-          />
-          <div className="glass pointer-events-none absolute -top-9 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-white group-hover:block">
-            {d.views} views · {new Date(`${d.day}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /* ── tags editor ── */
 export function TagEditor({ tags, onChange }: { tags: string[]; onChange: (tags: string[]) => void }) {
   const [draft, setDraft] = useState("");

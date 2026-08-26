@@ -68,7 +68,7 @@ function mapRemote(rv: RemoteVideo, index: number): Video {
     thumbnail: rv.thumbnailUrl ?? FALLBACK_THUMBS[index % FALLBACK_THUMBS.length],
     videoUrl: rv.hlsUrl ?? rv.videoUrl ?? "",
     tags: rv.tags?.length ? rv.tags : [rv.categoryName ?? "Featured"],
-    performer: "Studio Original",
+    performer: "Erobabe Studio",
     description: rv.description || "A studio feature from the EroBabe catalog.",
     featured: rv.featured,
     trending: rv.trending,

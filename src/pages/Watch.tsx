@@ -247,7 +247,7 @@ export default function Watch() {
               </span>
               <div>
                 <p className="text-sm font-medium text-white">{video.performer}</p>
-                <p className="text-[11px] text-fog-600">Fictional demo performer</p>
+                <p className="text-[11px] text-fog-600">Curated creator content</p>
               </div>
             </div>
           </Panel>

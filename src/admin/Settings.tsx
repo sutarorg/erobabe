@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
-import { FileDown, HardDrive, Save, ShieldCheck, Server } from "lucide-react";
+import { ExternalLink, HardDrive, Rss, Save, ShieldCheck, Server } from "lucide-react";
 import { api, type AdminVideo, type SiteSettings } from "./api";
 import {
   Btn, EmptyBlock, Field, Input, PageHeader, Select, Spinner, Textarea, Toggle, useFetch,
 } from "./ui";
 import { fmtBytes } from "./uploader";
-import { downloadR2SetupGuide } from "./r2GuidePdf";
 import { toast } from "@/components/Feedback";
 
 export default function Settings() {
@@ -15,7 +14,6 @@ export default function Settings() {
 
   const [form, setForm] = useState<SiteSettings>({});
   const [saving, setSaving] = useState(false);
-  const [pdfBusy, setPdfBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
@@ -61,29 +59,7 @@ export default function Settings() {
       <PageHeader
         title="Settings"
         sub="Site-wide configuration, applied to the public website immediately."
-        actions={
-          <>
-            <Btn
-              variant="outline"
-              icon={FileDown}
-              busy={pdfBusy}
-              onClick={async () => {
-                setPdfBusy(true);
-                try {
-                  await downloadR2SetupGuide();
-                  toast("R2 setup guide downloaded");
-                } catch {
-                  toast("Could not generate the PDF", "info");
-                } finally {
-                  setPdfBusy(false);
-                }
-              }}
-            >
-              Download R2 setup guide (.pdf)
-            </Btn>
-            <Btn variant="primary" icon={Save} busy={saving} disabled={!dirty} onClick={save}>Save settings</Btn>
-          </>
-        }
+        actions={<Btn variant="primary" icon={Save} busy={saving} disabled={!dirty} onClick={save}>Save settings</Btn>}
       />
 
       <div className="space-y-6">
@@ -121,6 +97,40 @@ export default function Settings() {
               ))}
             </Select>
           </Field>
+        </section>
+
+        <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+          <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-white">
+            <Rss className="size-4 text-brand-400" aria-hidden /> SEO & Sitemap
+          </h2>
+          <p className="text-xs leading-relaxed text-fog-500">
+            The sitemap is generated automatically from the live database each time it is requested. Publishing a video
+            adds its watch URL instantly; deleting or unpublishing removes it. No redeploy or manual step is required.
+          </p>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            <a
+              href="/sitemap.xml"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between gap-2 rounded-xl border border-white/8 bg-ink-850 px-4 py-3 text-sm text-fog-200 transition hover:border-brand-500/40 hover:text-white"
+            >
+              <span className="font-medium">/sitemap.xml</span>
+              <ExternalLink className="size-4 text-fog-500" aria-hidden />
+            </a>
+            <a
+              href="/robots.txt"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-between gap-2 rounded-xl border border-white/8 bg-ink-850 px-4 py-3 text-sm text-fog-200 transition hover:border-brand-500/40 hover:text-white"
+            >
+              <span className="font-medium">/robots.txt</span>
+              <ExternalLink className="size-4 text-fog-500" aria-hidden />
+            </a>
+          </div>
+          <p className="mt-3 text-[11px] leading-relaxed text-fog-600">
+            Submit https://erobabe.com/sitemap.xml once in Google Search Console. Set SITE_URL to
+            https://erobabe.com so every sitemap and robots entry uses the canonical domain.
+          </p>
         </section>
 
         <section className="rounded-2xl border border-white/6 bg-ink-900/60 p-5">
