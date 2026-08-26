@@ -21,8 +21,10 @@ export const isoDuration = (s: number) => {
 };
 
 const BASE_TITLE = "EroBabe — Watch 18+ Adult Videos Online | erobabe.com";
-const BASE_DESC =
+/** The default website description, reused as the fallback on every page. */
+export const SITE_DESCRIPTION =
   "Stream premium 18+ adult videos online on EroBabe — trending categories, cinematic playback, fast private browsing and new releases daily. Adults only.";
+const BASE_DESC = SITE_DESCRIPTION;
 const BASE_IMAGE = "https://erobabe.com/assets/hero.jpg";
 const BASE_ROBOTS = "index,follow,max-image-preview:large,max-video-preview:-1,max-snippet:-1";
 
@@ -46,6 +48,8 @@ export function websiteSchema(origin: string) {
 export interface SeoOptions {
   title?: string;
   description?: string;
+  /** Admin-entered tags, emitted as <meta name="keywords">. */
+  keywords?: string[];
   canonical?: string;
   robots?: string;
   type?: string;
@@ -103,6 +107,7 @@ export function applySEO(o: SeoOptions = {}): void {
 
   setMeta("name", "description", description);
   setMeta("name", "robots", robots);
+  setMeta("name", "keywords", o.keywords?.length ? o.keywords.join(", ") : null);
   setCanonical(canonical);
 
   setMeta("property", "og:site_name", "EroBabe");

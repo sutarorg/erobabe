@@ -15,7 +15,12 @@ import { formatDuration, formatViews, timeAgo } from "@/lib/format";
 export type CategorySlug = "studio" | "premium" | "couples" | "solo" | "amateur" | "compilation";
 
 export interface Video {
+  /** Routing key — the SEO slug for CMS videos (`/watch/{slug}`). */
   id: string;
+  /** Database uuid when the video comes from the CMS (used for view tracking). */
+  uuid?: string;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
   title: string;
   category: CategorySlug;
   duration: number; // seconds
@@ -323,7 +328,8 @@ function build(): Video[] {
 export let VIDEOS: Video[] = build();
 
 let byId = new Map(VIDEOS.map((v) => [v.id, v]));
-export const getVideoById = (id: string) => byId.get(id);
+/** Resolve by slug (primary routing key) and fall back to the database uuid. */
+export const getVideoById = (id: string) => byId.get(id) ?? VIDEOS.find((v) => v.uuid === id);
 
 export const byCategory = (slug: string) => VIDEOS.filter((v) => v.category === slug);
 export const categoryCount = (slug: string) => byCategory(slug).length;

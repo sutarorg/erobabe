@@ -12,6 +12,9 @@ import { formatDuration, formatViews, timeAgo } from "@/lib/format";
 
 export interface RemoteVideo {
   id: string;
+  slug: string;
+  seoTitle: string | null;
+  seoDescription: string | null;
   title: string;
   description: string;
   category: string | null;
@@ -55,7 +58,11 @@ function mapRemote(rv: RemoteVideo, index: number): Video {
   const publishedMs = rv.publishedAt ? Date.parse(rv.publishedAt) : Date.now();
   const daysAgo = Number.isNaN(publishedMs) ? 0 : Math.max(0, Math.floor((Date.now() - publishedMs) / 86_400_000));
   return {
-    id: rv.id,
+    // Slug drives every public URL so each video has its own clean page.
+    id: rv.slug || rv.id,
+    uuid: rv.id,
+    seoTitle: rv.seoTitle,
+    seoDescription: rv.seoDescription,
     title: rv.title,
     category: (rv.category as CategorySlug) ?? "studio",
     duration: rv.durationS ?? 0,

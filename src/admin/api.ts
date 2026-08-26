@@ -47,6 +47,8 @@ export interface Rendition {
 
 export interface AdminVideo {
   id: string;
+  /** SEO slug powering the public /watch/{slug} page. */
+  slug: string | null;
   title: string;
   description: string | null;
   status: VideoStatus;

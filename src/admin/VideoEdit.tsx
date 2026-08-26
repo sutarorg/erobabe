@@ -50,6 +50,7 @@ export default function VideoEdit() {
     if (video) {
       setForm({
         title: video.title,
+        slug: video.slug ?? "",
         description: video.description ?? "",
         categoryId: video.category_id,
         tags: video.tags ?? [],
@@ -160,7 +161,7 @@ export default function VideoEdit() {
               <ArrowLeft className="size-4" aria-hidden /> Videos
             </Link>
             {video.status === "published" && (
-              <a href={`/watch/${video.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-white/10 bg-white/4 px-3.5 text-sm font-medium text-fog-200 hover:text-white">
+              <a href={`/watch/${video.slug ?? video.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-white/10 bg-white/4 px-3.5 text-sm font-medium text-fog-200 hover:text-white">
                 <Eye className="size-4" aria-hidden /> View public page
               </a>
             )}
@@ -176,6 +177,25 @@ export default function VideoEdit() {
             <h2 className="text-sm font-semibold text-white">Details</h2>
             <Field label="Title">
               <Input value={String(form.title ?? "")} onChange={(e) => set("title", e.target.value)} maxLength={120} />
+            </Field>
+            <Field
+              label="Page URL (slug)"
+              hint={
+                video.status === "published"
+                  ? "Locked while published so the indexed URL stays stable."
+                  : "Auto-generated from the title; editable until the video is published."
+              }
+            >
+              <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-ink-850 px-3.5 py-2 text-sm">
+                <span className="shrink-0 text-fog-600">/watch/</span>
+                <input
+                  value={String(form.slug ?? video.slug ?? "")}
+                  onChange={(e) => set("slug", e.target.value)}
+                  disabled={video.status === "published"}
+                  className="min-w-0 flex-1 bg-transparent text-white outline-none disabled:text-fog-400"
+                  aria-label="Video slug"
+                />
+              </div>
             </Field>
             <Field label="Description">
               <Textarea value={String(form.description ?? "")} onChange={(e) => set("description", e.target.value)} maxLength={2000} />

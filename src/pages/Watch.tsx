@@ -7,7 +7,7 @@ import {
 import { CAPTIONS_URL, categoryName, getVideoById, relatedVideos, type Video } from "@/data/videos";
 import { trackView } from "@/data/dynamic";
 import { useHistory, useLikes, useSaved } from "@/hooks/store";
-import { absUrl, isoDuration, siteOrigin, useSEO } from "@/lib/seo";
+import { absUrl, isoDuration, siteOrigin, useSEO, SITE_DESCRIPTION } from "@/lib/seo";
 import { Player } from "@/components/Player";
 import { ShareModal } from "@/components/ShareModal";
 import { EmptyState, Tag } from "@/components/Sections";
@@ -84,10 +84,13 @@ export default function Watch() {
   const [shareOpen, setShareOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
-  const watchTitle = video ? `${video.title} — EroBabe 18+` : "Video unavailable — EroBabe";
+  // Meta title mirrors the video title; description falls back to the
+  // site-wide default; keywords come from the tags the admin entered.
+  const watchTitle = video ? (video.seoTitle || video.title) : "Video unavailable — EroBabe";
   const watchDescription = video
-    ? (video.description || `Watch ${video.title} online on EroBabe.`).replace(/\s+/g, " ").slice(0, 155)
+    ? (video.seoDescription || SITE_DESCRIPTION).replace(/\s+/g, " ").slice(0, 300)
     : undefined;
+  const canonical = video ? `${siteOrigin()}/watch/${video.id}` : undefined;
   const uploadDate = video ? new Date(Date.now() - video.daysAgo * 86_400_000).toISOString() : undefined;
 
   useSEO(
@@ -95,7 +98,8 @@ export default function Watch() {
       ? {
           title: watchTitle,
           description: watchDescription,
-          canonical: `${siteOrigin()}/watch/${video.id}`,
+          keywords: [...(video.tags ?? []), categoryName(video.category), "EroBabe", "18+ video"].filter(Boolean),
+          canonical,
           type: "video.other",
           image: video.thumbnail,
           video: {
@@ -107,14 +111,23 @@ export default function Watch() {
             "@context": "https://schema.org",
             "@type": "VideoObject",
             name: video.title,
-            description: watchDescription,
+            description: (video.description || watchDescription || "").slice(0, 500),
             thumbnailUrl: [absUrl(video.thumbnail)],
             uploadDate,
             datePublished: uploadDate,
             duration: isoDuration(video.duration),
             contentUrl: absUrl(video.videoUrl),
-            embedUrl: `${siteOrigin()}/watch/${video.id}`,
+            embedUrl: canonical,
+            url: canonical,
+            genre: categoryName(video.category),
+            keywords: (video.tags ?? []).join(", "),
             isFamilyFriendly: false,
+            inLanguage: "en",
+            publisher: {
+              "@type": "Organization",
+              name: "EroBabe",
+              url: `${siteOrigin()}/`,
+            },
             interactionStatistic: {
               "@type": "InteractionCounter",
               interactionType: { "@type": "WatchAction" },
@@ -128,7 +141,8 @@ export default function Watch() {
   useEffect(() => {
     if (video) {
       history.add(video.id);
-      trackView(video.id);
+      // Track against the database id when available (slug also accepted).
+      trackView(video.uuid ?? video.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video?.id]);

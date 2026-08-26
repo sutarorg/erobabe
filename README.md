@@ -53,6 +53,7 @@ Both run the Vite dev server **and** the serverless functions locally.
 
 1. Create a project at [supabase.com](https://supabase.com) (free tier is enough).
 2. Open **SQL Editor → New query**, paste the contents of **`supabase/migrations/0001_init.sql`**, and run it. This creates tables (`videos`, `categories`, `analytics_events`, `settings`, `activity_log`), indexes, RLS policies, the atomic `track_view` function, and seeds categories.
+   Then run **`supabase/migrations/0002_video_slugs.sql`** — it adds the unique `slug` column that powers every `/watch/{video-slug}` page and the dynamic sitemap. Both scripts are safe to re-run.
 3. From **Project Settings → API**, copy:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY` (the **service_role** secret — server-only)
@@ -104,7 +105,7 @@ Import the repo. `netlify.toml` configures the build (`npm run build` → `dist`
 
 ## The upload workflow (real end-to-end)
 
-1. **Upload** — `/admin/upload`: drag-and-drop, validation (type/size ≤ 2 GB), client-side duration + auto poster capture, direct-to-R2 resumable upload with live progress, speed/ETA, cancel & resume-failed-parts. On completion the server finalizes the multipart upload.
+1. **Upload** — `/admin/upload`: drag-and-drop, validation (type/size ≤ 2 GB), client-side duration + auto poster capture, direct-to-R2 resumable upload with live progress, speed/ETA, cancel & resume-failed-parts. On completion the server finalizes the multipart upload. A unique SEO **slug** is generated immediately, giving the video its own page at `/watch/{video-slug}` (the slug refreshes with the title while the video is a draft, then locks on publish so indexed URLs never break).
 2. **Process** — with `PROCESSING_MODE=original` the file is marked **ready** immediately (single-file playback). With `callback`, it stays in **processing** until an external worker posts renditions to `POST /api/admin/process/callback` (`x-process-secret` header), which flips it to **ready** and stores `hls_url` (the player then uses HLS via Safari natively and **hls.js** elsewhere — loaded lazily).
 3. **Draft** — metadata (title, description, category, tags, thumbnail override) is saved privately; nothing is public.
 4. **Preview** — the editor (`/admin/videos/:id`) streams the actual stored file before publishing.

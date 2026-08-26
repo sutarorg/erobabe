@@ -8,6 +8,7 @@ import { Carousel, CategoryCard, RankList, SectionHeader, VideoGrid, Tag } from 
 import { AgeBadge } from "@/components/Brand";
 import { publicSettings } from "@/data/dynamic";
 import { siteOrigin, useSEO, websiteSchema } from "@/lib/seo";
+import { cn } from "@/lib/format";
 
 function Hero({ video }: { video: Video }) {
   return (
@@ -111,13 +112,14 @@ export default function Home() {
       </section>
 
       <section aria-label="Most watched">
-        <div className="grid gap-8 lg:grid-cols-[1fr_360px]">
+        <div className={cn("grid gap-8", editorsPicks.length > 0 && "lg:grid-cols-[1fr_360px]")}>
           <div>
             <SectionHeader eyebrow="All time" title="Most Watched" href="/popular" />
             <div className="rounded-3xl border border-white/6 bg-ink-900/40 px-4 py-2 sm:px-6">
               <RankList videos={mostViewed.slice(0, 5)} />
             </div>
           </div>
+          {editorsPicks.length > 0 && (
           <div>
             <SectionHeader eyebrow="Staff selections" title="Editor's Picks" />
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
@@ -150,6 +152,7 @@ export default function Home() {
               Browse Editor's Picks <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden />
             </Link>
           </div>
+          )}
         </div>
       </section>
     </div>

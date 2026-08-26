@@ -74,7 +74,7 @@ export async function handleSitemap() {
         dbApi.select(
           "videos",
           // Only published videos are ever exposed to search engines.
-          "status=eq.published&select=id,published_at,updated_at,thumbnail_url,title" +
+          "status=eq.published&select=id,slug,published_at,updated_at,thumbnail_url,title" +
             "&order=published_at.desc.nullslast&limit=5000"
         ),
       ]);
@@ -110,10 +110,10 @@ export async function handleSitemap() {
     });
   }
 
-  // 3. Every published watch page.
+  // 3. Every published watch page, addressed by its canonical SEO slug.
   for (const v of published) {
     entries.push({
-      loc: `${base}/watch/${v.id}`,
+      loc: `${base}/watch/${v.slug || v.id}`,
       lastmod: day(v.updated_at || v.published_at),
       changefreq: "weekly",
       priority: "0.8",

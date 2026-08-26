@@ -7,11 +7,18 @@ import { clamp, cn, formatDuration } from "@/lib/format";
 
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const pipSupported = typeof document !== "undefined" && "pictureInPictureEnabled" in document;
+const isHls = (src: string) => /\.m3u8(\?|#|$)/i.test(src);
 
 /**
- * A premium custom control surface around the native HTML5 <video> element:
- * play/pause, seek with hover timestamps & buffered hint, volume, playback
- * speed, captions, picture-in-picture, fullscreen and keyboard shortcuts.
+ * Premium control surface around the native HTML5 <video> element.
+ *
+ *  · Tap / click anywhere on the video smoothly fades the whole HUD
+ *    (title, scrims, seek bar, buttons) out and back in.
+ *  · The seek bar is a pointer-captured slider that works identically
+ *    for mouse drag and touch swipe, with a live preview frame rendered
+ *    above the bar and the real seek committed on release.
+ *  · Fullscreen uses the browser's native behaviour — no custom overlays,
+ *    toasts or "press Esc to exit" messaging of any kind.
  */
 export function Player({
   src,
@@ -27,10 +34,17 @@ export function Player({
   onEnded?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const previewRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const seekRef = useRef<HTMLDivElement>(null);
+
   const hideTimer = useRef<number | null>(null);
   const clickTimer = useRef<number | null>(null);
+  const previewRaf = useRef<number | null>(null);
+  const lastPointerType = useRef<string>("mouse");
+  const resumeAfterScrub = useRef(false);
+  /** Set when the viewer deliberately hides the HUD, so mouse-move won't fight them. */
+  const hudLocked = useRef(false);
 
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
@@ -45,16 +59,19 @@ export function Player({
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState(false);
   const [visible, setVisible] = useState(true);
-  const [seeking, setSeeking] = useState(false);
-  const [hover, setHover] = useState<{ x: number; t: number } | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
+  const [scrubTime, setScrubTime] = useState(0);
+  const [preview, setPreview] = useState<{ x: number; t: number } | null>(null);
+  const [previewReady, setPreviewReady] = useState(false);
 
   const video = () => videoRef.current;
+  const canPreviewFrames = Boolean(src) && !isHls(src);
 
-  /* ── HLS support: native on Safari, hls.js (lazy-loaded) elsewhere ── */
+  /* ── HLS: native on Safari, hls.js (lazy) elsewhere ── */
   const [hlsManaged, setHlsManaged] = useState(false);
   useEffect(() => {
     const v = videoRef.current;
-    if (!v || !src || !/\.m3u8(\?|#|$)/i.test(src)) {
+    if (!v || !src || !isHls(src)) {
       setHlsManaged(false);
       return;
     }
@@ -86,15 +103,38 @@ export function Player({
     };
   }, [src]);
 
-  /* ── Controls auto-hide ── */
-  const poke = useCallback(() => {
-    setVisible(true);
+  /* ── HUD visibility ── */
+  const clearHideTimer = () => {
     if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+  };
+
+  /** Reveal the HUD and restart the idle countdown. */
+  const poke = useCallback(() => {
+    hudLocked.current = false;
+    setVisible(true);
+    clearHideTimer();
     hideTimer.current = window.setTimeout(() => {
-      const v = video();
-      if (v && !v.paused) setVisible(false);
-    }, 2600);
-  }, []);
+      const v = videoRef.current;
+      if (v && !v.paused && !scrubbing && !rateOpen) setVisible(false);
+    }, 2800);
+  }, [scrubbing, rateOpen]);
+
+  /** Explicit tap/click toggle — the HUD fades out and stays out until asked back. */
+  const toggleHud = useCallback(() => {
+    setVisible((wasVisible) => {
+      const next = !wasVisible;
+      hudLocked.current = !next;
+      clearHideTimer();
+      if (next) {
+        hideTimer.current = window.setTimeout(() => {
+          const v = videoRef.current;
+          if (v && !v.paused && !scrubbing && !rateOpen) setVisible(false);
+        }, 2800);
+      }
+      return next;
+    });
+  }, [scrubbing, rateOpen]);
 
   /* ── Playback ── */
   const togglePlay = useCallback(() => {
@@ -103,13 +143,6 @@ export function Player({
     if (v.paused) v.play().catch(() => {});
     else v.pause();
   }, []);
-
-  const seekTo = (ratio: number) => {
-    const v = video();
-    if (!v || !v.duration) return;
-    v.currentTime = clamp(ratio, 0, 1) * v.duration;
-    setTime(v.currentTime);
-  };
 
   const toggleMute = useCallback(() => {
     const v = video();
@@ -129,6 +162,7 @@ export function Player({
   };
 
   const toggleFullscreen = useCallback(() => {
+    // Native fullscreen only — the browser owns any exit messaging.
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else wrapRef.current?.requestFullscreen?.().catch(() => {});
   }, []);
@@ -149,18 +183,18 @@ export function Player({
     setCcOn(show);
   }, []);
 
-  /* ── Global listeners ── */
   useEffect(() => {
     const onFs = () => setFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener("fullscreenchange", onFs);
     return () => {
       document.removeEventListener("fullscreenchange", onFs);
-      if (hideTimer.current) window.clearTimeout(hideTimer.current);
+      clearHideTimer();
       if (clickTimer.current) window.clearTimeout(clickTimer.current);
+      if (previewRaf.current) cancelAnimationFrame(previewRaf.current);
     };
   }, []);
 
-  /* ── Keyboard shortcuts ── */
+  /* ── Keyboard ── */
   const onKeyDown = (e: React.KeyboardEvent) => {
     const v = video();
     if (!v) return;
@@ -180,34 +214,111 @@ export function Player({
     }
   };
 
-  /* Single click = play/pause · double click = fullscreen */
-  const onVideoClick = () => {
+  /* Tap/click = fade the HUD · double-click (mouse) = fullscreen */
+  const onSurfaceClick = () => {
+    if (lastPointerType.current === "touch") {
+      toggleHud();
+      return;
+    }
     if (clickTimer.current) {
       window.clearTimeout(clickTimer.current);
       clickTimer.current = null;
       toggleFullscreen();
-    } else {
-      clickTimer.current = window.setTimeout(() => {
-        clickTimer.current = null;
-        togglePlay();
-        poke();
-      }, 240);
+      return;
     }
+    clickTimer.current = window.setTimeout(() => {
+      clickTimer.current = null;
+      toggleHud();
+    }, 220);
   };
 
   /* ── Seek bar ── */
-  const seekRatioFromEvent = (clientX: number) => {
+  const ratioFromClientX = (clientX: number) => {
     const bar = seekRef.current;
     if (!bar) return 0;
     const rect = bar.getBoundingClientRect();
     return clamp((clientX - rect.left) / rect.width, 0, 1);
   };
 
-  const playedPct = duration ? (time / duration) * 100 : 0;
+  /** Move the preview frame + bubble (throttled to one seek per frame). */
+  const updatePreview = (clientX: number, ratio: number) => {
+    const bar = seekRef.current;
+    if (!bar || !duration) return;
+    const rect = bar.getBoundingClientRect();
+    const t = ratio * duration;
+    setPreview({ x: clamp(clientX - rect.left, 0, rect.width), t });
+
+    if (!canPreviewFrames) return;
+    if (previewRaf.current) cancelAnimationFrame(previewRaf.current);
+    previewRaf.current = requestAnimationFrame(() => {
+      const pv = previewRef.current;
+      if (pv && Number.isFinite(t)) {
+        try {
+          pv.currentTime = t;
+        } catch {
+          /* seeking before metadata is ready — ignored */
+        }
+      }
+    });
+  };
+
+  const beginScrub = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!duration) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const v = video();
+    resumeAfterScrub.current = Boolean(v && !v.paused);
+    v?.pause(); // pausing while dragging keeps the scrub perfectly smooth
+    const ratio = ratioFromClientX(e.clientX);
+    setScrubbing(true);
+    setScrubTime(ratio * duration);
+    updatePreview(e.clientX, ratio);
+    clearHideTimer();
+    setVisible(true);
+    hudLocked.current = false;
+  };
+
+  const moveScrub = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!duration) return;
+    const ratio = ratioFromClientX(e.clientX);
+    if (scrubbing) setScrubTime(ratio * duration);
+    updatePreview(e.clientX, ratio);
+  };
+
+  /** Commit the seek exactly where the pointer was released, then resume. */
+  const endScrub = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!scrubbing) return;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* pointer already released */
+    }
+    const ratio = ratioFromClientX(e.clientX);
+    const target = ratio * duration;
+    const v = video();
+    setScrubbing(false);
+    setPreview(null);
+    if (v && Number.isFinite(target)) {
+      v.currentTime = target;
+      setTime(target);
+      if (resumeAfterScrub.current) v.play().catch(() => {});
+    }
+    resumeAfterScrub.current = false;
+    poke();
+  };
+
+  const displayTime = scrubbing ? scrubTime : time;
+  const playedPct = duration ? clamp((displayTime / duration) * 100, 0, 100) : 0;
   const bufferedPct = duration ? clamp((buffered / duration) * 100, 0, 100) : 0;
 
   const ctrlBtn =
     "grid size-9 shrink-0 place-items-center rounded-full text-white/90 transition hover:bg-white/15 hover:text-white active:scale-90";
+
+  const hudClass = (extra?: string) =>
+    cn(
+      "transition-opacity duration-300 ease-out",
+      visible ? "opacity-100" : "pointer-events-none opacity-0",
+      extra
+    );
 
   return (
     <div
@@ -216,11 +327,16 @@ export function Player({
       role="region"
       aria-label={title ? `Video player — ${title}` : "Video player"}
       onKeyDown={onKeyDown}
-      onMouseMove={poke}
-      onTouchStart={poke}
+      onPointerDown={(e) => {
+        lastPointerType.current = e.pointerType || "mouse";
+      }}
+      onMouseMove={() => {
+        // Respect a deliberate hide; otherwise reveal on movement (desktop habit).
+        if (!hudLocked.current && lastPointerType.current !== "touch") poke();
+      }}
       onMouseLeave={() => {
         const v = video();
-        if (v && !v.paused) setVisible(false);
+        if (v && !v.paused && !scrubbing) setVisible(false);
       }}
       className={cn(
         "group/player relative aspect-video w-full select-none overflow-hidden bg-black ring-1 ring-white/10 focus-visible:outline-none",
@@ -237,56 +353,55 @@ export function Player({
         crossOrigin="anonymous"
         aria-label={title}
         className="h-full w-full object-contain"
-        onClick={onVideoClick}
+        onClick={onSurfaceClick}
         onLoadedMetadata={(e) => {
           setDuration(e.currentTarget.duration || 0);
           e.currentTarget.volume = volume;
         }}
-        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+        onTimeUpdate={(e) => {
+          if (!scrubbing) setTime(e.currentTarget.currentTime);
+        }}
         onProgress={(e) => {
-          const v = e.currentTarget;
-          const b = v.buffered;
+          const b = e.currentTarget.buffered;
           if (b.length) setBuffered(b.end(b.length - 1));
         }}
         onPlay={() => { setPlaying(true); poke(); }}
-        onPause={() => { setPlaying(false); setVisible(true); }}
+        onPause={() => { setPlaying(false); if (!scrubbing) { hudLocked.current = false; setVisible(true); } }}
         onWaiting={() => setWaiting(true)}
         onPlaying={() => setWaiting(false)}
         onError={() => setError(true)}
-        onEnded={() => { setVisible(true); onEnded?.(); }}
+        onEnded={() => { hudLocked.current = false; setVisible(true); onEnded?.(); }}
       >
-        {captionsUrl && (
-          <track kind="captions" src={captionsUrl} srcLang="en" label="English (demo)" />
-        )}
+        {captionsUrl && <track kind="captions" src={captionsUrl} srcLang="en" label="English" />}
       </video>
 
-      {/* Buffering spinner */}
       {waiting && !error && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center" aria-hidden>
           <Loader2 className="size-12 animate-spin text-white/80" />
         </div>
       )}
 
-      {/* Big center play when paused */}
+      {/* Center play button — part of the HUD, so it fades with everything else */}
       {!playing && !waiting && !error && (
         <button
           type="button"
           aria-label="Play"
           onClick={togglePlay}
-          className="absolute left-1/2 top-1/2 grid size-20 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/20 bg-black/50 text-white shadow-2xl backdrop-blur transition hover:scale-105 hover:bg-brand-500/80 active:scale-95 animate-scale-in"
+          className={hudClass(
+            "absolute left-1/2 top-1/2 grid size-20 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/20 bg-black/50 text-white shadow-2xl backdrop-blur hover:scale-105 hover:bg-brand-500/80 active:scale-95"
+          )}
         >
           <Play className="ml-1 size-9 fill-white" aria-hidden />
         </button>
       )}
 
-      {/* Error state */}
       {error && (
         <div className="absolute inset-0 grid place-items-center bg-ink-950/90 p-6 text-center">
           <div>
             <AlertTriangle className="mx-auto size-10 text-brand-400" aria-hidden />
             <p className="mt-3 text-base font-semibold text-white">This video couldn't be loaded</p>
             <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-fog-500">
-              The placeholder demo source may be unreachable. Replace it with your own file in /public/assets/videos.
+              The media source may be temporarily unavailable. Please try again.
             </p>
             <button
               type="button"
@@ -302,88 +417,107 @@ export function Player({
         </div>
       )}
 
-      {/* Player title belongs to the top edge, independent of the bottom controls. */}
+      {/* Title HUD, pinned to the top edge */}
       {title && !error && (
-        <div
-          className={cn(
-            "pointer-events-none absolute inset-x-0 top-0 z-10 h-24 transition-opacity duration-300",
-            visible ? "opacity-100" : "opacity-0"
-          )}
-        >
-          <div
-            aria-hidden
-            className="absolute inset-0 bg-gradient-to-b from-black/85 via-black/45 to-transparent"
-          />
+        <div className={hudClass("pointer-events-none absolute inset-x-0 top-0 z-10 h-24")}>
+          <div aria-hidden className="absolute inset-0 bg-gradient-to-b from-black/85 via-black/45 to-transparent" />
           <p className="relative truncate px-4 pt-3.5 text-sm font-medium text-white/95 drop-shadow-md sm:px-5 sm:pt-4 sm:text-[15px]">
             {title}
           </p>
         </div>
       )}
 
-      {/* ── Control surface ── */}
-      <div
-        className={cn(
-          "absolute inset-x-0 bottom-0 transition-opacity duration-300",
-          visible ? "opacity-100" : "pointer-events-none opacity-0"
-        )}
-      >
-        {/* Seek bar */}
+      {/* Bottom HUD: seek bar + controls */}
+      <div className={hudClass("absolute inset-x-0 bottom-0 z-10")}>
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-0 -top-16 bg-gradient-to-t from-black/90 via-black/45 to-transparent"
+        />
+
+        {/* Seek bar — generous hit area, works for mouse drag and touch swipe */}
         <div
           ref={seekRef}
           role="slider"
+          tabIndex={0}
           aria-label="Seek"
           aria-valuemin={0}
           aria-valuemax={Math.round(duration)}
-          aria-valuenow={Math.round(time)}
-          aria-valuetext={`${formatDuration(time)} of ${formatDuration(duration)}`}
-          onPointerDown={(e) => {
-            e.currentTarget.setPointerCapture(e.pointerId);
-            setSeeking(true);
-            seekTo(seekRatioFromEvent(e.clientX));
-            poke();
+          aria-valuenow={Math.round(displayTime)}
+          aria-valuetext={`${formatDuration(displayTime)} of ${formatDuration(duration)}`}
+          onPointerDown={beginScrub}
+          onPointerMove={moveScrub}
+          onPointerUp={endScrub}
+          onPointerCancel={endScrub}
+          onPointerLeave={() => !scrubbing && setPreview(null)}
+          onKeyDown={(e) => {
+            const v = video();
+            if (!v || !duration) return;
+            if (e.key === "ArrowLeft") { e.preventDefault(); v.currentTime = Math.max(0, v.currentTime - 5); }
+            if (e.key === "ArrowRight") { e.preventDefault(); v.currentTime = Math.min(duration, v.currentTime + 5); }
           }}
-          onPointerMove={(e) => {
-            const r = seekRatioFromEvent(e.clientX);
-            const bar = seekRef.current;
-            if (bar) {
-              const rect = bar.getBoundingClientRect();
-              setHover({ x: clamp(e.clientX - rect.left, 0, rect.width), t: r * (duration || 0) });
-            }
-            if (seeking) seekTo(r);
-          }}
-          onPointerUp={(e) => {
-            e.currentTarget.releasePointerCapture(e.pointerId);
-            setSeeking(false);
-          }}
-          onPointerLeave={() => !seeking && setHover(null)}
-          className="group/seek relative block h-6 cursor-pointer px-0"
+          className="group/seek relative mx-3 block cursor-pointer py-3 sm:mx-4"
+          style={{ touchAction: "none" }}
         >
-          <div className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-white/20 transition-all group-hover/seek:h-1.5">
-            <div className="absolute inset-y-0 left-0 rounded-full bg-white/25" style={{ width: `${bufferedPct}%` }} />
+          <div
+            className={cn(
+              "relative rounded-full bg-white/25 transition-all duration-150",
+              scrubbing ? "h-1.5" : "h-1 group-hover/seek:h-1.5"
+            )}
+          >
+            <div className="absolute inset-y-0 left-0 rounded-full bg-white/30" style={{ width: `${bufferedPct}%` }} />
             <div
-              className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-brand-500 to-violet-500"
+              className={cn(
+                "absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-brand-500 to-violet-500",
+                !scrubbing && "transition-[width] duration-150 ease-linear"
+              )}
               style={{ width: `${playedPct}%` }}
             />
             <div
               className={cn(
-                "absolute top-1/2 size-3 -translate-y-1/2 rounded-full bg-white shadow transition-opacity",
-                seeking ? "opacity-100" : "opacity-0 group-hover/seek:opacity-100"
+                "absolute top-1/2 -translate-y-1/2 rounded-full bg-white shadow-lg transition-all duration-150",
+                scrubbing ? "size-4 opacity-100" : "size-3.5 opacity-0 group-hover/seek:opacity-100"
               )}
-              style={{ left: `calc(${playedPct}% - 6px)` }}
+              style={{ left: `calc(${playedPct}% - ${scrubbing ? 8 : 7}px)` }}
             />
           </div>
-          {hover && duration > 0 && (
-            <span
-              className="glass pointer-events-none absolute -top-7 -translate-x-1/2 rounded-md px-2 py-1 text-[11px] font-semibold tabular-nums text-white"
-              style={{ left: hover.x }}
-            >
-              {formatDuration(hover.t)}
-            </span>
-          )}
+
+          {/* Live preview frame above the bar — always mounted so the
+              decoder is warm, faded in only while hovering/scrubbing. */}
+          <div
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute bottom-full z-20 mb-2 -translate-x-1/2 transition-opacity duration-150",
+              preview && duration > 0 ? "opacity-100" : "opacity-0"
+            )}
+            style={{
+              left: clamp(preview?.x ?? 0, 66, Math.max(66, (seekRef.current?.clientWidth ?? 320) - 66)),
+              visibility: preview && duration > 0 ? "visible" : "hidden",
+            }}
+          >
+            {canPreviewFrames && (
+              <div className="overflow-hidden rounded-lg border border-white/20 bg-black shadow-2xl">
+                <video
+                  ref={previewRef}
+                  src={src}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  crossOrigin="anonymous"
+                  tabIndex={-1}
+                  className="block h-[72px] w-32 object-cover transition-opacity duration-150 sm:h-[90px] sm:w-40"
+                  style={{ opacity: previewReady ? 1 : 0.25 }}
+                  onLoadedData={() => setPreviewReady(true)}
+                />
+              </div>
+            )}
+            <p className="mt-1 rounded-md bg-black/85 px-2 py-0.5 text-center text-[11px] font-semibold tabular-nums text-white shadow">
+              {formatDuration(preview?.t ?? 0)}
+            </p>
+          </div>
         </div>
 
         {/* Control row */}
-        <div className="flex h-12 items-center gap-1 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-2 sm:gap-1.5 sm:px-3">
+        <div className="relative flex h-12 items-center gap-1 px-2 sm:gap-1.5 sm:px-3">
           <button type="button" aria-label={playing ? "Pause" : "Play"} onClick={() => { togglePlay(); poke(); }} className={ctrlBtn}>
             {playing ? <Pause className="size-5 fill-white" aria-hidden /> : <Play className="ml-0.5 size-5 fill-white" aria-hidden />}
           </button>
@@ -402,13 +536,12 @@ export function Player({
             className="hidden h-1 w-20 cursor-pointer sm:block"
           />
 
-          <span className="ml-1 shrink-0 text-[11px] font-medium tabular-nums text-white/80 sm:text-xs">
-            {formatDuration(time)} <span className="text-white/40">/ {formatDuration(duration)}</span>
+          <span className="ml-1 shrink-0 text-[11px] font-medium tabular-nums text-white/85 sm:text-xs">
+            {formatDuration(displayTime)} <span className="text-white/45">/ {formatDuration(duration)}</span>
           </span>
 
           <span className="flex-1" />
 
-          {/* Playback speed */}
           <div className="relative">
             <button
               type="button"
@@ -434,6 +567,7 @@ export function Player({
                       if (v) v.playbackRate = r;
                       setRate(r);
                       setRateOpen(false);
+                      poke();
                     }}
                     className={cn(
                       "block w-full px-3.5 py-2 text-left text-xs font-medium transition",

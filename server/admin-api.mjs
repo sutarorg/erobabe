@@ -7,7 +7,7 @@ import { categoryIndex, invalidateCategoryCache, shapeVideo } from "./public-api
 import {
   json, readJson, HttpError, badRequest, unauthorized, notFound,
   parseCookies, serializeCookie, createSessionToken, verifySessionToken,
-  verifyPassword, hashPassword, rateLimit, clientIp, timingSafeStr, assertCsrf, ENV,
+  verifyPassword, hashPassword, rateLimit, clientIp, timingSafeStr, assertCsrf, ENV, slugify,
 } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -61,6 +61,22 @@ async function getVideoOr404(id) {
   const row = await dbApi.one("videos", `id=eq.${id}`);
   if (!row) throw notFound("Video not found");
   return row;
+}
+
+/**
+ * Build a unique, URL-safe slug for /watch/{slug}. Each published video
+ * therefore gets its own crawlable, canonical page automatically.
+ */
+async function uniqueSlug(title, excludeId = null) {
+  const base = slugify(title || "") || "video";
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
+    const query = `slug=eq.${encodeURIComponent(candidate)}&select=id&limit=1`;
+    const { data } = await dbApi.select("videos", query);
+    const taken = data.find((r) => r.id !== excludeId);
+    if (!taken) return candidate;
+  }
+  return `${base}-${Date.now().toString(36)}`;
 }
 
 async function withCategory(row) {
@@ -248,13 +264,28 @@ async function patchVideo(req, id) {
     const t = cleanText(body.title, 120);
     if (!t) throw badRequest("Title is required");
     patch.title = t;
+    // Keep published URLs stable for SEO; refresh the slug while still a draft.
+    if (t !== row.title && (row.status !== "published" || !row.slug)) {
+      patch.slug = await uniqueSlug(t, row.id);
+    }
+  }
+  if ("slug" in body) {
+    const requested = slugify(cleanText(body.slug, 80));
+    if (requested && requested !== row.slug) patch.slug = await uniqueSlug(requested, row.id);
   }
   if ("description" in body) patch.description = cleanText(body.description, 2000);
   if ("tags" in body) patch.tags = cleanTags(body.tags);
   if ("durationS" in body) patch.duration_s = Math.min(Math.max(Number(body.durationS) || 0, 0), 86400);
   if ("likeRatio" in body) patch.like_ratio = Math.min(Math.max(Number(body.likeRatio) || 0, 0), 100);
-  for (const flag of ["featured", "trending", "editors_pick"]) {
-    if (flag in body) patch[flag] = !!body[flag];
+  // Accept both camelCase (used by the CMS UI) and snake_case (raw API).
+  const FLAGS = [
+    ["featured", ["featured"]],
+    ["trending", ["trending"]],
+    ["editors_pick", ["editorsPick", "editors_pick"]],
+  ];
+  for (const [column, aliases] of FLAGS) {
+    const key = aliases.find((a) => a in body);
+    if (key !== undefined) patch[column] = !!body[key];
   }
   if ("seoTitle" in body) patch.seo_title = cleanText(body.seoTitle, 150) || null;
   if ("seoDescription" in body) patch.seo_description = cleanText(body.seoDescription, 300) || null;
@@ -281,7 +312,11 @@ async function setStatus(req, id, action) {
     if (!row.video_url && !row.hls_url) throw badRequest("This video has no media attached — upload a file first");
     if (["uploading", "processing"].includes(row.status)) throw badRequest("Video is still uploading or processing");
     const updated = await dbApi.update("videos", `id=eq.${row.id}`, {
-      status: "published", published_at: nowIso(), updated_at: nowIso(),
+      status: "published",
+      // Guarantee a canonical slug exists before the page goes live.
+      ...(row.slug ? {} : { slug: await uniqueSlug(row.title, row.id) }),
+      published_at: row.published_at ?? nowIso(),
+      updated_at: nowIso(),
     });
     await logActivity(admin.sub, "video.publish", "video", row.id, { title: row.title });
     return json({ video: await withCategory(updated?.[0] ?? row) });
@@ -383,8 +418,11 @@ async function createUpload(req) {
     });
     row = updated?.[0] ?? existing;
   } else {
+    const initialTitle = fileName.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ").slice(0, 120);
     row = await dbApi.insert("videos", {
-      title: fileName.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ").slice(0, 120),
+      title: initialTitle,
+      // Every upload gets its own /watch/{slug} page from the very first save.
+      slug: await uniqueSlug(initialTitle),
       status: "uploading",
       upload_key: key,
       upload_id: uploadId,

@@ -71,7 +71,13 @@ export default function Explore() {
         <section aria-label="Editor's picks">
           <SectionHeader eyebrow="Staff selections" title="Editor's Picks" />
           <div className="rounded-3xl border border-white/6 bg-ink-900/40 px-4 py-2 sm:px-6">
-            <RankList videos={editorsPicks.slice(0, 5)} />
+            {editorsPicks.length > 0 ? (
+              <RankList videos={editorsPicks.slice(0, 5)} />
+            ) : (
+              <p className="px-1 py-10 text-center text-sm text-fog-600">
+                No editor's picks yet — mark videos as “Editor's pick” in the admin to feature them here.
+              </p>
+            )}
           </div>
         </section>
         <section aria-label="Rising now">

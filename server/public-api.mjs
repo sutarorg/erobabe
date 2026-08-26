@@ -7,7 +7,7 @@ import { json, clientIp, sha256hex, ENV } from "./util.mjs";
  * ────────────────────────────────────────────────────────────── */
 
 const VIDEO_COLS =
-  "id,title,description,status,duration_s,views,like_ratio,tags,thumbnail_url,video_url,hls_url,featured,trending,editors_pick,published_at,created_at,source_size,category_id";
+  "id,slug,title,description,status,duration_s,views,like_ratio,tags,thumbnail_url,video_url,hls_url,featured,trending,editors_pick,seo_title,seo_description,published_at,created_at,source_size,category_id";
 
 let catCache = { at: 0, list: [] };
 
@@ -26,6 +26,9 @@ export function shapeVideo(row, cats) {
   const cat = cats.find((c) => c.id === row.category_id);
   return {
     id: row.id,
+    slug: row.slug ?? row.id,
+    seoTitle: row.seo_title ?? null,
+    seoDescription: row.seo_description ?? null,
     title: row.title,
     description: row.description ?? "",
     category: cat?.slug ?? null,
@@ -44,6 +47,25 @@ export function shapeVideo(row, cats) {
     createdAt: row.created_at,
     sourceSize: row.source_size ?? 0,
   };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,79}$/i;
+
+/** Resolve a published video by its SEO slug or, as a fallback, its uuid. */
+async function findPublished(ref, cols = VIDEO_COLS) {
+  if (!ref) return null;
+  if (SLUG_RE.test(ref)) {
+    const bySlug = await dbApi.one(
+      "videos",
+      `slug=eq.${encodeURIComponent(ref)}&status=eq.published&select=${cols}`
+    );
+    if (bySlug) return bySlug;
+  }
+  if (UUID_RE.test(ref)) {
+    return dbApi.one("videos", `id=eq.${ref}&status=eq.published&select=${cols}`);
+  }
+  return null;
 }
 
 async function siteSettings() {
@@ -120,23 +142,25 @@ export async function handlePublic(req, url, path) {
     return json({ videos: data.map((r) => shapeVideo(r, cats)), featuredId: s.featured_video_id ?? null });
   }
 
-  /* ── GET /api/public/videos/:id ── */
+  /* ── GET /api/public/videos/:idOrSlug ── */
   if (first === "videos" && seg.length === 2 && req.method === "GET") {
-    const id = seg[1];
-    if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "Not found", code: "not_found" }, { status: 404 });
-    const cats = await categoryIndex();
-    const row = await dbApi.one("videos", `id=eq.${id}&status=eq.published&select=${VIDEO_COLS}`);
+    const ref = decodeURIComponent(seg[1]);
+    const row = await findPublished(ref);
     if (!row) return json({ error: "Not found", code: "not_found" }, { status: 404 });
+    const cats = await categoryIndex();
     return json({ video: shapeVideo(row, cats) });
   }
 
-  /* ── POST /api/public/videos/:id/view — real view tracking with daily dedupe ── */
+  /* ── POST /api/public/videos/:idOrSlug/view — real tracking with daily dedupe ── */
   if (first === "videos" && seg.length === 3 && seg[2] === "view" && req.method === "POST") {
-    const id = seg[1];
-    if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ ok: false }, { status: 404 });
-    const hash = sha256hex(`${clientIp(req.headers)}|${req.headers.get("user-agent") ?? ""}|${id}`).slice(0, 32);
+    const ref = decodeURIComponent(seg[1]);
+    const row = await findPublished(ref, "id");
+    if (!row) return json({ ok: false }, { status: 404 });
+    const hash = sha256hex(
+      `${clientIp(req.headers)}|${req.headers.get("user-agent") ?? ""}|${row.id}`
+    ).slice(0, 32);
     try {
-      await dbApi.rpc("track_view", { v: id, h: hash });
+      await dbApi.rpc("track_view", { v: row.id, h: hash });
     } catch {
       /* View tracking must never break playback */
     }
