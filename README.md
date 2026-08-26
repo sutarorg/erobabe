@@ -1,0 +1,173 @@
+# EroBabe — 18+ Video Streaming Platform + Admin CMS
+
+EroBabe is a **production-ready adult video platform** built with **React 19, TypeScript, Vite and Tailwind CSS v4**, with a full **admin CMS** at `/admin` for real uploads, processing, publishing and analytics. It deploys to **Vercel** or **Netlify** as a static frontend + serverless API.
+
+> **18+ Adults only.** The shipped demo content is entirely fictional (invented titles/performers, tasteful stock thumbnails, openly licensed placeholder videos) for interface demonstration.
+>
+> **The whole platform also runs with zero backend**: without environment variables the site stays a beautiful, fully browsable demo. Connect Supabase + Cloudflare R2 and everything becomes live — uploads, publishing, views and analytics work for real.
+
+---
+
+## Architecture
+
+```
+┌────────────────────────┐        presigned URLs         ┌────────────────┐
+│  Admin (React, /admin) │ ─────────── direct ─────────▶ │ Cloudflare R2  │
+│  Public site (React)   │        500 MB–2 GB multipart  │  (media store) │
+└─────────┬──────────────┘                               └───────▲────────┘
+          │ fetch /api/* (HttpOnly session cookie)                │
+┌─────────▼──────────────┐        PostgREST (service role)        │
+│ Serverless API (Vercel │ ─────────────────────────▶┌───────────┴────────┐
+│ api/index.js · Netlify │                            │ Supabase / Postgres│
+│ functions/api.mjs)     │ ◀────────── RPC/track ──── │ videos, categories,│
+└────────────────────────┘                            │ analytics_events,  │
+                                                      │ settings, activity │
+                                                      └────────────────────┘
+```
+
+**Key design choices**
+
+- **Direct-to-R2 uploads** — files (up to 2 GB) never pass through serverless functions (which have 4.5–6 MB payload limits). The browser uploads with short-lived SigV4 **presigned URLs** in resumable 16 MB multipart chunks, 4-way parallel, auto-retry.
+- **Zero-dependency server core** (`/server`) shared by two tiny adapters: Vercel (`api/index.js`) and Netlify (`netlify/functions/api.mjs`). No Express, no framework lock-in.
+- **Supabase accessed with the service-role key only inside functions.** The browser only ever talks to `/api/*`. Row Level Security restricts anonymous reads to `status = 'published'`.
+- **Publish-gated workflow**: `Upload → Process → Draft → Preview → Publish`. Public API never returns non-published rows.
+- **Dynamic hot-swap**: on boot the frontend probes `/api/public/health`. If the backend is configured, the entire site (home, search, categories, trending, watch pages) switches to the live catalog before first paint — no code changes or redeploys.
+
+## Local development
+
+```bash
+npm install
+npm run dev          # static demo (no backend needed)
+```
+
+For full-stack work (API + frontend together):
+
+```bash
+npx vercel dev       # or
+npx netlify dev
+```
+
+Both run the Vite dev server **and** the serverless functions locally.
+
+## Setup: Supabase (database)
+
+1. Create a project at [supabase.com](https://supabase.com) (free tier is enough).
+2. Open **SQL Editor → New query**, paste the contents of **`supabase/migrations/0001_init.sql`**, and run it. This creates tables (`videos`, `categories`, `analytics_events`, `settings`, `activity_log`), indexes, RLS policies, the atomic `track_view` function, and seeds categories.
+3. From **Project Settings → API**, copy:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY` (the **service_role** secret — server-only)
+
+## Setup: Cloudflare R2 (media storage)
+
+1. In the Cloudflare dashboard: **R2 → Create bucket** (e.g. `erobabe-media`).
+2. **Expose it publicly** so the player can stream files: either enable the `r2.dev` public URL (**Settings → Public access**) or attach a custom domain (recommended for production, e.g. `media.erobabe.com`). The resulting base URL is your `R2_PUBLIC_BASE_URL`.
+3. **Set CORS** on the bucket (`aws s3api put-bucket-cors` or the dashboard) using **`r2-cors.json`** — it allows browser `PUT` uploads from your domains and exposes `ETag` (required for multipart).
+4. Create an **R2 API token** (Object Read & Write, scoped to this bucket) and record `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
+
+## Setup: credentials
+
+```bash
+node scripts/hash-password.mjs "choose-a-strong-password"
+# prints:  ADMIN_USERNAME / ADMIN_PASSWORD_SCRYPT / SESSION_SECRET
+```
+
+## Environment variables
+
+Copy `.env.example` → `.env` locally, and add the same values in **Vercel → Project → Settings → Environment Variables** (or Netlify → Site configuration). All are server-side only. **None of these ever appear in the client bundle** — Vite only inlines `VITE_*` vars, and we use none.
+
+| Variable | Purpose |
+| --- | --- |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD_SCRYPT` | Admin login (scrypt hash, never a plaintext password) |
+| `SESSION_SECRET` | HMAC key for signed session cookies |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Database + PostgREST (service role, server-only) |
+| `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` / `R2_PUBLIC_BASE_URL` | Object storage |
+| `PROCESSING_MODE` | `original` (default) or `callback` |
+| `PROCESSING_WEBHOOK_SECRET` | Shared secret for the processing callback |
+| `SITE_URL` | Absolute site URL |
+
+## Deploy
+
+### Vercel
+Import the repo (framework preset **Vite** is auto-detected). `vercel.json` ships with:
+- the `/api/:path* → api/index.js` rewrite for serverless functions,
+- SPA fallback for all frontend routes (including `/admin`),
+- hardened HTTP headers.
+
+`npx vercel dev` gives you the same stack locally.
+
+### Netlify
+Import the repo. `netlify.toml` configures the build (`npm run build` → `dist`), bundles `netlify/functions/api.mjs` with esbuild, and redirects `/api/*` to it before the SPA fallback. Use **`npx netlify dev`** locally.
+
+### Connecting erobabe.com
+1. Buy the domain anywhere, then add it in your host's **Domains** page (Vercel or Netlify both auto-issue TLS).
+2. Update `SITE_URL`, the canonical/OG URLs in `index.html`, `public/robots.txt`, `public/sitemap.xml`, and the origins in `r2-cors.json`.
+
+## The upload workflow (real end-to-end)
+
+1. **Upload** — `/admin/upload`: drag-and-drop, validation (type/size ≤ 2 GB), client-side duration + auto poster capture, direct-to-R2 resumable upload with live progress, speed/ETA, cancel & resume-failed-parts. On completion the server finalizes the multipart upload.
+2. **Process** — with `PROCESSING_MODE=original` the file is marked **ready** immediately (single-file playback). With `callback`, it stays in **processing** until an external worker posts renditions to `POST /api/admin/process/callback` (`x-process-secret` header), which flips it to **ready** and stores `hls_url` (the player then uses HLS via Safari natively and **hls.js** elsewhere — loaded lazily).
+3. **Draft** — metadata (title, description, category, tags, thumbnail override) is saved privately; nothing is public.
+4. **Preview** — the editor (`/admin/videos/:id`) streams the actual stored file before publishing.
+5. **Publish** — flips `status = 'published'` and it appears on the public site instantly: homepage sections, search, category pages, trending, recommendations.
+
+Every mutation writes to the **activity log**; **views** are tracked through a deduplicating Postgres function (one view per viewer/IP-hash/day) and power the Analytics dashboard (daily series, range totals, top videos, storage).
+
+## Admin features map
+
+- **Dashboard** — totals (videos/published/drafts/processing/views/storage), 14-day chart, top videos, recent activity
+- **Videos** — search, status/category filters, sorting, pagination, bulk publish/unpublish/feature/trending/delete, quick publish toggles
+- **Editor** — full metadata, curation flags (featured/trending/editor's pick), SEO fields, thumbnail replace, **video file replace**, live preview, publish/unpublish/delete
+- **Categories & Tags** — CRUD with slugs/gradients/cover uploads, sort order, usage counts, safe delete protection, tag cleanup
+- **Analytics** — 7/14/30-day series, lifetime totals, storage monitoring, top-performers, full audit log
+- **Settings** — site title, announcement, homepage hero toggle, pinned featured video, age-gate copy, infrastructure status
+
+## Security model
+
+- Server-side verification of an **HttpOnly, Secure, SameSite=Lax** cookie containing an HMAC-signed token (12 h)
+- Passwords hashed with **scrypt** (per-user salt, timing-safe compare); constant-time path on unknown usernames
+- **Rate limiting** on login (5/min/IP) and on all mutations (in-memory sliding window — best-effort on serverless; front with Cloudflare WAF for hard guarantees)
+- CSRF: custom `X-Requested-With` header required on all mutations
+- Strict input validation and field whitelists on every endpoint; UUID-checked ids; PostgREST-parameterized queries only
+- Uploads accepted only for `video/*` ≤ 2 GB; thumbnails are validated data URLs ≤ 4 MB
+- R2 credentials and the Supabase service key exist **only** in server env; short-lived signed URLs (4 h) for upload parts
+- RLS: anonymous DB role can read published videos/categories only — everything else is behind the service role
+- Tight outbound headers (nosniff, frame, permissions-policy, referrer)
+
+## Video processing (optional transcoding to 360p–1080p + HLS)
+
+Serverless functions shouldn't run ffmpeg. The honest, extensible contract is:
+
+1. Set `PROCESSING_MODE=callback` and `PROCESSING_WEBHOOK_SECRET`.
+2. Point any worker (a small ffmpeg container, a queue consumer, or a Cloudflare Stream bridge) at new rows in `processing` status.
+3. When renditions exist, the worker calls:
+   ```http
+   POST /api/admin/process/callback
+   x-process-secret: <secret>
+   { "videoId": "…", "hlsUrl": "https://media…/master.m3u8",
+     "renditions": [{"label":"1080p","url":"…"}, …], "durationS": 1523, "thumbnailUrl": "…" }
+   ```
+4. The row becomes `ready` with `hls_url`; the public player automatically prefers HLS (360p/480p/720p/1080p ladder).
+
+Until a worker exists, `original` mode streams the uploaded file directly — fully functional.
+
+## Project structure (additions over the static base)
+
+```
+api/index.js                  # Vercel serverless adapter
+netlify/functions/api.mjs     # Netlify functions adapter
+server/
+  handler.mjs                 # router shared by both adapters
+  public-api.mjs              # public read API (published content only)
+  admin-api.mjs               # auth, uploads, CRUD, taxonomy, analytics, settings
+  r2.mjs                      # SigV4 presigning + multipart lifecycle (zero deps)
+  db.mjs                      # PostgREST client (service role)
+  util.mjs                    # sessions, scrypt, rate limiting, HTTP helpers
+supabase/migrations/0001_init.sql
+src/admin/                    # the /admin CMS (React)
+src/data/dynamic.ts           # hot-swap of demo catalog ←→ live catalog
+.env.example · r2-cors.json · scripts/hash-password.mjs
+```
+
+---
+
+© EroBabe. 18+ Adults Only. Demo content is fictional; connect your own licensed media and policies before operating a real service.

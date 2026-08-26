@@ -1,0 +1,20 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Admin/public API → serverless function (kept before the SPA fallback)
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true
+
+# SPA fallback so /watch/:id, /admin, /category/:slug never 404
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

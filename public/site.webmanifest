@@ -1,0 +1,12 @@
+{
+  "name": "EroBabe — 18+ Video Streaming",
+  "short_name": "EroBabe",
+  "description": "Premium 18+ video discovery and streaming. Demo interface with fictional content.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050506",
+  "theme_color": "#050506",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

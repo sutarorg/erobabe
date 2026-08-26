@@ -1,0 +1,158 @@
+@import "tailwindcss";
+
+@theme {
+  /* ── EroBabe palette: near-black inks, warm fog text, rose→violet accent ── */
+  --color-ink-950: #050506;
+  --color-ink-900: #0a0a0c;
+  --color-ink-850: #0e0e11;
+  --color-ink-800: #131316;
+  --color-ink-750: #18181c;
+  --color-ink-700: #1e1e23;
+  --color-ink-600: #2a2a31;
+
+  --color-fog-100: #f5f1f4;
+  --color-fog-300: #d9d2d8;
+  --color-fog-400: #bdb3bc;
+  --color-fog-500: #9d93a0;
+  --color-fog-600: #756c78;
+
+  --color-brand-300: #fda4c8;
+  --color-brand-400: #fb6fa8;
+  --color-brand-500: #f43f7f;
+  --color-brand-600: #dd1f66;
+  --color-brand-700: #b3124f;
+
+  --font-sans: "Outfit", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --animate-fade-in: fade-in 0.4s ease both;
+  --animate-fade-up: fade-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-scale-in: scale-in 0.16s ease-out both;
+  --animate-zoom-slow: zoom-slow 16s ease-in-out infinite alternate;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-pulse-soft: pulse-soft 2.4s ease-in-out infinite;
+  --animate-flicker: flicker 3.5s ease-in-out infinite;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes scale-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  @keyframes zoom-slow {
+    from { transform: scale(1); }
+    to { transform: scale(1.08); }
+  }
+  @keyframes shimmer {
+    from { background-position: 200% 0; }
+    to { background-position: -200% 0; }
+  }
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  @keyframes flicker {
+    0%, 100% { opacity: 1; }
+    8% { opacity: 0.82; }
+    9% { opacity: 1; }
+    52% { opacity: 0.92; }
+    53% { opacity: 1; }
+  }
+}
+
+/* Keyframes referenced directly by utilities below */
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-ink-950 text-fog-100 font-sans antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: rgba(244, 63, 127, 0.35);
+    color: #fff;
+  }
+  :focus-visible {
+    outline: 2px solid rgba(244, 63, 127, 0.75);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #232329;
+    border-radius: 999px;
+    border: 2px solid #050506;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: #33333b;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  input[type="range"] {
+    accent-color: #f43f7f;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Hide scrollbars while keeping scroll — used by carousels & chip rows */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility text-gradient {
+  background: linear-gradient(92deg, #fb6fa8 0%, #a78bfa 55%, #67e8f9 115%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@utility glass {
+  background: rgba(9, 9, 11, 0.74);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+}
+
+/* Shimmering loading block */
+@utility skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(30, 30, 35, 0.6);
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.06) 50%, transparent 80%);
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
+  }
+}
