@@ -418,15 +418,33 @@ async function videoAnalytics(req, url, id) {
 async function checkDuplicate(req) {
   const body = await readJson(req);
   const hash = cleanText(body.hash, 80);
-  if (!hash) throw badRequest("A content hash is required");
-  if (!(await hasColumn("videos", "content_hash"))) {
-    return json({ available: false, duplicate: null });
-  }
+  const title = cleanText(body.title, 160);
+  if (!hash && !title) throw badRequest("A content hash or title is required");
+
   const cols = `id,title,status,thumbnail_url,created_at${(await hasSlugColumn()) ? ",slug" : ""}`;
-  const match = await dbApi
-    .one("videos", `content_hash=eq.${encodeURIComponent(hash)}&select=${cols}&order=created_at.asc`)
-    .catch(() => null);
-  return json({ available: true, duplicate: match ?? null });
+  const hashSupported = await hasColumn("videos", "content_hash");
+
+  // 1. Exact file match — the strongest signal.
+  if (hash && hashSupported) {
+    const byHash = await dbApi
+      .one("videos", `content_hash=eq.${encodeURIComponent(hash)}&select=${cols}&order=created_at.asc`)
+      .catch(() => null);
+    if (byHash) return json({ available: true, duplicate: byHash, reason: "file" });
+  }
+
+  // 2. Same title — catches re-encodes and re-exports of the same video,
+  //    which produce different bytes and so never match by hash.
+  if (title) {
+    const needle = title.replace(/[%,()]/g, " ").trim();
+    if (needle) {
+      const byTitle = await dbApi
+        .one("videos", `title=ilike.${encodeURIComponent(needle)}&select=${cols}&order=created_at.asc`)
+        .catch(() => null);
+      if (byTitle) return json({ available: true, duplicate: byTitle, reason: "title" });
+    }
+  }
+
+  return json({ available: hashSupported, duplicate: null, reason: null });
 }
 
 /* ── Scheduled publishing ── */

@@ -10,11 +10,12 @@ import {
   analyzeComplexity, analyzeVideo, compressionSupported, compressVideoAggressive, planEncode,
   CompressionCancelled, type EncodePlan, type VideoAnalysis,
 } from "./compress";
-import { Btn, Field, Input, PageHeader, Select, TagEditor, Textarea, Toggle, useFetch } from "./ui";
+import { Btn, Field, FieldGroup, Input, PageHeader, Select, TagEditor, Textarea, Toggle, useFetch } from "./ui";
 import { buildTrendingTags, generateTags } from "./autoTags";
 import { fingerprintFile } from "./fingerprint";
 import type { DuplicateMatch } from "./api";
 import BulkUpload from "./BulkUpload";
+import { titleFromFileName } from "./bulkDefaults";
 import { toast } from "@/components/Feedback";
 import { cn } from "@/lib/format";
 
@@ -54,6 +55,8 @@ function ModeSwitch({ mode, onChange }: { mode: "single" | "bulk"; onChange: (m:
 export default function UploadWizard() {
   const navigate = useNavigate();
   const [mode, setMode] = useState<"single" | "bulk">("single");
+  /** Files passed straight to bulk mode when several are chosen at once. */
+  const [handoff, setHandoff] = useState<File[] | null>(null);
   const [phase, setPhase] = useState<Phase>({ step: "select" });
   const [file, setFile] = useState<File | null>(null);
   const [probe, setProbe] = useState<{ durationS: number | null; poster: string | null } | null>(null);
@@ -65,11 +68,12 @@ export default function UploadWizard() {
   const [encodePlan, setEncodePlan] = useState<EncodePlan | null>(null);
   const [optimizePct, setOptimizePct] = useState(0);
   const [optimized, setOptimized] = useState<File | null>(null);
-  /** Automatic optimization is on by default; the admin can switch it off. */
-  const [optimizeEnabled, setOptimizeEnabled] = useState(true);
+  /** Automatic optimization is opt-in — the admin switches it on per upload. */
+  const [optimizeEnabled, setOptimizeEnabled] = useState(false);
   /** Fingerprint of the source file + any matching prior upload. */
   const [contentHash, setContentHash] = useState<string | null>(null);
   const [duplicate, setDuplicate] = useState<DuplicateMatch | null>(null);
+  const [dupReason, setDupReason] = useState<"file" | "title" | null>(null);
   const [dupAcknowledged, setDupAcknowledged] = useState(false);
 
   const [plan, setPlan] = useState<UploadPlan | null>(null);
@@ -111,6 +115,20 @@ export default function UploadWizard() {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  /**
+   * Accept whatever the admin chose. Selecting several files switches
+   * straight to bulk mode instead of silently ignoring the extras.
+   */
+  const acceptFiles = (list: FileList | null) => {
+    const videos = [...(list ?? [])].filter((f) => f.type.startsWith("video/"));
+    if (videos.length > 1) {
+      setHandoff(videos.slice(0, 20));
+      setMode("bulk");
+      return;
+    }
+    pick(videos[0] ?? list?.[0] ?? null);
+  };
+
   const pick = (f: File | null) => {
     setError(null);
     setProbe(null);
@@ -142,14 +160,17 @@ export default function UploadWizard() {
       })
       .catch(() => setProbing(false));
 
-    // Fingerprint the source and warn if it has been uploaded before.
+    // Fingerprint the source and warn if the file — or its title — already exists.
     void (async () => {
       const hash = await fingerprintFile(f);
       setContentHash(hash);
       try {
-        setDuplicate((await api.checkDuplicate(hash)).duplicate);
+        const res = await api.checkDuplicate(hash, titleFromFileName(f.name));
+        setDuplicate(res.duplicate);
+        setDupReason(res.reason);
       } catch {
         setDuplicate(null);
+        setDupReason(null);
       }
     })();
   };
@@ -294,6 +315,20 @@ export default function UploadWizard() {
     return () => window.clearTimeout(id);
   }, [phase.step, title, description, categoryId, autoFillTags]);
 
+  /** Explicit regenerate: always overwrites, even after manual edits. */
+  const regenerateTags = useCallback(() => {
+    tagsTouched.current = false;
+    const categoryName = categories.find((c) => c.id === categoryId)?.name ?? null;
+    const generated = generateTags(title, description, trending, categoryName, 5);
+    if (generated.length) {
+      setTags(generated);
+      setTagsAuto(true);
+      toast(`Generated ${generated.length} tags`);
+    } else {
+      toast("Add a title or description first", "info");
+    }
+  }, [title, description, categoryId, categories, trending]);
+
   const cancelUpload = async () => {
     abortRef.current?.abort();
     if (plan) await api.abortUpload(plan.videoId).catch(() => {});
@@ -339,10 +374,10 @@ export default function UploadWizard() {
       <div className="mx-auto max-w-3xl">
         <PageHeader
           title="Upload videos"
-          sub={`Bulk upload up to ${20} videos. Metadata is generated automatically and videos publish one per hour.`}
-          actions={<ModeSwitch mode={mode} onChange={setMode} />}
+          sub="Bulk upload up to 20 videos. Metadata is generated automatically and videos publish one per hour."
+          actions={<ModeSwitch mode={mode} onChange={(m) => { setMode(m); setHandoff(null); }} />}
         />
-        <BulkUpload />
+        <BulkUpload initialFiles={handoff} />
       </div>
     );
   }
@@ -390,7 +425,7 @@ export default function UploadWizard() {
             onDrop={(e) => {
               e.preventDefault();
               setDrag(false);
-              pick(e.dataTransfer.files?.[0] ?? null);
+              acceptFiles(e.dataTransfer.files);
             }}
             className={cn(
               "flex cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed p-10 text-center transition md:p-16",
@@ -400,15 +435,21 @@ export default function UploadWizard() {
             <input
               type="file"
               accept="video/*"
+              multiple
               className="sr-only"
-              onChange={(e) => pick(e.target.files?.[0] ?? null)}
+              onChange={(e) => {
+                acceptFiles(e.target.files);
+                e.target.value = "";
+              }}
             />
             <span className="grid size-16 place-items-center rounded-2xl bg-gradient-to-br from-brand-500/20 to-violet-600/20 text-brand-300 ring-1 ring-brand-500/30">
               <CloudUpload className="size-8" aria-hidden />
             </span>
-            <p className="mt-5 text-base font-semibold text-white">Drag & drop your video</p>
+            <p className="mt-5 text-base font-semibold text-white">Drag &amp; drop your video</p>
             <p className="mt-1 text-sm text-fog-500">or click to browse — MP4, MOV, WEBM up to 2 GB</p>
-            <p className="mt-3 text-[11px] text-fog-600">Large files upload directly to storage in resumable 16 MB chunks.</p>
+            <p className="mt-3 text-[11px] text-fog-600">
+              Select several files at once to switch to bulk upload (up to 20).
+            </p>
           </label>
 
           {file && (
@@ -442,10 +483,12 @@ export default function UploadWizard() {
                     <CopyCheck className="mt-0.5 size-4 shrink-0 text-amber-400" aria-hidden />
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold text-amber-200">
-                        This video looks like a duplicate
+                        {dupReason === "title"
+                          ? "A video with this title already exists"
+                          : "This video looks like a duplicate"}
                       </p>
                       <p className="mt-0.5 text-[11px] leading-relaxed text-amber-200/80">
-                        An identical file was already uploaded as{" "}
+                        {dupReason === "title" ? "Matching title:" : "An identical file was uploaded as"}{" "}
                         <span className="font-semibold">“{duplicate.title}”</span> ({duplicate.status}) on{" "}
                         {new Date(duplicate.created_at).toLocaleDateString("en-US", {
                           month: "short", day: "numeric", year: "numeric",
@@ -479,8 +522,8 @@ export default function UploadWizard() {
                 </div>
               )}
 
-              {/* Automatic optimization — toggleable */}
-              {!probing && (
+              {/* Automatic optimization — only offered when it would help. */}
+              {!probing && encodePlan?.compress && (
                 <div className="mt-4 rounded-xl border border-white/6 bg-ink-850 p-3.5">
                   <div className="flex items-start gap-2.5">
                     <Wand2
@@ -495,10 +538,7 @@ export default function UploadWizard() {
                       <p className="mt-0.5 text-[11px] leading-relaxed text-fog-500">
                         {!optimizeEnabled
                           ? "Off — the original file will be uploaded unchanged."
-                          : (encodePlan?.reason ??
-                            (compressionSupported()
-                              ? "Analyzing…"
-                              : "This browser can't re-encode video — the original will be uploaded."))}
+                          : encodePlan.reason}
                       </p>
                       {optimizeEnabled && encodePlan?.compress && (
                         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fog-400">
@@ -517,7 +557,8 @@ export default function UploadWizard() {
                       )}
                       {!optimizeEnabled && (
                         <p className="mt-2 text-[11px] text-amber-300/90">
-                          Uploading {fmtBytes(file.size)} — larger files are slower to stream.
+                          Uploading {fmtBytes(file.size)} — turning this on could save about{" "}
+                          {Math.max(0, Math.round((1 - encodePlan.estimatedSize / file.size) * 100))}%.
                         </p>
                       )}
                     </div>
@@ -663,24 +704,22 @@ export default function UploadWizard() {
             </Field>
           </div>
 
-          <Field label="Tags">
+          {/* FieldGroup (a div) — a <label> would swallow the button's click. */}
+          <FieldGroup label="Tags">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               {tagsAuto && tags.length > 0 && (
                 <span className="inline-flex items-center gap-1 rounded-md bg-brand-500/12 px-2 py-1 text-[11px] font-semibold text-brand-300">
                   <Sparkles className="size-3" aria-hidden />
-                  Auto-generated from title & description
+                  Auto-generated from title &amp; description
                 </span>
               )}
               <button
                 type="button"
-                onClick={() => {
-                  tagsTouched.current = false;
-                  autoFillTags(title, description, categoryId);
-                }}
-                className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[11px] font-medium text-fog-300 transition hover:border-brand-500/40 hover:text-white"
+                onClick={regenerateTags}
+                className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[11px] font-medium text-fog-300 transition hover:border-brand-500/40 hover:text-white active:scale-95"
               >
                 <RefreshCw className="size-3" aria-hidden />
-                Regenerate tags
+                Regenerate
               </button>
             </div>
             <TagEditor
@@ -692,7 +731,7 @@ export default function UploadWizard() {
                 setTags(t);
               }}
             />
-          </Field>
+          </FieldGroup>
 
           {(probe?.poster || thumbOverride) && (
             <div className="flex items-center gap-3">

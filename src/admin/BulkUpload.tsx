@@ -72,7 +72,14 @@ const STAGE_STYLE: Record<ItemStage, string> = {
 const fmtTime = (d: Date) =>
   d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
-export default function BulkUpload({ onDone }: { onDone?: () => void }) {
+export default function BulkUpload({
+  onDone,
+  initialFiles,
+}: {
+  onDone?: () => void;
+  /** Files handed over when the admin multi-selects on the single-upload screen. */
+  initialFiles?: File[] | null;
+}) {
   const [items, setItems] = useState<BulkItem[]>([]);
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
@@ -98,6 +105,17 @@ export default function BulkUpload({ onDone }: { onDone?: () => void }) {
   }, [recentFetch.data]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // Ingest files handed over from the single-upload screen, once.
+  const handedOff = useRef(false);
+  useEffect(() => {
+    if (handedOff.current || !initialFiles?.length) return;
+    handedOff.current = true;
+    const dt = new DataTransfer();
+    for (const f of initialFiles) dt.items.add(f);
+    void addFiles(dt.files);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFiles]);
 
   const patch = useCallback((key: string, changes: Partial<BulkItem>) => {
     setItems((prev) => prev.map((i) => (i.key === key ? { ...i, ...changes } : i)));
@@ -151,7 +169,7 @@ export default function BulkUpload({ onDone }: { onDone?: () => void }) {
         ]);
         let duplicate: DuplicateMatch | null = null;
         try {
-          duplicate = (await api.checkDuplicate(hash)).duplicate;
+          duplicate = (await api.checkDuplicate(hash, item.title)).duplicate;
         } catch {
           duplicate = null;
         }

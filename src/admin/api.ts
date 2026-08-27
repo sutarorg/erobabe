@@ -208,10 +208,11 @@ export const api = {
     title?: string;
   }) => req<SinglePlan | MultiPlan>("/uploads", { body }),
 
-  checkDuplicate: (hash: string) =>
-    req<{ available: boolean; duplicate: DuplicateMatch | null }>("/videos/check-duplicate", {
-      body: { hash },
-    }),
+  checkDuplicate: (hash: string, title?: string) =>
+    req<{ available: boolean; duplicate: DuplicateMatch | null; reason: "file" | "title" | null }>(
+      "/videos/check-duplicate",
+      { body: { hash, title } }
+    ),
   scheduleVideo: (id: string, at: string | null) =>
     req<{ video: AdminVideo }>(`/videos/${id}/schedule`, { body: { at } }),
   scheduled: () =>
