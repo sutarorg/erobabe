@@ -1,4 +1,4 @@
-import { dbApi, dbConfigMissing, enc, hasColumn } from "./db.mjs";
+import { dbApi, dbConfigMissing, enc, hasColumn, hasSlugColumn } from "./db.mjs";
 import { computeDiscovery, invalidateDiscovery, SECTION_LIMITS } from "./ranking.mjs";
 import { classifyReferrer, deviceFromUA } from "./traffic.mjs";
 import { json, clientIp, sha256hex, ENV } from "./util.mjs";

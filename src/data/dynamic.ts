@@ -93,15 +93,15 @@ function mapRemote(rv: RemoteVideo, index: number): Video {
 
 export async function bootstrapCatalog(): Promise<void> {
   try {
-    const health = await fetch("/api/public/health", { cache: "no-store" });
-    const h: { ok?: boolean } | null = await health.json().catch(() => null);
-    if (!health.ok || !h?.ok) return;
-
+    // Decision to go dynamic is based solely on whether the catalog itself
+    // serves — never gated on the health probe, so a broken health endpoint
+    // can never fall the whole site back to the demo catalog.
     const [vRes, cRes, sRes] = await Promise.all([
       fetch("/api/public/videos?limit=300&sort=new"),
       fetch("/api/public/categories"),
       fetch("/api/public/settings"),
     ]);
+    // Stay in demo mode only when the catalog itself can't be served.
     if (!vRes.ok) return;
 
     const vData = (await vRes.json()) as { videos: RemoteVideo[]; featuredId: string | null };
