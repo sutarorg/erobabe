@@ -51,9 +51,9 @@ function Hero({ videos }: { videos: Video[] }) {
           )}
         />
       ))}
-      <div className="absolute inset-0 bg-ink-950/25" aria-hidden />
-      <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/70 to-ink-950/15" aria-hidden />
-      <div className="absolute inset-0 bg-gradient-to-r from-ink-950/90 via-ink-950/35 to-transparent" aria-hidden />
+      <div className="absolute inset-0 bg-ink-950/10" aria-hidden />
+      <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/55 to-transparent" aria-hidden />
+      <div className="absolute inset-0 bg-gradient-to-r from-ink-950/75 via-ink-950/25 to-transparent" aria-hidden />
 
       <div
         key={video.id}
@@ -100,9 +100,10 @@ function Hero({ videos }: { videos: Video[] }) {
         </div>
       </div>
 
-      {/* Progress dots — also let viewers jump straight to a featured video. */}
+      {/* Progress dots — desktop/tablet only; hidden on mobile to keep the
+          compact hero uncluttered. */}
       {count > 1 && (
-        <div className="absolute bottom-4 right-4 flex items-center gap-1.5 sm:bottom-6 sm:right-6">
+        <div className="absolute bottom-4 right-4 hidden items-center gap-1.5 sm:bottom-6 sm:right-6 sm:flex">
           {videos.map((v, i) => (
             <button
               key={v.id}

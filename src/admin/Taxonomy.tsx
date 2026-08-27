@@ -235,7 +235,18 @@ function CategoryModal({
   };
 
   return (
-    <Modal open={!!category} onClose={onClose} title="Edit category" wide>
+    <Modal
+      open={!!category}
+      onClose={onClose}
+      title="Edit category"
+      wide
+      footer={
+        <>
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn variant="primary" busy={busy} onClick={save}>Save changes</Btn>
+        </>
+      }
+    >
       <div className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Name">
@@ -293,10 +304,6 @@ function CategoryModal({
             </label>
           </div>
         </Field>
-        <div className="sticky bottom-0 -mx-5 -mb-5 flex justify-end gap-2 border-t border-white/8 bg-ink-900/95 px-5 py-4 backdrop-blur md:-mx-6 md:-mb-5 md:px-6">
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn variant="primary" busy={busy} onClick={save}>Save changes</Btn>
-        </div>
       </div>
     </Modal>
   );

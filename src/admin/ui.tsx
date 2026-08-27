@@ -240,8 +240,16 @@ export function Spinner({ label }: { label?: string }) {
 
 /* ── modal + confirm ── */
 export function Modal({
-  open, onClose, title, children, wide,
-}: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
+  open, onClose, title, children, wide, footer,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  wide?: boolean;
+  /** Rendered as a pinned flex row, always flush with the card's bottom edge. */
+  footer?: ReactNode;
+}) {
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -272,6 +280,11 @@ export function Modal({
           </button>
         </div>
         <div className="min-w-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 md:px-6">{children}</div>
+        {footer && (
+          <div className="flex shrink-0 items-center justify-end gap-2 border-t border-white/8 bg-ink-900/95 px-5 py-4 backdrop-blur md:px-6">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
