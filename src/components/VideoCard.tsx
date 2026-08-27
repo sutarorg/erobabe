@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Film, Play } from "lucide-react";
 import type { Video } from "@/data/videos";
 import { categoryName } from "@/data/videos";
+import { trackClick, trackImpression } from "@/data/dynamic";
 import { cn } from "@/lib/format";
 
 /**
@@ -14,6 +15,7 @@ export function VideoCard({ video, priority = false, className }: { video: Video
   const [previewReady, setPreviewReady] = useState(false);
   const [imgError, setImgError] = useState(false);
   const timer = useRef<number | null>(null);
+  const linkRef = useRef<HTMLAnchorElement>(null);
   const hoverable = useRef(
     typeof window !== "undefined" &&
       window.matchMedia("(hover: hover) and (pointer: fine)").matches &&
@@ -33,8 +35,30 @@ export function VideoCard({ video, priority = false, className }: { video: Video
   };
   useEffect(() => stopPreview, []);
 
+  /* ── Impression tracking ──
+     Counted once the card is genuinely visible on screen. The resolver
+     is a plain uuid, falling back to the slug when no backend is set. */
+  useEffect(() => {
+    const el = linkRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            trackImpression(video.uuid ?? video.id);
+            io.disconnect();
+          }
+        }
+      },
+      { threshold: 0.5, rootMargin: "120px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [video.id, video.uuid]);
+
   return (
     <Link
+      ref={linkRef}
       to={`/video/${video.id}`}
       aria-label={`Watch ${video.title}`}
       className={cn("group block outline-none", className)}
@@ -42,6 +66,7 @@ export function VideoCard({ video, priority = false, className }: { video: Video
       onMouseLeave={stopPreview}
       onFocus={startPreview}
       onBlur={stopPreview}
+      onClick={() => trackClick(video.uuid ?? video.id)}
     >
       <figure className="relative aspect-video overflow-hidden rounded-xl bg-ink-800 ring-1 ring-white/8 transition duration-300 group-hover:ring-white/20 group-focus-visible:ring-2 group-focus-visible:ring-brand-500/60">
         {imgError ? (

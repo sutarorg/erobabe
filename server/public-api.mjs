@@ -250,6 +250,44 @@ export async function handlePublic(req, url, path) {
     return json({ ok: true });
   }
 
+  /* ── POST /api/public/impressions — batched impression tracking ──
+     Fired by the grid once visible cards have rendered. */
+  if (first === "impressions" && req.method === "POST") {
+    let body = {};
+    try {
+      body = await req.json();
+    } catch {
+      body = {};
+    }
+    const ids = (Array.isArray(body.ids) ? body.ids : [])
+      .map(String)
+      .filter((id) => UUID_RE.test(id))
+      .slice(0, 200);
+    if (!ids.length) return json({ ok: true, counted: 0 });
+    try {
+      const counted = await dbApi.rpc("track_impressions", { ids });
+      invalidateDiscovery();
+      return json({ ok: true, counted: Number(counted) || ids.length });
+    } catch {
+      /* Requires migration 0006 — ignored until it is applied. */
+      return json({ ok: true, counted: 0 });
+    }
+  }
+
+  /* ── POST /api/public/videos/:idOrSlug/click — CTR numerator ── */
+  if (first === "videos" && seg.length === 3 && seg[2] === "click" && req.method === "POST") {
+    const ref = decodeURIComponent(seg[1]);
+    const row = await findPublished(ref, "id");
+    if (!row) return json({ ok: false }, { status: 404 });
+    try {
+      await dbApi.rpc("track_click", { v: row.id });
+      invalidateDiscovery();
+    } catch {
+      /* Requires migration 0006 — ignored until it is applied. */
+    }
+    return json({ ok: true });
+  }
+
   /* ── POST /api/public/videos/:idOrSlug/like — engagement signal ── */
   if (first === "videos" && seg.length === 3 && seg[2] === "like" && req.method === "POST") {
     const ref = decodeURIComponent(seg[1]);

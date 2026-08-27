@@ -158,7 +158,11 @@ async function overview() {
     count("select=id&status=eq.published"),
     dbApi.select("videos", "select=id&status=in.(draft,ready)&limit=0", { count: true }).then((r) => r.total ?? 0),
     count("select=id&status=in.(uploading,processing)"),
-    dbApi.select("videos", "select=views,source_size&limit=5000"),
+    dbApi.select(
+      "videos",
+      // Impressions/clicks arrive with migration 0006 and are simply absent before it.
+      `select=views,source_size${(await hasColumn("videos", "impressions")) ? ",impressions" : ""}${(await hasColumn("videos", "clicks")) ? ",clicks" : ""}&limit=5000`
+    ),
     dbApi.select("analytics_events", `created_day=gte.${today(13)}&select=created_day&limit=200000`),
     dbApi.select("activity_log", "order=created_at.desc&limit=8"),
     dbApi.select("videos", "status=eq.published&order=views.desc&limit=5&select=id,title,views,thumbnail_url"),
@@ -170,13 +174,28 @@ async function overview() {
 
   let totalViews = 0;
   let bytes = 0;
+  let totalImpressions = 0;
+  let totalClicks = 0;
   for (const v of all.data) {
     totalViews += v.views ?? 0;
     bytes += v.source_size ?? 0;
+    totalImpressions += v.impressions ?? 0;
+    totalClicks += v.clicks ?? 0;
   }
 
   return json({
-    totals: { videos: total, published, drafts, processing, views: totalViews, storageBytes: bytes, objects: all.data.length },
+    totals: {
+      videos: total,
+      published,
+      drafts,
+      processing,
+      views: totalViews,
+      storageBytes: bytes,
+      objects: all.data.length,
+      impressions: totalImpressions,
+      clicks: totalClicks,
+      ctr: totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0,
+    },
     series: [...seriesMap.entries()].map(([day, views]) => ({ day, views })),
     recentActivity: activity.data,
     topVideos: top.data,
@@ -204,6 +223,16 @@ async function analytics(req, url) {
     rangeViews,
     topVideos: top.data,
     rangeTop: [...perVideo.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([id, views]) => ({ id, views })),
+    traffic: {
+      impressions: all.data.reduce((n, v) => n + (v.impressions ?? 0), 0),
+      clicks: all.data.reduce((n, v) => n + (v.clicks ?? 0), 0),
+      ctr:
+        all.data.reduce((n, v) => n + (v.impressions ?? 0), 0) > 0
+          ? (all.data.reduce((n, v) => n + (v.clicks ?? 0), 0) /
+              all.data.reduce((n, v) => n + (v.impressions ?? 0), 0)) *
+            100
+          : 0,
+    },
     storage: {
       bytes: all.data.reduce((n, v) => n + (v.source_size ?? 0), 0),
       objects: all.data.length,
@@ -276,6 +305,9 @@ async function videoAnalytics(req, url, id) {
   const cols = ["created_day", "viewer_hash"];
   const extra = ["watch_seconds", "completion", "source", "referrer_host", "device"];
   for (const c of extra) if (await hasColumn("analytics_events", c)) cols.push(c);
+  // Impressions and clicks live on the video row itself.
+  const hasImpressions = await hasColumn("videos", "impressions");
+  const hasClicks = await hasColumn("videos", "clicks");
 
   const { data: events } = await dbApi
     .select("analytics_events", `video_id=eq.${row.id}&created_day=gte.${since}&select=${cols.join(",")}&limit=200000`)
@@ -351,6 +383,12 @@ async function videoAnalytics(req, url, id) {
       totalWatchSeconds: watchTotal,
       avgCompletion,
       trackedSessions: watchCount,
+      impressions: hasImpressions ? (row.impressions ?? 0) : null,
+      clicks: hasClicks ? (row.clicks ?? 0) : null,
+      ctr:
+        hasImpressions && (row.impressions ?? 0) > 0
+          ? ((row.clicks ?? 0) / (row.impressions ?? 1)) * 100
+          : 0,
     },
     engagement: {
       likes: row.likes ?? 0,

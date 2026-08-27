@@ -58,6 +58,9 @@ export interface AdminVideo {
   tags: string[];
   duration_s: number | null;
   views: number;
+  /** Impressions / clicks — present once migration 0006 has run. */
+  impressions: number | null;
+  clicks: number | null;
   like_ratio: number;
   seo_title: string | null;
   seo_description: string | null;
@@ -110,6 +113,9 @@ export interface Overview {
     views: number;
     storageBytes: number;
     objects: number;
+    impressions: number;
+    clicks: number;
+    ctr: number;
   };
   series: { day: string; views: number }[];
   recentActivity: ActivityItem[];
@@ -174,6 +180,7 @@ export const api = {
       rangeViews: number;
       topVideos: AdminVideo[];
       rangeTop: { id: string; views: number }[];
+      traffic: { impressions: number; clicks: number; ctr: number };
       storage: { bytes: number; objects: number; lifetimeViews: number };
     }>(`/analytics?days=${days}`),
 
@@ -265,6 +272,9 @@ export interface VideoAnalyticsResponse {
     totalWatchSeconds: number;
     avgCompletion: number;
     trackedSessions: number;
+    impressions: number | null;
+    clicks: number | null;
+    ctr: number;
   };
   engagement: { likes: number; likeRatio: number; engagementRate: number; viewsPerDay: number };
   retention: { pct: number; share: number }[];

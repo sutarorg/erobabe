@@ -56,7 +56,8 @@ Both run the Vite dev server **and** the serverless functions locally.
    Then run **`supabase/migrations/0002_video_slugs.sql`** — it adds the unique `slug` column that powers every canonical `/video/{video-slug}` page and the dynamic sitemap.
    Then run **`supabase/migrations/0003_engagement_signals.sql`** — it adds watch-time, completion and likes tracking that feed the discovery ranking engine.
    Then run **`supabase/migrations/0004_category_icons.sql`** — it adds `categories.icon` and seeds the 11 content categories shown on Explore.
-   Finally run **`supabase/migrations/0005_traffic_analytics.sql`** — it records traffic source, referrer host and device per view, powering the Referral Sources / Traffic and per-video Audience analytics. All scripts are safe to re-run.
+   Then run **`supabase/migrations/0005_traffic_analytics.sql`** — it records traffic source, referrer host and device per view, powering the Referral Sources / Traffic and per-video Audience analytics.
+   Finally run **`supabase/migrations/0006_impressions_ctr.sql`** — it adds `impressions` and `clicks` counters with batched tracking RPCs, powering the Impressions and CTR metrics in both analytics pages. All scripts are safe to re-run.
 3. From **Project Settings → API**, copy:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY` (the **service_role** secret — server-only)
@@ -128,6 +129,32 @@ live analytics and enforces hard section limits:
 | Trending | 8 | Recent views, velocity and acceleration — lifetime views barely count |
 | Rising Now | 3 | Acceleration, growth and performance relative to age (popularity actively penalized) |
 | Editor's Pick | 5 | Admin-flagged pool, ranked on quality, engagement and recent performance |
+
+### Automatic video optimization
+
+Every upload is re-encoded in the browser before it reaches R2, targeting the smallest size that
+still looks like the original (`src/admin/compress.ts`):
+
+1. **Codec** — VP9/Opus is preferred where supported (~35% smaller than H.264 at equal quality),
+   falling back to H.264/AAC, then VP8.
+2. **Resolution** — capped at 1080p with aspect ratio preserved.
+3. **Content-aware bitrate** — the source is sampled at seven points to measure spatial edge energy
+   and frame-to-frame motion. Flat, static footage gets a multiplier as low as 0.6×; busy action up
+   to 1.4×. A one-size-fits-all rate wastes most of the bits on simple content.
+4. **Refinement pass** — when the first encode is still large and the video is short enough to
+   justify the wait, a second pass runs at 0.65× the bitrate and the smaller file wins.
+
+The bitrate never exceeds 95% of what the source already carries, audio uses 96 kbps Opus / 112 kbps
+AAC, and the minimum worthwhile saving is 5%. If the browser can't re-encode, the video is over 45
+minutes, or a result would be *larger* than the original, the untouched original is uploaded — the
+engine never makes a file worse.
+
+### Impressions & CTR
+
+Impressions are counted by an `IntersectionObserver` in `VideoCard` when a card genuinely enters the
+viewport, once per video per page load, and are **batched** so a 20-card grid sends one request
+rather than twenty. Clicks fire on card navigation. CTR is `clicks ÷ impressions`, reported on both
+the Analytics and Video Analytics pages. Both counters only apply to published videos.
 
 **Signals**: 1/3/7/14/30-day view windows, unique viewers, watch time, completion rate, likes,
 engagement rate, velocity, acceleration, age-adjusted performance, recency and log-damped lifetime

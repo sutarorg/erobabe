@@ -6,7 +6,7 @@ import {
 import { api, type UploadPlan, type MultiPlan } from "./api";
 import { fmtBytes, fmtDuration, probeVideoFile, uploadMissingParts, uploadToStorage, UploadCancelled } from "./uploader";
 import {
-  analyzeVideo, compressionSupported, compressVideo, planEncode,
+  analyzeComplexity, analyzeVideo, compressionSupported, compressVideoAggressive, planEncode,
   CompressionCancelled, type EncodePlan, type VideoAnalysis,
 } from "./compress";
 import { Btn, Field, Input, PageHeader, Select, TagEditor, Textarea, useFetch } from "./ui";
@@ -69,13 +69,19 @@ export default function UploadWizard() {
     setFile(f);
     setTitle(f.name.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " "));
     setProbing(true);
-    // Analyze the source and pre-compute the optimal encode settings.
-    Promise.all([probeVideoFile(f), analyzeVideo(f)]).then(([p, a]) => {
-      setProbe(p);
-      setAnalysis(a);
-      if (a && compressionSupported()) setEncodePlan(planEncode(a));
-      setProbing(false);
-    });
+    // Analyze the source, measure its complexity, then compute the optimal
+    // encode settings from both.
+    Promise.all([probeVideoFile(f), analyzeVideo(f)])
+      .then(async ([p, a]) => {
+        setProbe(p);
+        setAnalysis(a);
+        if (a && compressionSupported()) {
+          const complexity = await analyzeComplexity(f);
+          setEncodePlan(planEncode(a, complexity ? complexity.overall : null));
+        }
+        setProbing(false);
+      })
+      .catch(() => setProbing(false));
   };
 
   const startUpload = async () => {
@@ -95,11 +101,14 @@ export default function UploadWizard() {
         setPhase({ step: "optimizing" });
         setOptimizePct(0);
         try {
-          payload = await compressVideo(file, encodePlan, {
+          const result = await compressVideoAggressive(file, encodePlan, {
             signal: ac.signal,
             onProgress: (r) => setOptimizePct(Math.round(r * 100)),
           });
+          payload = result.file;
           setOptimized(payload);
+          // Reflect any leaner retry settings back into the summary.
+          if (result.plan !== encodePlan) setEncodePlan(result.plan);
         } catch (e) {
           if (e instanceof CompressionCancelled) {
             setPhase({ step: "select" });

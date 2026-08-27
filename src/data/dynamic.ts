@@ -191,6 +191,54 @@ export function trackProgress(videoId: string, watchSeconds: number, completion:
   }
 }
 
+/* ── Impression tracking ─────────────────────────────────────────
+ * An impression is counted once per video per page load, when the card
+ * actually enters the viewport. Impressions are batched so a 20-card
+ * grid results in one request rather than twenty.
+ * ─────────────────────────────────────────────────────────────── */
+const seenImpressions = new Set<string>();
+let impressionQueue: string[] = [];
+let impressionTimer: number | null = null;
+
+function flushImpressions() {
+  impressionTimer = null;
+  const ids = impressionQueue.splice(0);
+  if (!ids.length) return;
+  try {
+    void fetch("/api/public/impressions", {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+      keepalive: true,
+      headers: { "content-type": "application/json" },
+    }).catch(() => {});
+  } catch {
+    /* no-op */
+  }
+}
+
+export function trackImpression(videoId: string) {
+  if (!dynamic || !videoId) return;
+  if (seenImpressions.has(videoId)) return;
+  seenImpressions.add(videoId);
+  impressionQueue.push(videoId);
+  if (impressionTimer === null) {
+    impressionTimer = window.setTimeout(flushImpressions, 1500);
+  }
+}
+
+/** Click on a video card — the CTR numerator. */
+export function trackClick(videoId: string) {
+  if (!dynamic || !videoId) return;
+  try {
+    void fetch(`/api/public/videos/${videoId}/click`, {
+      method: "POST",
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* no-op */
+  }
+}
+
 /** Like / unlike engagement signal. */
 export function trackLike(videoId: string, liked: boolean) {
   if (!dynamic) return;
