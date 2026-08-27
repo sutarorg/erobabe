@@ -8,7 +8,7 @@ import { cn } from "@/lib/format";
 function RankCard({ video, rank, size = "md" }: { video: Video; rank: number; size?: "lg" | "md" }) {
   return (
     <Link
-      to={`/watch/${video.id}`}
+      to={`/video/${video.id}`}
       className={cn(
         "group relative block overflow-hidden rounded-2xl ring-1 ring-white/10 transition duration-300 hover:ring-white/25 md:rounded-3xl",
         size === "lg" ? "aspect-[16/10] sm:aspect-[21/10]" : "aspect-video"

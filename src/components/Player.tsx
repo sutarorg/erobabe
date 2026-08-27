@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlertTriangle, Captions, Gauge, Loader2, Maximize, Minimize,
-  Pause, PictureInPicture2, Play, Volume2, VolumeX,
+  AlertTriangle, Captions, FastForward, Gauge, Loader2, Maximize, Minimize,
+  Pause, PictureInPicture2, Play, Rewind, Volume2, VolumeX,
 } from "lucide-react";
 import { clamp, cn, formatDuration } from "@/lib/format";
 
@@ -27,6 +27,7 @@ export function Player({
   captionsUrl,
   onEnded,
   onProgress,
+  startMuted = false,
 }: {
   src: string;
   poster?: string;
@@ -35,6 +36,8 @@ export function Player({
   onEnded?: () => void;
   /** Playback heartbeat used for watch-time / completion analytics. */
   onProgress?: (currentTime: number, duration: number) => void;
+  /** Start playback with the sound muted (Playback Preferences). */
+  startMuted?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewRef = useRef<HTMLVideoElement>(null);
@@ -54,7 +57,7 @@ export function Player({
   const [duration, setDuration] = useState(0);
   const [buffered, setBuffered] = useState(0);
   const [volume, setVolume] = useState(0.9);
-  const [muted, setMuted] = useState(false);
+  const [muted, setMuted] = useState(startMuted);
   const [rate, setRate] = useState(1);
   const [rateOpen, setRateOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -64,6 +67,9 @@ export function Player({
   const [visible, setVisible] = useState(true);
   const [scrubbing, setScrubbing] = useState(false);
   const [scrubTime, setScrubTime] = useState(0);
+  /** Transient ±10s indicator shown after a double-tap. */
+  const [skipHint, setSkipHint] = useState<{ dir: -1 | 1; id: number } | null>(null);
+  const skipTimer = useRef<number | null>(null);
   const [preview, setPreview] = useState<{ x: number; t: number; barW: number } | null>(null);
   const [previewReady, setPreviewReady] = useState(false);
   /** Preview card width — kept in JS so edge clamping is pixel-exact. */
@@ -228,22 +234,39 @@ export function Player({
     }
   };
 
-  /* Tap/click = fade the HUD · double-click (mouse) = fullscreen */
-  const onSurfaceClick = () => {
-    if (lastPointerType.current === "touch") {
-      toggleHud();
-      return;
-    }
+  /** Jump ±10s and flash the directional indicator. */
+  const skipBy = useCallback((dir: -1 | 1) => {
+    const v = video();
+    if (!v) return;
+    const target = dir < 0 ? Math.max(0, v.currentTime - 10) : Math.min(v.duration || 0, v.currentTime + 10);
+    v.currentTime = target;
+    setTime(target);
+    setSkipHint({ dir, id: Date.now() });
+    if (skipTimer.current) window.clearTimeout(skipTimer.current);
+    skipTimer.current = window.setTimeout(() => setSkipHint(null), 650);
+  }, []);
+
+  /**
+   * Single tap toggles the HUD. Double-tap on the left/right third seeks
+   * ∓10s; a double-click in the middle (mouse) toggles fullscreen.
+   */
+  const onSurfaceClick = (e: React.MouseEvent<HTMLVideoElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const zone = (e.clientX - rect.left) / rect.width;
+
     if (clickTimer.current) {
       window.clearTimeout(clickTimer.current);
       clickTimer.current = null;
-      toggleFullscreen();
+      if (zone < 0.35) skipBy(-1);
+      else if (zone > 0.65) skipBy(1);
+      else if (lastPointerType.current === "touch") toggleHud();
+      else toggleFullscreen();
       return;
     }
     clickTimer.current = window.setTimeout(() => {
       clickTimer.current = null;
       toggleHud();
-    }, 220);
+    }, 260);
   };
 
   /* ── Seek bar ── */
@@ -371,6 +394,10 @@ export function Player({
         onLoadedMetadata={(e) => {
           setDuration(e.currentTarget.duration || 0);
           e.currentTarget.volume = volume;
+          if (startMuted) {
+            e.currentTarget.muted = true;
+            setMuted(true);
+          }
         }}
         onTimeUpdate={(e) => {
           if (!scrubbing) setTime(e.currentTarget.currentTime);
@@ -393,6 +420,27 @@ export function Player({
       {waiting && !error && (
         <div className="pointer-events-none absolute inset-0 grid place-items-center" aria-hidden>
           <Loader2 className="size-12 animate-spin text-white/80" />
+        </div>
+      )}
+
+      {/* Double-tap ±10s indicator */}
+      {skipHint && (
+        <div
+          key={skipHint.id}
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-y-0 grid w-1/3 place-items-center animate-fade-in",
+            skipHint.dir < 0 ? "left-0" : "right-0"
+          )}
+        >
+          <div className="flex flex-col items-center gap-1 rounded-full bg-black/55 px-5 py-4 backdrop-blur">
+            {skipHint.dir < 0 ? (
+              <Rewind className="size-7 fill-white text-white" />
+            ) : (
+              <FastForward className="size-7 fill-white text-white" />
+            )}
+            <span className="text-xs font-semibold text-white">10s</span>
+          </div>
         </div>
       )}
 

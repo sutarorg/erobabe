@@ -53,9 +53,10 @@ Both run the Vite dev server **and** the serverless functions locally.
 
 1. Create a project at [supabase.com](https://supabase.com) (free tier is enough).
 2. Open **SQL Editor → New query**, paste the contents of **`supabase/migrations/0001_init.sql`**, and run it. This creates tables (`videos`, `categories`, `analytics_events`, `settings`, `activity_log`), indexes, RLS policies, the atomic `track_view` function, and seeds categories.
-   Then run **`supabase/migrations/0002_video_slugs.sql`** — it adds the unique `slug` column that powers every `/watch/{video-slug}` page and the dynamic sitemap.
+   Then run **`supabase/migrations/0002_video_slugs.sql`** — it adds the unique `slug` column that powers every canonical `/video/{video-slug}` page and the dynamic sitemap.
    Then run **`supabase/migrations/0003_engagement_signals.sql`** — it adds watch-time, completion and likes tracking that feed the discovery ranking engine.
-   Finally run **`supabase/migrations/0004_category_icons.sql`** — it adds `categories.icon` and seeds the 11 content categories shown on Explore. All scripts are safe to re-run.
+   Then run **`supabase/migrations/0004_category_icons.sql`** — it adds `categories.icon` and seeds the 11 content categories shown on Explore.
+   Finally run **`supabase/migrations/0005_traffic_analytics.sql`** — it records traffic source, referrer host and device per view, powering the Referral Sources / Traffic and per-video Audience analytics. All scripts are safe to re-run.
 3. From **Project Settings → API**, copy:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY` (the **service_role** secret — server-only)
@@ -103,11 +104,11 @@ Import the repo. `netlify.toml` configures the build (`npm run build` → `dist`
 
 ### Connecting erobabe.com
 1. Buy the domain anywhere, then add it in your host's **Domains** page (Vercel or Netlify both auto-issue TLS).
-2. Update `SITE_URL`, the canonical/OG URLs in `index.html`, `public/robots.txt`, `public/sitemap.xml`, and the origins in `r2-cors.json`.
+2. Set `SITE_URL=https://erobabe.com`, update the canonical/OG defaults in `index.html`, and update the origins in `r2-cors.json`. `/robots.txt` and `/sitemap.xml` are generated dynamically by the serverless API.
 
 ## The upload workflow (real end-to-end)
 
-1. **Upload** — `/admin/upload`: drag-and-drop, validation (type/size ≤ 2 GB), client-side duration + auto poster capture, direct-to-R2 resumable upload with live progress, speed/ETA, cancel & resume-failed-parts. On completion the server finalizes the multipart upload. A unique SEO **slug** is generated immediately, giving the video its own page at `/watch/{video-slug}` (the slug refreshes with the title while the video is a draft, then locks on publish so indexed URLs never break).
+1. **Upload** — `/admin/upload`: drag-and-drop, validation (type/size ≤ 2 GB), client-side duration + auto poster capture, direct-to-R2 resumable upload with live progress, speed/ETA, cancel & resume-failed-parts. On completion the server finalizes the multipart upload. A unique SEO **slug** is generated immediately, giving the video its own page at `/video/{video-slug}` (the slug refreshes with the title while the video is a draft, then locks on publish so indexed URLs never break).
 2. **Process** — with `PROCESSING_MODE=original` the file is marked **ready** immediately (single-file playback). With `callback`, it stays in **processing** until an external worker posts renditions to `POST /api/admin/process/callback` (`x-process-secret` header), which flips it to **ready** and stores `hls_url` (the player then uses HLS via Safari natively and **hls.js** elsewhere — loaded lazily).
 3. **Draft** — metadata (title, description, category, tags, thumbnail override) is saved privately; nothing is public.
 4. **Preview** — the editor (`/admin/videos/:id`) streams the actual stored file before publishing.
@@ -154,7 +155,7 @@ same glyph. The 14 default Explore categories each ship with a unique icon; the 
 options. To add a glyph, import it in the registry and add an entry to `CATEGORY_ICONS` (plus
 `ICON_OPTIONS` to expose it in the picker).
 - **Editor** — full metadata, Editor's Pick flag (the only manual discovery control), SEO fields, thumbnail replace, **video file replace**, live preview, publish/unpublish/delete
-- **Categories & Tags** — CRUD with slugs/gradients/cover uploads, **icon picker (9 options, each representing a category type)**, sort order, usage counts, safe delete protection, tag cleanup
+- **Categories & Tags** — CRUD with slugs/gradients/cover uploads, **icon picker (20 options)**, sort order, usage counts, safe delete protection, tag cleanup
 - **Analytics** — 7/14/30-day series, lifetime totals, storage monitoring, top-performers, full audit log
 - **Settings** — site title, announcement, homepage hero toggle, pinned featured video, age-gate copy, infrastructure status
 

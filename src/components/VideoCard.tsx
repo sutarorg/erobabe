@@ -3,7 +3,6 @@ import { Link } from "react-router-dom";
 import { Film, Flame, Play, Sparkles } from "lucide-react";
 import type { Video } from "@/data/videos";
 import { categoryName } from "@/data/videos";
-import { useUi } from "@/context/ui";
 import { cn } from "@/lib/format";
 
 /**
@@ -11,7 +10,6 @@ import { cn } from "@/lib/format";
  * affordance, optional muted preview (opt-in preference), title & metadata.
  */
 export function VideoCard({ video, priority = false, className }: { video: Video; priority?: boolean; className?: string }) {
-  const { prefs } = useUi();
   const [preview, setPreview] = useState(false);
   const [previewReady, setPreviewReady] = useState(false);
   const [imgError, setImgError] = useState(false);
@@ -22,9 +20,10 @@ export function VideoCard({ video, priority = false, className }: { video: Video
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
 
+  // Hover previews are always on for pointer devices that can handle them.
   const startPreview = () => {
-    if (!prefs.preview || !hoverable.current) return;
-    timer.current = window.setTimeout(() => setPreview(true), 450);
+    if (!hoverable.current || !video.videoUrl) return;
+    timer.current = window.setTimeout(() => setPreview(true), 400);
   };
   const stopPreview = () => {
     if (timer.current) window.clearTimeout(timer.current);
@@ -36,7 +35,7 @@ export function VideoCard({ video, priority = false, className }: { video: Video
 
   return (
     <Link
-      to={`/watch/${video.id}`}
+      to={`/video/${video.id}`}
       aria-label={`Watch ${video.title}`}
       className={cn("group block outline-none", className)}
       onMouseEnter={startPreview}

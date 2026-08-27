@@ -306,6 +306,7 @@ export default function AdminApp() {
             <Route index element={<Lazy name="dashboard" />} />
             <Route path="videos" element={<Lazy name="videos" />} />
             <Route path="videos/:id" element={<Lazy name="edit" />} />
+            <Route path="videos/:id/analytics" element={<Lazy name="videoAnalytics" />} />
             <Route path="upload" element={<Lazy name="upload" />} />
             <Route path="categories" element={<Lazy name="taxonomy" />} />
             <Route path="analytics" element={<Lazy name="analytics" />} />
@@ -327,9 +328,10 @@ const UploadWizard = lazy(() => import("./UploadWizard"));
 const Taxonomy = lazy(() => import("./Taxonomy"));
 const Analytics = lazy(() => import("./Analytics"));
 const Settings = lazy(() => import("./Settings"));
+const VideoAnalytics = lazy(() => import("./VideoAnalytics"));
 
-function Lazy({ name }: { name: "dashboard" | "videos" | "edit" | "upload" | "taxonomy" | "analytics" | "settings" }) {
-  const map = { dashboard: Dashboard, videos: VideosList, edit: VideoEdit, upload: UploadWizard, taxonomy: Taxonomy, analytics: Analytics, settings: Settings };
+function Lazy({ name }: { name: "dashboard" | "videos" | "edit" | "upload" | "taxonomy" | "analytics" | "settings" | "videoAnalytics" }) {
+  const map = { dashboard: Dashboard, videos: VideosList, edit: VideoEdit, upload: UploadWizard, taxonomy: Taxonomy, analytics: Analytics, settings: Settings, videoAnalytics: VideoAnalytics };
   const C = map[name];
   return (
     <Suspense fallback={<div className="flex items-center gap-3 py-20 text-fog-500"><span className="size-5 animate-spin rounded-full border-2 border-fog-600 border-t-brand-400" /><span className="text-sm">Loading…</span></div>}>

@@ -6,8 +6,14 @@ import { useEffect } from "react";
  * Every page calls useSEO(); on unmount the <head> returns to site defaults.
  */
 
-export const siteOrigin = () =>
-  typeof window !== "undefined" ? window.location.origin : "https://erobabe.com";
+export const siteOrigin = () => {
+  if (typeof window === "undefined") return "https://erobabe.com";
+  // Deployed previews also canonicalize to the purchased production domain.
+  // Local development stays local so navigation remains convenient.
+  return /localhost|127\.0\.0\.1/.test(window.location.hostname)
+    ? window.location.origin
+    : "https://erobabe.com";
+};
 
 export const absUrl = (url: string) =>
   /^https?:\/\//i.test(url) ? url : `${siteOrigin()}${url.startsWith("/") ? "" : "/"}${url}`;

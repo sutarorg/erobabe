@@ -84,7 +84,7 @@ function Hero({ videos }: { videos: Video[] }) {
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <Link
-            to={`/watch/${video.id}`}
+            to={`/video/${video.id}`}
             className="group inline-flex h-12 items-center gap-2 rounded-full bg-gradient-to-r from-brand-500 to-violet-600 px-6 text-sm font-semibold text-white shadow-[0_12px_40px_-8px_rgba(244,63,127,0.6)] transition hover:brightness-110 active:scale-95"
           >
             <Play className="size-4.5 fill-white transition-transform group-hover:scale-110" aria-hidden />
@@ -182,7 +182,7 @@ export default function Home() {
               {editorsPicks.slice(0, 2).map((v) => (
                 <Link
                   key={v.id}
-                  to={`/watch/${v.id}`}
+                  to={`/video/${v.id}`}
                   className="group relative block aspect-video overflow-hidden rounded-2xl ring-1 ring-white/8 transition hover:ring-white/20"
                 >
                   <img

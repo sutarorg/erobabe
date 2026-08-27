@@ -1,5 +1,6 @@
 import { dbApi, dbConfigMissing, enc, hasSlugColumn } from "./db.mjs";
 import { computeDiscovery, invalidateDiscovery, SECTION_LIMITS } from "./ranking.mjs";
+import { classifyReferrer, deviceFromUA } from "./traffic.mjs";
 import { json, clientIp, sha256hex, ENV } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -182,12 +183,30 @@ export async function handlePublic(req, url, path) {
     const hash = sha256hex(
       `${clientIp(req.headers)}|${req.headers.get("user-agent") ?? ""}|${row.id}`
     ).slice(0, 32);
+
+    // Traffic attribution: prefer the referrer the page reports, fall back
+    // to the HTTP Referer header.
+    let body = {};
     try {
-      await dbApi.rpc("track_view", { v: row.id, h: hash });
-      // New analytics arrived — the next ranking read recomputes.
+      body = await req.json();
+    } catch {
+      body = {};
+    }
+    const rawRef = typeof body.referrer === "string" ? body.referrer : req.headers.get("referer") ?? "";
+    const { source, host } = classifyReferrer(rawRef, url.hostname);
+    const device = deviceFromUA(req.headers.get("user-agent") ?? "");
+
+    try {
+      await dbApi.rpc("track_view_src", { v: row.id, h: hash, s: source, r: host ?? "", d: device });
       invalidateDiscovery();
     } catch {
-      /* View tracking must never break playback */
+      // Falls back to the pre-0005 function when the migration is not applied.
+      try {
+        await dbApi.rpc("track_view", { v: row.id, h: hash });
+        invalidateDiscovery();
+      } catch {
+        /* View tracking must never break playback */
+      }
     }
     return json({ ok: true });
   }

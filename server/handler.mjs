@@ -1,6 +1,7 @@
 import { handlePublic } from "./public-api.mjs";
 import { handleAdmin } from "./admin-api.mjs";
 import { handleSitemap, handleRobots } from "./sitemap.mjs";
+import { handleOEmbed, handleVideoPage } from "./video-page.mjs";
 import { json, toError } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -22,6 +23,15 @@ export async function handle(request) {
     }
     if (path === "/robots.txt" || path === "/api/robots.txt") {
       return handleRobots(request);
+    }
+    // Vercel dispatches /api/seo/video/:slug; Netlify may preserve the
+    // original /video/:slug path when invoking the rewritten function.
+    const videoPage = path.match(/^(?:(?:\/api)?\/seo)?\/video\/([^/]+)$/);
+    if (videoPage && request.method === "GET") {
+      return await handleVideoPage(request, videoPage[1]);
+    }
+    if ((path === "/api/oembed" || path === "/oembed") && request.method === "GET") {
+      return await handleOEmbed(request);
     }
     if (path.startsWith("/api/public")) return await handlePublic(request, url, path);
     if (path.startsWith("/api/admin")) return await handleAdmin(request, url, path);

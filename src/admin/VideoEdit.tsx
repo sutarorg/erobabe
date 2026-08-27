@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import {
-  ArrowLeft, CheckCircle2, Eye, EyeOff, Film, Globe, ImagePlus, Loader2, RefreshCw, Save, Trash2,
+  ArrowLeft, BarChart3, CheckCircle2, Eye, EyeOff, Film, Globe, ImagePlus, Loader2, RefreshCw, Save, Trash2,
 } from "lucide-react";
 import { api } from "./api";
 import { uploadToStorage, UploadCancelled, fmtBytes, fmtDuration, probeVideoFile } from "./uploader";
@@ -159,10 +159,16 @@ export default function VideoEdit() {
               <ArrowLeft className="size-4" aria-hidden /> Videos
             </Link>
             {video.status === "published" && (
-              <a href={`/watch/${video.slug ?? video.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-white/10 bg-white/4 px-3.5 text-sm font-medium text-fog-200 hover:text-white">
+              <a href={`/video/${video.slug ?? video.id}`} target="_blank" rel="noopener noreferrer" className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-white/10 bg-white/4 px-3.5 text-sm font-medium text-fog-200 hover:text-white">
                 <Eye className="size-4" aria-hidden /> View public page
               </a>
             )}
+            <Link
+              to={`/admin/videos/${video.id}/analytics`}
+              className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-white/10 bg-white/4 px-3.5 text-sm font-medium text-fog-200 hover:text-white"
+            >
+              <BarChart3 className="size-4" aria-hidden /> Analytics
+            </Link>
             <Btn variant="primary" icon={Save} busy={saving} disabled={!dirty} onClick={save}>Save changes</Btn>
           </>
         }
@@ -185,7 +191,7 @@ export default function VideoEdit() {
               }
             >
               <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-ink-850 px-3.5 py-2 text-sm">
-                <span className="shrink-0 text-fog-600">/watch/</span>
+                <span className="shrink-0 text-fog-600">/video/</span>
                 <input
                   value={String(form.slug ?? video.slug ?? "")}
                   onChange={(e) => set("slug", e.target.value)}

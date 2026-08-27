@@ -65,7 +65,7 @@ export function SearchBar({
       setOpen(false);
       setQ("");
       onNavigate?.();
-      navigate(`/watch/${item.id}`);
+      navigate(`/video/${item.id}`);
       return;
     }
     commit(item.label);

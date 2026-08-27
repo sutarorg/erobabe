@@ -82,6 +82,8 @@ function Shell() {
               <Route path="/new" element={<ListPage kind="new" />} />
               <Route path="/categories" element={<Categories />} />
               <Route path="/category/:slug" element={<CategoryPage />} />
+              <Route path="/video/:id" element={<Watch />} />
+              {/* Local-dev compatibility; production hosts 301 this to /video. */}
               <Route path="/watch/:id" element={<Watch />} />
               <Route path="/search" element={<SearchPage />} />
               <Route path="/history" element={<History />} />

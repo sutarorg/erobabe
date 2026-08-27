@@ -49,13 +49,26 @@ const STATIC_PAGES = [
   { path: "/legal/contact", changefreq: "monthly", priority: "0.3" },
 ];
 
-function urlEntry({ loc, lastmod, changefreq = "daily", priority = "0.5" }) {
+function urlEntry({ loc, lastmod, changefreq = "daily", priority = "0.5", video }) {
+  const videoXml = video
+    ? `
+    <video:video>
+      <video:thumbnail_loc>${esc(video.thumbnail)}</video:thumbnail_loc>
+      <video:title>${esc(String(video.title || "EroBabe video").slice(0, 100))}</video:title>
+      <video:description>${esc(String(video.description || "Watch this 18+ video on EroBabe.").replace(/\s+/g, " ").slice(0, 2048))}</video:description>
+      ${video.content ? `<video:content_loc>${esc(video.content)}</video:content_loc>` : ""}
+      ${video.duration ? `<video:duration>${Math.min(Math.max(Math.round(video.duration), 1), 28800)}</video:duration>` : ""}
+      ${video.published ? `<video:publication_date>${esc(video.published)}</video:publication_date>` : ""}
+      <video:family_friendly>no</video:family_friendly>
+      ${video.tags.map((tag) => `<video:tag>${esc(String(tag).slice(0, 32))}</video:tag>`).join("\n      ")}
+    </video:video>`
+    : "";
   return (
     `  <url>\n` +
     `    <loc>${esc(loc)}</loc>\n` +
     (lastmod ? `    <lastmod>${lastmod}</lastmod>\n` : "") +
     `    <changefreq>${changefreq}</changefreq>\n` +
-    `    <priority>${priority}</priority>\n` +
+    `    <priority>${priority}</priority>${videoXml}\n` +
     `  </url>`
   );
 }
@@ -70,7 +83,9 @@ export async function handleSitemap() {
   if (!dbConfigMissing()) {
     try {
       const slugs = await hasSlugColumn();
-      const videoCols = `id,${slugs ? "slug," : ""}published_at,updated_at,title`;
+      const videoCols =
+        `id,${slugs ? "slug," : ""}published_at,updated_at,title,description,` +
+        `thumbnail_url,video_url,hls_url,duration_s,tags`;
       const [cats, vids] = await Promise.all([
         dbApi.select("categories", "order=sort.asc&select=slug,name"),
         dbApi.select(
@@ -111,20 +126,35 @@ export async function handleSitemap() {
     });
   }
 
-  // 3. Every published watch page, addressed by its canonical SEO slug.
+  // 3. Every published video page, addressed by its canonical SEO slug.
   for (const v of published) {
     entries.push({
-      loc: `${base}/watch/${v.slug || v.id}`,
+      loc: `${base}/video/${v.slug || v.id}`,
       lastmod: day(v.updated_at || v.published_at),
       changefreq: "weekly",
       priority: "0.8",
+      // Google video sitemap fields. A thumbnail is required by the
+      // protocol; videos without one still retain the page URL above.
+      ...(v.thumbnail_url
+        ? {
+            video: {
+              thumbnail: v.thumbnail_url,
+              title: v.title,
+              description: v.description,
+              content: v.hls_url || v.video_url,
+              duration: v.duration_s,
+              published: v.published_at,
+              tags: Array.isArray(v.tags) ? v.tags.slice(0, 32) : [],
+            },
+          }
+        : {}),
     });
   }
 
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<!-- EroBabe sitemap - generated dynamically from the published catalog -->\n` +
-    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:video="http://www.google.com/schemas/sitemap-video/1.1">\n` +
     entries.map((e) => (typeof e === "string" ? e : urlEntry(e))).join("\n") +
     `\n</urlset>\n`;
 

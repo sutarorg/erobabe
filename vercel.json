@@ -31,6 +31,11 @@
   ],
   "redirects": [
     {
+      "source": "/watch/:slug",
+      "destination": "/video/:slug",
+      "permanent": true
+    },
+    {
       "source": "/sitemap.xml",
       "destination": "/api/sitemap.xml",
       "permanent": false
@@ -42,6 +47,10 @@
     }
   ],
   "rewrites": [
+    {
+      "source": "/video/:slug",
+      "destination": "/api/index?path=seo/video/:slug"
+    },
     {
       "source": "/api/:path*",
       "destination": "/api/index"

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useUi } from "@/context/ui";
 import {
   BadgeCheck, Bookmark, CalendarDays, ChevronDown, Eye, Flame, Link2,
   Share2, ThumbsUp, VideoOff, type LucideIcon,
@@ -37,7 +38,7 @@ function ActionButton({
 
 function RecoRow({ video }: { video: Video }) {
   return (
-    <Link to={`/watch/${video.id}`} className="group flex gap-3">
+    <Link to={`/video/${video.id}`} className="group flex gap-3">
       <div className="relative aspect-video w-40 shrink-0 overflow-hidden rounded-lg bg-ink-800 ring-1 ring-white/8 sm:w-44">
         <img
           src={video.thumbnail}
@@ -76,6 +77,8 @@ function Panel({ children, className }: { children: ReactNode; className?: strin
 
 export default function Watch() {
   const { id } = useParams();
+  const navigate = useNavigate();
+  const { prefs } = useUi();
   const video = id ? getVideoById(id) : undefined;
 
   const history = useHistory();
@@ -86,11 +89,11 @@ export default function Watch() {
 
   // Meta title mirrors the video title; description falls back to the
   // site-wide default; keywords come from the tags the admin entered.
-  const watchTitle = video ? (video.seoTitle || video.title) : "Video unavailable — EroBabe";
+  const watchTitle = video ? video.title : "Video unavailable — EroBabe";
   const watchDescription = video
-    ? (video.seoDescription || SITE_DESCRIPTION).replace(/\s+/g, " ").slice(0, 300)
+    ? (video.description || video.seoDescription || SITE_DESCRIPTION).replace(/\s+/g, " ").slice(0, 300)
     : undefined;
-  const canonical = video ? `${siteOrigin()}/watch/${video.id}` : undefined;
+  const canonical = video ? `${siteOrigin()}/video/${video.id}` : undefined;
   const uploadDate = video ? new Date(Date.now() - video.daysAgo * 86_400_000).toISOString() : undefined;
 
   useSEO(
@@ -186,6 +189,14 @@ export default function Watch() {
     };
   }, [flushProgress]);
 
+  /* ── Autoplay next (Playback Preferences) ── */
+  const nextRef = useRef<string | null>(null);
+  const playNext = useCallback(() => {
+    if (!prefs.autoplayNext || !nextRef.current) return;
+    flushProgress();
+    navigate(`/video/${nextRef.current}`);
+  }, [prefs.autoplayNext, navigate, flushProgress]);
+
   if (!video) {
     return (
       <div className="mx-auto max-w-3xl px-4 pt-16 md:px-8">
@@ -209,8 +220,9 @@ export default function Watch() {
 
   const liked = likes.has(video.id);
   const isSaved = saved.has(video.id);
-  const url = `${window.location.origin}/watch/${video.id}`;
+  const url = `${window.location.origin}/video/${video.id}`;
   const related = relatedVideos(video, 10);
+  nextRef.current = related[0]?.id ?? null;
 
   const copyLink = async () => {
     try {
@@ -227,11 +239,14 @@ export default function Watch() {
         {/* ── Main column ── */}
         <div className="min-w-0">
           <Player
+            key={video.id}
             src={video.videoUrl}
             poster={video.thumbnail}
             title={video.title}
             captionsUrl={CAPTIONS_URL}
             onProgress={handleProgress}
+            startMuted={prefs.muteOnStart}
+            onEnded={playNext}
           />
 
           <h1 className="mt-4 text-lg font-semibold leading-snug tracking-tight text-white md:text-2xl">

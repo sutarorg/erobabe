@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Film, SquarePen, Trash2, UploadCloud, Globe, EyeOff } from "lucide-react";
+import { BarChart3, Film, SquarePen, Trash2, UploadCloud, Globe, EyeOff } from "lucide-react";
 import { api, type AdminVideo, type BulkAction } from "./api";
 import {
   Btn, BtnLink, Confirm, EmptyBlock, Field, PageHeader, Pagination, SearchInput,
@@ -215,6 +215,9 @@ export default function VideosList() {
                         <Btn size="sm" variant="ghost" onClick={() => quickStatus(v)} busy={busy} aria-label={v.status === "published" ? "Unpublish" : "Publish"}>
                           {v.status === "published" ? <EyeOff className="size-4" aria-hidden /> : <Globe className="size-4" aria-hidden />}
                         </Btn>
+                        <BtnLink to={`/admin/videos/${v.id}/analytics`} size="sm" variant="ghost" aria-label={`Analytics for ${v.title}`}>
+                          <BarChart3 className="size-4" aria-hidden />
+                        </BtnLink>
                         <BtnLink to={`/admin/videos/${v.id}`} size="sm" variant="ghost" aria-label={`Edit ${v.title}`}>
                           <SquarePen className="size-4" aria-hidden />
                         </BtnLink>

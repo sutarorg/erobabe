@@ -151,7 +151,15 @@ export async function bootstrapCatalog(): Promise<void> {
 export function trackView(videoId: string) {
   if (!dynamic) return;
   try {
-    void fetch(`/api/public/videos/${videoId}/view`, { method: "POST", keepalive: true }).catch(() => {});
+    // The referrer of the session's landing page drives traffic attribution.
+    const referrer = sessionStorage.getItem("eb:ref") ?? document.referrer ?? "";
+    if (!sessionStorage.getItem("eb:ref")) sessionStorage.setItem("eb:ref", referrer);
+    void fetch(`/api/public/videos/${videoId}/view`, {
+      method: "POST",
+      body: JSON.stringify({ referrer }),
+      keepalive: true,
+      headers: { "content-type": "application/json" },
+    }).catch(() => {});
   } catch {
     /* no-op */
   }

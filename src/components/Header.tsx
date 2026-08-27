@@ -42,14 +42,31 @@ function SettingsMenu() {
           <p className="border-b border-white/5 px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-fog-600">
             Playback preferences
           </p>
-          <div className="flex items-start justify-between gap-4 px-4 py-4">
+          <div className="flex items-start justify-between gap-4 border-b border-white/5 px-4 py-4">
             <div>
-              <p className="text-sm font-medium text-white">Muted hover previews</p>
+              <p className="text-sm font-medium text-white">Autoplay next video</p>
               <p className="mt-0.5 text-xs leading-relaxed text-fog-500">
-                Play silent previews when hovering thumbnails on desktop.
+                Continue to the next recommended video automatically.
               </p>
             </div>
-            <Toggle checked={prefs.preview} onChange={(v) => setPref("preview", v)} label="Toggle muted hover previews" />
+            <Toggle
+              checked={prefs.autoplayNext}
+              onChange={(v) => setPref("autoplayNext", v)}
+              label="Toggle autoplay next video"
+            />
+          </div>
+          <div className="flex items-start justify-between gap-4 px-4 py-4">
+            <div>
+              <p className="text-sm font-medium text-white">Mute on start</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-fog-500">
+                Begin every video with the sound muted.
+              </p>
+            </div>
+            <Toggle
+              checked={prefs.muteOnStart}
+              onChange={(v) => setPref("muteOnStart", v)}
+              label="Toggle mute on start"
+            />
           </div>
         </div>
       )}

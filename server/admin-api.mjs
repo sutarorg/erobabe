@@ -212,6 +212,162 @@ async function analytics(req, url) {
   });
 }
 
+/* ── Traffic analytics (referral sources, search / social / direct) ── */
+
+async function traffic(req, url) {
+  const days = [7, 14, 30, 90].includes(Number(url.searchParams.get("days")))
+    ? Number(url.searchParams.get("days"))
+    : 30;
+  const since = today(days - 1);
+
+  let rows = [];
+  try {
+    const res = await dbApi.select(
+      "analytics_events",
+      `created_day=gte.${since}&select=created_day,source,referrer_host,device&limit=400000`
+    );
+    rows = res.data;
+  } catch {
+    // Migration 0005 not applied yet — report an empty, well-formed payload.
+    return json({ available: false, days, total: 0, sources: [], referrers: [], devices: [], series: [] });
+  }
+
+  const sourceCounts = new Map();
+  const refCounts = new Map();
+  const deviceCounts = new Map();
+  const seriesMap = new Map();
+  for (let i = days - 1; i >= 0; i--) seriesMap.set(today(i), { day: today(i), direct: 0, search: 0, social: 0, referral: 0, internal: 0 });
+
+  for (const r of rows) {
+    const src = r.source || "direct";
+    sourceCounts.set(src, (sourceCounts.get(src) ?? 0) + 1);
+    if (r.referrer_host) refCounts.set(r.referrer_host, (refCounts.get(r.referrer_host) ?? 0) + 1);
+    deviceCounts.set(r.device || "unknown", (deviceCounts.get(r.device || "unknown") ?? 0) + 1);
+    const bucket = seriesMap.get(r.created_day);
+    if (bucket && bucket[src] !== undefined) bucket[src] += 1;
+  }
+
+  const total = rows.length;
+  const toList = (map) =>
+    [...map.entries()]
+      .map(([name, count]) => ({ name, count, share: total ? count / total : 0 }))
+      .sort((a, b) => b.count - a.count);
+
+  return json({
+    available: true,
+    days,
+    total,
+    sources: toList(sourceCounts),
+    referrers: toList(refCounts).slice(0, 12),
+    devices: toList(deviceCounts),
+    series: [...seriesMap.values()],
+  });
+}
+
+/* ── Per-video analytics: performance, retention, audience, discovery ── */
+
+async function videoAnalytics(req, url, id) {
+  const row = await getVideoOr404(id);
+  const days = [7, 14, 30, 90].includes(Number(url.searchParams.get("days")))
+    ? Number(url.searchParams.get("days"))
+    : 30;
+  const since = today(days - 1);
+
+  const cols = ["created_day", "viewer_hash"];
+  const extra = ["watch_seconds", "completion", "source", "referrer_host", "device"];
+  for (const c of extra) if (await hasColumn("analytics_events", c)) cols.push(c);
+
+  const { data: events } = await dbApi
+    .select("analytics_events", `video_id=eq.${row.id}&created_day=gte.${since}&select=${cols.join(",")}&limit=200000`)
+    .catch(() => ({ data: [] }));
+
+  const seriesMap = new Map();
+  for (let i = days - 1; i >= 0; i--) seriesMap.set(today(i), 0);
+  const viewers = new Set();
+  const sourceCounts = new Map();
+  const refCounts = new Map();
+  const deviceCounts = new Map();
+  let watchTotal = 0;
+  let watchCount = 0;
+  let completionSum = 0;
+  let completionCount = 0;
+  const completions = [];
+
+  for (const e of events) {
+    seriesMap.set(e.created_day, (seriesMap.get(e.created_day) ?? 0) + 1);
+    viewers.add(e.viewer_hash);
+    sourceCounts.set(e.source || "direct", (sourceCounts.get(e.source || "direct") ?? 0) + 1);
+    if (e.referrer_host) refCounts.set(e.referrer_host, (refCounts.get(e.referrer_host) ?? 0) + 1);
+    deviceCounts.set(e.device || "unknown", (deviceCounts.get(e.device || "unknown") ?? 0) + 1);
+    if (e.watch_seconds > 0) {
+      watchTotal += e.watch_seconds;
+      watchCount += 1;
+    }
+    if (e.completion > 0) {
+      completionSum += e.completion;
+      completionCount += 1;
+      completions.push(e.completion);
+    }
+  }
+
+  // Retention curve: share of tracked sessions still watching at each decile.
+  const retention = Array.from({ length: 11 }, (_, i) => {
+    const pct = i * 10;
+    const reached = completions.filter((c) => c >= pct).length;
+    return { pct, share: completions.length ? reached / completions.length : 0 };
+  });
+
+  const rangeViews = events.length;
+  const avgWatch = watchCount ? watchTotal / watchCount : 0;
+  const avgCompletion = completionCount ? completionSum / completionCount : 0;
+  const duration = row.duration_s ?? 0;
+  const toList = (map, total) =>
+    [...map.entries()]
+      .map(([name, count]) => ({ name, count, share: total ? count / total : 0 }))
+      .sort((a, b) => b.count - a.count);
+
+  return json({
+    video: {
+      id: row.id,
+      slug: row.slug ?? null,
+      title: row.title,
+      status: row.status,
+      thumbnail_url: row.thumbnail_url,
+      duration_s: duration,
+      views: row.views ?? 0,
+      likes: row.likes ?? 0,
+      like_ratio: row.like_ratio ?? 0,
+      published_at: row.published_at,
+      created_at: row.created_at,
+      tags: row.tags ?? [],
+    },
+    days,
+    performance: {
+      rangeViews,
+      lifetimeViews: row.views ?? 0,
+      uniqueViewers: viewers.size,
+      repeatRate: rangeViews ? Math.max(0, 1 - viewers.size / rangeViews) : 0,
+      avgWatchSeconds: avgWatch,
+      totalWatchSeconds: watchTotal,
+      avgCompletion,
+      trackedSessions: watchCount,
+    },
+    engagement: {
+      likes: row.likes ?? 0,
+      likeRatio: row.like_ratio ?? 0,
+      engagementRate: (row.views ?? 0) > 0 ? (row.likes ?? 0) / (row.views ?? 1) : 0,
+      viewsPerDay: rangeViews / days,
+    },
+    retention,
+    series: [...seriesMap.entries()].map(([day, views]) => ({ day, views })),
+    discovery: {
+      sources: toList(sourceCounts, rangeViews),
+      referrers: toList(refCounts, rangeViews).slice(0, 8),
+    },
+    audience: { devices: toList(deviceCounts, rangeViews) },
+  });
+}
+
 /* ── Videos ── */
 
 async function listVideos(req, url) {
@@ -713,7 +869,8 @@ export async function handleAdmin(req, url, path) {
   if (first === "auth" && second === "logout" && m === "POST") return logout(req);
   if (first === "auth" && second === "me" && m === "GET") return me(req);
   if (first === "overview" && m === "GET") return overview();
-  if (first === "analytics" && m === "GET") return analytics(req, url);
+  if (first === "analytics" && !second && m === "GET") return analytics(req, url);
+  if (first === "analytics" && second === "traffic" && m === "GET") return traffic(req, url);
 
   if (first === "videos" && !second && m === "GET") return listVideos(req, url);
   if (first === "videos" && second === "bulk" && m === "POST") return bulk(req, await readJson(req));
@@ -724,6 +881,7 @@ export async function handleAdmin(req, url, path) {
       if (m === "DELETE") return deleteVideo(req, second);
     }
     if ((third === "publish" || third === "unpublish") && m === "POST") return setStatus(req, second, third);
+    if (third === "analytics" && m === "GET") return videoAnalytics(req, url, second);
   }
 
   if (first === "uploads" && !second && m === "POST") return createUpload(req);

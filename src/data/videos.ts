@@ -18,7 +18,7 @@ export type CategorySlug =
   | "ebony" | "creampie" | "asian" | "massage" | "blonde";
 
 export interface Video {
-  /** Routing key — the SEO slug for CMS videos (`/watch/{slug}`). */
+  /** Routing key — the SEO slug for CMS videos (`/video/{slug}`). */
   id: string;
   /** Database uuid when the video comes from the CMS (used for view tracking). */
   uuid?: string;

@@ -74,12 +74,29 @@ function MoreSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
           ))}
         </div>
 
-        <div className="mx-5 mt-4 flex items-center justify-between rounded-2xl border border-white/6 bg-ink-800/70 px-4 py-3.5">
-          <div>
-            <p className="text-sm font-medium text-white">Muted hover previews</p>
-            <p className="text-xs text-fog-500">On capable devices only</p>
+        <div className="mx-5 mt-4 space-y-2">
+          <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-ink-800/70 px-4 py-3.5">
+            <div>
+              <p className="text-sm font-medium text-white">Autoplay next video</p>
+              <p className="text-xs text-fog-500">Continue playing automatically</p>
+            </div>
+            <Toggle
+              checked={prefs.autoplayNext}
+              onChange={(v) => setPref("autoplayNext", v)}
+              label="Toggle autoplay next video"
+            />
           </div>
-          <Toggle checked={prefs.preview} onChange={(v) => setPref("preview", v)} label="Toggle muted hover previews" />
+          <div className="flex items-center justify-between rounded-2xl border border-white/6 bg-ink-800/70 px-4 py-3.5">
+            <div>
+              <p className="text-sm font-medium text-white">Mute on start</p>
+              <p className="text-xs text-fog-500">Begin videos with sound off</p>
+            </div>
+            <Toggle
+              checked={prefs.muteOnStart}
+              onChange={(v) => setPref("muteOnStart", v)}
+              label="Toggle mute on start"
+            />
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-x-5 gap-y-2 px-6 pt-4">

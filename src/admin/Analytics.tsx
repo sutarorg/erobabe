@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { BarChart3, Eye, Film, HardDrive, Users, Clock, Trophy } from "lucide-react";
+import {
+  BarChart3, Eye, Film, Globe, HardDrive, MonitorSmartphone, Repeat,
+  Search, Share2, Users, Clock, Trophy,
+} from "lucide-react";
+import { ShareBars } from "./VideoAnalytics";
 import { Link } from "react-router-dom";
 import { api } from "./api";
 import { EmptyBlock, PageHeader, Select, Spinner, StatCard, Tabs, useFetch, fmtViews, fmtDur, fmtDateTime } from "./ui";
@@ -130,6 +134,63 @@ function ActivityTab() {
   );
 }
 
+function TrafficTab({ days }: { days: number }) {
+  const { data, loading, error } = useFetch(() => api.traffic(days), [days]);
+  if (loading) return <Spinner label="Loading traffic…" />;
+  if (error || !data) return <EmptyBlock title="Couldn't load traffic" body={error ?? undefined} />;
+
+  if (!data.available) {
+    return (
+      <EmptyBlock
+        icon={Globe}
+        title="Traffic analytics not enabled yet"
+        body="Run supabase/migrations/0005_traffic_analytics.sql to start recording referral sources, search / social / direct traffic and device data."
+      />
+    );
+  }
+
+  const get = (name: string) => data.sources.find((s) => s.name === name)?.count ?? 0;
+  const stacked = data.series.map((d) => ({
+    day: d.day,
+    views: d.direct + d.search + d.social + d.referral + d.internal,
+  }));
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatCard icon={Globe} label="Direct" value={fmtViews(get("direct"))} sub={`${Math.round(((get("direct")) / (data.total || 1)) * 100)}% of views`} accent />
+        <StatCard icon={Search} label="Search" value={fmtViews(get("search"))} sub={`${Math.round(((get("search")) / (data.total || 1)) * 100)}% of views`} />
+        <StatCard icon={Share2} label="Social" value={fmtViews(get("social"))} sub={`${Math.round(((get("social")) / (data.total || 1)) * 100)}% of views`} />
+        <StatCard icon={Repeat} label="Referral" value={fmtViews(get("referral"))} sub={`${Math.round(((get("referral")) / (data.total || 1)) * 100)}% of views`} />
+      </div>
+
+      <ViewsChart data={stacked} title="Attributed views" subtitle={`${days} days`} height={230} />
+
+      <div className="grid min-w-0 gap-6 lg:grid-cols-2">
+        <section className="min-w-0 rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+          <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
+            <Search className="size-4 text-brand-400" aria-hidden /> Traffic channels
+          </h2>
+          <ShareBars items={data.sources} />
+        </section>
+        <section className="min-w-0 rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+          <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
+            <Repeat className="size-4 text-brand-400" aria-hidden /> Referral sources
+          </h2>
+          <ShareBars items={data.referrers} empty="No external referrers recorded yet." />
+        </section>
+      </div>
+
+      <section className="min-w-0 rounded-2xl border border-white/6 bg-ink-900/60 p-5">
+        <h2 className="mb-4 flex items-center gap-2 text-sm font-semibold text-white">
+          <MonitorSmartphone className="size-4 text-brand-400" aria-hidden /> Devices
+        </h2>
+        <ShareBars items={data.devices} />
+      </section>
+    </div>
+  );
+}
+
 export default function Analytics() {
   const [tab, setTab] = useState("overview");
   const [days, setDays] = useState(14);
@@ -139,7 +200,7 @@ export default function Analytics() {
         title="Analytics"
         sub="Real view tracking from the public site."
         actions={
-          tab === "overview" ? (
+          tab !== "activity" ? (
             <Select value={days} onChange={(e) => setDays(Number(e.target.value))} aria-label="Date range" className="w-36">
               <option value={7}>Last 7 days</option>
               <option value={14}>Last 14 days</option>
@@ -148,8 +209,18 @@ export default function Analytics() {
           ) : undefined
         }
       />
-      <Tabs tabs={[{ key: "overview", label: "Overview" }, { key: "activity", label: "Activity log" }]} active={tab} onChange={setTab} />
-      {tab === "overview" ? <OverviewTab days={days} /> : <ActivityTab />}
+      <Tabs
+        tabs={[
+          { key: "overview", label: "Overview" },
+          { key: "traffic", label: "Traffic & referrals" },
+          { key: "activity", label: "Activity log" },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
+      {tab === "overview" && <OverviewTab days={days} />}
+      {tab === "traffic" && <TrafficTab days={days} />}
+      {tab === "activity" && <ActivityTab />}
     </div>
   );
 }

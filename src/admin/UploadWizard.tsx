@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CloudUpload, FileVideo, ImagePlus, Loader2, XCircle,
+  AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CloudUpload, FileVideo, ImagePlus, Loader2, Wand2, XCircle,
 } from "lucide-react";
 import { api, type UploadPlan, type MultiPlan } from "./api";
 import { fmtBytes, fmtDuration, probeVideoFile, uploadMissingParts, uploadToStorage, UploadCancelled } from "./uploader";
+import {
+  analyzeVideo, compressionSupported, compressVideo, planEncode,
+  CompressionCancelled, type EncodePlan, type VideoAnalysis,
+} from "./compress";
 import { Btn, Field, Input, PageHeader, Select, TagEditor, Textarea, useFetch } from "./ui";
 import { toast } from "@/components/Feedback";
 import { cn } from "@/lib/format";
@@ -13,6 +17,7 @@ const MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 type Phase =
   | { step: "select" }
+  | { step: "optimizing" }
   | { step: "uploading" }
   | { step: "finishing" }
   | { step: "details" };
@@ -25,6 +30,11 @@ export default function UploadWizard() {
   const [probing, setProbing] = useState(false);
   const [drag, setDrag] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [analysis, setAnalysis] = useState<VideoAnalysis | null>(null);
+  const [encodePlan, setEncodePlan] = useState<EncodePlan | null>(null);
+  const [optimizePct, setOptimizePct] = useState(0);
+  const [optimized, setOptimized] = useState<File | null>(null);
 
   const [plan, setPlan] = useState<UploadPlan | null>(null);
   const [loaded, setLoaded] = useState(0);
@@ -49,14 +59,21 @@ export default function UploadWizard() {
     setError(null);
     setProbe(null);
     setThumbOverride(null);
+    setAnalysis(null);
+    setEncodePlan(null);
+    setOptimized(null);
+    setOptimizePct(0);
     if (!f) return setFile(null);
     if (!f.type.startsWith("video/")) return setError("Only video files are allowed (mp4, mov, webm…)");
     if (f.size > MAX_BYTES) return setError(`File exceeds the 2 GB limit (${fmtBytes(f.size)})`);
     setFile(f);
     setTitle(f.name.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " "));
     setProbing(true);
-    probeVideoFile(f).then((p) => {
+    // Analyze the source and pre-compute the optimal encode settings.
+    Promise.all([probeVideoFile(f), analyzeVideo(f)]).then(([p, a]) => {
       setProbe(p);
+      setAnalysis(a);
+      if (a && compressionSupported()) setEncodePlan(planEncode(a));
       setProbing(false);
     });
   };
@@ -67,22 +84,44 @@ export default function UploadWizard() {
     setLoaded(0);
     setFailedParts([]);
     setEtags([]);
-    setPhase({ step: "uploading" });
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
-    startAtRef.current = Date.now();
 
     try {
+      // ── Step A: automatic optimization ──
+      let payload = optimized ?? file;
+      if (!optimized && encodePlan?.compress) {
+        setPhase({ step: "optimizing" });
+        setOptimizePct(0);
+        try {
+          payload = await compressVideo(file, encodePlan, {
+            signal: ac.signal,
+            onProgress: (r) => setOptimizePct(Math.round(r * 100)),
+          });
+          setOptimized(payload);
+        } catch (e) {
+          if (e instanceof CompressionCancelled) {
+            setPhase({ step: "select" });
+            return;
+          }
+          // Optimization is best-effort — fall back to the original file.
+          payload = file;
+        }
+      }
+
+      // ── Step B: direct-to-R2 upload ──
+      setPhase({ step: "uploading" });
+      startAtRef.current = Date.now();
       const p = await api.createUpload({
-        fileName: file.name,
-        size: file.size,
-        contentType: file.type || "video/mp4",
+        fileName: payload.name,
+        size: payload.size,
+        contentType: payload.type || "video/mp4",
         durationS: probe?.durationS ?? null,
       });
       setPlan(p);
 
-      const doneEtags = await uploadToStorage(file, p, {
+      const doneEtags = await uploadToStorage(payload, p, {
         signal: ac.signal,
         onProgress: (l) => setLoaded(l),
       });
@@ -195,7 +234,7 @@ export default function UploadWizard() {
 
       {/* Stepper */}
       <ol className="mb-8 flex items-center gap-2 text-xs font-semibold">
-        {["1 · File", "2 · Upload", "3 · Details"].map((label, i) => {
+        {["1 · File", "2 · Optimize & upload", "3 · Details"].map((label, i) => {
           const current = phase.step === "select" ? 0 : phase.step === "details" ? 2 : 1;
           return (
             <li key={label} className="flex items-center gap-2">
@@ -264,7 +303,8 @@ export default function UploadWizard() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-white">{file.name}</p>
                   <p className="mt-1 text-xs text-fog-500">
-                    {fmtBytes(file.size)} · {probing ? "probing…" : fmtDuration(probe?.durationS)} · {file.type || "video"}
+                    {fmtBytes(file.size)} · {probing ? "probing…" : fmtDuration(probe?.durationS)}
+                    {analysis ? ` · ${analysis.width}×${analysis.height}` : ""}
                   </p>
                   {probe?.poster && <p className="mt-1 text-[11px] text-emerald-400/80">Poster frame captured automatically</p>}
                 </div>
@@ -272,13 +312,80 @@ export default function UploadWizard() {
                   <XCircle className="size-5" aria-hidden />
                 </button>
               </div>
+              {/* Automatic optimization summary */}
+              {!probing && (
+                <div className="mt-4 rounded-xl border border-white/6 bg-ink-850 p-3.5">
+                  <div className="flex items-start gap-2.5">
+                    <Wand2 className="mt-0.5 size-4 shrink-0 text-brand-400" aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-white">
+                        {encodePlan?.compress ? "Automatic optimization" : "No optimization needed"}
+                      </p>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-fog-500">
+                        {encodePlan?.reason ??
+                          (compressionSupported()
+                            ? "Analyzing…"
+                            : "This browser can't re-encode video — the original will be uploaded.")}
+                      </p>
+                      {encodePlan?.compress && (
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fog-400">
+                          <span>
+                            {analysis?.height}p → <span className="text-brand-300">{encodePlan.targetHeight}p</span>
+                          </span>
+                          <span>{Math.round(encodePlan.videoBitrate / 1000)} kbps</span>
+                          <span className="uppercase">{encodePlan.container}</span>
+                          <span>
+                            ≈ {fmtBytes(encodePlan.estimatedSize)}{" "}
+                            <span className="text-emerald-400">
+                              (−{Math.max(0, Math.round((1 - encodePlan.estimatedSize / file.size) * 100))}%)
+                            </span>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="mt-4 flex justify-end gap-2">
                 <Btn variant="ghost" onClick={() => pick(null)}>Choose different file</Btn>
-                <Btn variant="primary" icon={ArrowRight} onClick={startUpload} disabled={probing}>Start upload</Btn>
+                <Btn variant="primary" icon={ArrowRight} onClick={startUpload} disabled={probing}>
+                  {encodePlan?.compress ? "Optimize & upload" : "Start upload"}
+                </Btn>
               </div>
             </div>
           )}
         </>
+      )}
+
+      {/* ── Step 2a: optimizing ── */}
+      {phase.step === "optimizing" && (
+        <div className="rounded-3xl border border-white/8 bg-ink-900/60 p-6 md:p-8">
+          <div className="flex items-center justify-between">
+            <p className="flex items-center gap-2 text-sm font-medium text-white">
+              <Wand2 className="size-4 text-brand-400" aria-hidden />
+              Optimizing video…
+            </p>
+            <span className="text-xs font-semibold tabular-nums text-brand-300">{optimizePct}%</span>
+          </div>
+          <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white/8" role="progressbar" aria-valuenow={optimizePct} aria-valuemin={0} aria-valuemax={100}>
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-brand-500 to-violet-500 transition-[width] duration-300"
+              style={{ width: `${optimizePct}%` }}
+            />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-fog-500">
+            <span>{encodePlan?.targetHeight}p · {Math.round((encodePlan?.videoBitrate ?? 0) / 1000)} kbps</span>
+            <span>Target ≈ {fmtBytes(encodePlan?.estimatedSize ?? 0)}</span>
+          </div>
+          <div className="mt-6 flex justify-end">
+            <Btn variant="ghost" onClick={cancelUpload}>Cancel</Btn>
+          </div>
+          <p className="mt-5 rounded-xl border border-white/6 bg-ink-850 p-3 text-[11px] leading-relaxed text-fog-600">
+            The video is re-encoded locally in your browser before upload, so only the optimized file is
+            transferred to storage. Keep this tab open until it completes.
+          </p>
+        </div>
       )}
 
       {/* ── Step 2: uploading ── */}

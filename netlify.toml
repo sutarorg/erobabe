@@ -26,6 +26,19 @@
   status = 200
   force = true
 
+# Canonical server-rendered video pages. Legacy watch links redirect here.
+[[redirects]]
+  from = "/watch/:slug"
+  to = "/video/:slug"
+  status = 301
+  force = true
+
+[[redirects]]
+  from = "/video/:slug"
+  to = "/.netlify/functions/api/seo/video/:slug"
+  status = 200
+  force = true
+
 # SPA fallback so /watch/:id, /admin, /category/:slug never 404
 [[redirects]]
   from = "/*"

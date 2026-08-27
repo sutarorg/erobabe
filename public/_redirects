@@ -7,5 +7,9 @@
 /sitemap.xml      /.netlify/functions/api/sitemap.xml   200
 /robots.txt       /.netlify/functions/api/robots.txt    200
 
+# Canonical rich-preview video pages
+/watch/:slug      /video/:slug                          301
+/video/:slug      /.netlify/functions/api/seo/video/:slug   200
+
 # SPA fallback — every other deep link serves the app shell
 /*                /index.html                     200

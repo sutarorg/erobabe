@@ -93,7 +93,7 @@ export default function History() {
         <ol className="space-y-1 animate-fade-up">
           {entries.map(({ id, at, video }) => (
             <li key={`${id}-${at}`} className="group flex items-center gap-3 rounded-2xl p-2 transition hover:bg-white/4">
-              <Link to={`/watch/${video.id}`} className="relative aspect-video w-28 shrink-0 overflow-hidden rounded-lg bg-ink-800 ring-1 ring-white/8 sm:w-40">
+              <Link to={`/video/${video.id}`} className="relative aspect-video w-28 shrink-0 overflow-hidden rounded-lg bg-ink-800 ring-1 ring-white/8 sm:w-40">
                 <img
                   src={video.thumbnail}
                   alt={`${video.title} thumbnail`}
@@ -106,7 +106,7 @@ export default function History() {
                 </span>
               </Link>
               <div className="min-w-0 flex-1 py-1">
-                <Link to={`/watch/${video.id}`} className="line-clamp-2 text-sm font-medium leading-snug text-fog-100 transition hover:text-brand-300">
+                <Link to={`/video/${video.id}`} className="line-clamp-2 text-sm font-medium leading-snug text-fog-100 transition hover:text-brand-300">
                   {video.title}
                 </Link>
                 <p className="mt-1 truncate text-xs text-fog-500">

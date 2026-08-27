@@ -47,7 +47,7 @@ export interface Rendition {
 
 export interface AdminVideo {
   id: string;
-  /** SEO slug powering the public /watch/{slug} page. */
+  /** SEO slug powering the public /video/{slug} page. */
   slug: string | null;
   title: string;
   description: string | null;
@@ -218,4 +218,57 @@ export const api = {
     req<{ settings: SiteSettings }>("/settings", { method: "PATCH", body: patch }),
 
   activity: (limit = 50) => req<{ activity: ActivityItem[] }>(`/activity?limit=${limit}`),
+
+  traffic: (days: number) => req<TrafficResponse>(`/analytics/traffic?days=${days}`),
+  videoAnalytics: (id: string, days: number) =>
+    req<VideoAnalyticsResponse>(`/videos/${id}/analytics?days=${days}`),
 };
+
+export interface Share {
+  name: string;
+  count: number;
+  share: number;
+}
+
+export interface TrafficResponse {
+  available: boolean;
+  days: number;
+  total: number;
+  sources: Share[];
+  referrers: Share[];
+  devices: Share[];
+  series: { day: string; direct: number; search: number; social: number; referral: number; internal: number }[];
+}
+
+export interface VideoAnalyticsResponse {
+  video: {
+    id: string;
+    slug: string | null;
+    title: string;
+    status: VideoStatus;
+    thumbnail_url: string | null;
+    duration_s: number;
+    views: number;
+    likes: number;
+    like_ratio: number;
+    published_at: string | null;
+    created_at: string;
+    tags: string[];
+  };
+  days: number;
+  performance: {
+    rangeViews: number;
+    lifetimeViews: number;
+    uniqueViewers: number;
+    repeatRate: number;
+    avgWatchSeconds: number;
+    totalWatchSeconds: number;
+    avgCompletion: number;
+    trackedSessions: number;
+  };
+  engagement: { likes: number; likeRatio: number; engagementRate: number; viewsPerDay: number };
+  retention: { pct: number; share: number }[];
+  series: { day: string; views: number }[];
+  discovery: { sources: Share[]; referrers: Share[] };
+  audience: { devices: Share[] };
+}

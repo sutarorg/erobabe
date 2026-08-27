@@ -129,7 +129,7 @@ export function RankList({ videos, className }: { videos: Video[]; className?: s
     <ol className={cn("divide-y divide-white/5", className)}>
       {videos.map((v, i) => (
         <li key={v.id}>
-          <Link to={`/watch/${v.id}`} className="group flex items-center gap-3.5 py-3 sm:gap-5">
+          <Link to={`/video/${v.id}`} className="group flex items-center gap-3.5 py-3 sm:gap-5">
             <span
               aria-hidden
               className={cn(
