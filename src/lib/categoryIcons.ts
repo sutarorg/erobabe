@@ -1,6 +1,7 @@
 import {
-  Cake, Camera, Droplets, Flame, Flower2, Hand, HandHeart, Heart, Layers,
-  Moon, Sparkles, Sun, TrendingUp, Users, Venus, Zap, type LucideIcon,
+  Award, Bed, Cake, Camera, Clapperboard, Crown, Droplets, Eye, Flame, Flower2,
+  Gem, Ghost, Hand, HandHeart, Heart, Layers, Lock, Moon, Music, Sparkles, Star,
+  Sun, TrendingUp, Users, Venus, Video, Wine, Zap, type LucideIcon,
 } from "lucide-react";
 
 /**
@@ -26,7 +27,20 @@ export const CATEGORY_ICONS: Record<string, LucideIcon> = {
   "hand-heart": HandHeart,
   sun: Sun,
   heart: Heart,
+  crown: Crown,
+  gem: Gem,
+  star: Star,
+  bed: Bed,
+  wine: Wine,
+  // Extra glyphs available to the data layer / future picker additions.
   layers: Layers,
+  clapperboard: Clapperboard,
+  video: Video,
+  lock: Lock,
+  eye: Eye,
+  music: Music,
+  ghost: Ghost,
+  award: Award,
 };
 
 export const DEFAULT_CATEGORY_ICON: LucideIcon = Layers;
@@ -50,19 +64,30 @@ export const ICON_BY_SLUG: Record<string, string> = {
 };
 
 /**
- * The nine icon choices offered in the CMS category editor. Each one is
- * paired with the category type it visually represents.
+ * The 20 icon choices offered in the CMS category editor. Rendered as
+ * icon-only tiles; `represents` powers the tooltip and screen-reader label.
  */
 export const ICON_OPTIONS: { key: string; label: string; represents: string }[] = [
   { key: "flame", label: "Flame", represents: "Trending / hot" },
+  { key: "trending-up", label: "Trend line", represents: "Popular" },
   { key: "sparkles", label: "Sparkles", represents: "New releases" },
   { key: "camera", label: "Camera", represents: "Amateur" },
   { key: "zap", label: "Bolt", represents: "Hardcore" },
-  { key: "users", label: "Group", represents: "Threesome" },
+  { key: "cake", label: "Cake", represents: "Young 18+" },
+  { key: "hand", label: "Hand", represents: "Masturbation" },
   { key: "venus", label: "Venus", represents: "Lesbian" },
+  { key: "users", label: "Group", represents: "Threesome" },
+  { key: "moon", label: "Moon", represents: "Ebony" },
   { key: "droplets", label: "Droplets", represents: "Creampie" },
   { key: "flower", label: "Blossom", represents: "Asian" },
   { key: "hand-heart", label: "Caring hands", represents: "Massage" },
+  { key: "sun", label: "Sun", represents: "Blonde" },
+  { key: "heart", label: "Heart", represents: "Romantic" },
+  { key: "crown", label: "Crown", represents: "Premium" },
+  { key: "gem", label: "Gem", represents: "Exclusive" },
+  { key: "star", label: "Star", represents: "Featured" },
+  { key: "bed", label: "Bed", represents: "Bedroom" },
+  { key: "wine", label: "Wine", represents: "Date night" },
 ];
 
 /** Resolve a category glyph: explicit icon key → slug default → fallback. */

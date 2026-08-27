@@ -2,9 +2,9 @@ import { useState } from "react";
 import { FolderOpen, Hash, ImagePlus, PencilLine, Plus, Trash2 } from "lucide-react";
 import { api, type AdminCategory } from "./api";
 import {
-  Btn, Confirm, EmptyBlock, Field, Input, Modal, PageHeader, Select, Spinner, Tabs, useFetch,
+  Btn, Confirm, EmptyBlock, Field, FieldGroup, Input, Modal, PageHeader, Select, Spinner, Tabs, useFetch,
 } from "./ui";
-import { CATEGORY_ICONS, ICON_OPTIONS, resolveCategoryIcon } from "@/lib/categoryIcons";
+import { CATEGORY_ICONS, ICON_BY_SLUG, ICON_OPTIONS, resolveCategoryIcon } from "@/lib/categoryIcons";
 import { toast } from "@/components/Feedback";
 import { cn } from "@/lib/format";
 
@@ -30,41 +30,49 @@ const slugify = (s: string) => s.toLowerCase().replace(/&/g, "and").replace(/[^a
 function IconPicker({
   value, slug, onChange,
 }: { value: string; slug?: string; onChange: (key: string) => void }) {
-  const inOptions = ICON_OPTIONS.some((o) => o.key === value);
-  const CurrentIcon = resolveCategoryIcon(slug, value);
+  const effective = value || (slug ? ICON_BY_SLUG[slug] ?? "" : "");
+  const selected = ICON_OPTIONS.find((o) => o.key === effective);
   return (
-    <div>
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+    <div className="rounded-xl border border-white/8 bg-ink-850 p-2.5">
+      <div
+        role="radiogroup"
+        aria-label="Category icon"
+        className="grid grid-cols-7 gap-1.5 sm:grid-cols-10"
+      >
         {ICON_OPTIONS.map((opt) => {
           const Icon = CATEGORY_ICONS[opt.key] ?? resolveCategoryIcon(null, opt.key);
-          const active = value === opt.key;
+          const active = effective === opt.key;
           return (
             <button
               key={opt.key}
               type="button"
+              role="radio"
+              aria-checked={active}
               onClick={() => onChange(opt.key)}
               title={`${opt.label} — ${opt.represents}`}
-              aria-pressed={active}
               aria-label={`${opt.label}, represents ${opt.represents}`}
               className={cn(
-                "flex flex-col items-center gap-1 rounded-xl border px-2 py-2.5 transition active:scale-95",
+                "grid aspect-square place-items-center rounded-lg border transition active:scale-90",
                 active
-                  ? "border-brand-500/50 bg-brand-500/12 text-brand-200"
-                  : "border-white/8 bg-ink-850 text-fog-400 hover:border-white/20 hover:text-white"
+                  ? "border-brand-500/60 bg-brand-500/15 text-brand-200 ring-1 ring-brand-500/40"
+                  : "border-transparent bg-white/4 text-fog-400 hover:bg-white/10 hover:text-white"
               )}
             >
-              <Icon className="size-5" aria-hidden />
-              <span className="w-full truncate text-center text-[10px] font-medium">{opt.represents}</span>
+              <Icon className="size-[18px]" aria-hidden />
             </button>
           );
         })}
       </div>
-      {value && !inOptions && (
-        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-fog-500">
-          <CurrentIcon className="size-3.5 text-brand-400" aria-hidden />
-          Currently using the built-in “{value}” icon — pick one above to change it.
-        </p>
-      )}
+      <p className="mt-2.5 border-t border-white/6 pt-2 text-[11px] text-fog-500">
+        {selected ? (
+          <>
+            Selected: <span className="font-medium text-fog-300">{selected.label}</span>
+            <span className="text-fog-600"> · {selected.represents}</span>
+          </>
+        ) : (
+          "Choose an icon — shown on Explore, category pages and the sidebar."
+        )}
+      </p>
     </div>
   );
 }
@@ -106,14 +114,14 @@ function CategoriesTab() {
         }}
         className="space-y-4 rounded-2xl border border-white/6 bg-ink-900/60 p-4"
       >
-        <div className="grid gap-3 sm:grid-cols-[1fr_1.4fr_auto]">
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto]">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New category name" maxLength={60} aria-label="Category name" />
           <Input value={blurb} onChange={(e) => setBlurb(e.target.value)} placeholder="Short blurb (optional)" maxLength={160} aria-label="Category blurb" />
           <Btn variant="primary" icon={Plus} busy={creating} type="submit">Add category</Btn>
         </div>
-        <Field label="Icon" hint="Shown on the Explore page, category pages and the sidebar.">
+        <FieldGroup label="Icon">
           <IconPicker value={icon} onChange={setIcon} />
-        </Field>
+        </FieldGroup>
       </form>
 
       {loading ? (
@@ -227,12 +235,17 @@ function CategoryModal({
   };
 
   return (
-    <Modal open={!!category} onClose={onClose} title={`Edit category`}>
+    <Modal open={!!category} onClose={onClose} title="Edit category" wide>
       <div className="space-y-4">
-        <Field label="Name">
-          <Input value={String(form.name ?? "")} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value, slug: slugify(e.target.value) || f.slug }))} />
-        </Field>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Name">
+            <Input value={String(form.name ?? "")} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value, slug: slugify(e.target.value) || f.slug }))} />
+          </Field>
+          <Field label="Blurb">
+            <Input value={String(form.blurb ?? "")} onChange={(e) => setForm((f) => ({ ...f, blurb: e.target.value }))} maxLength={160} />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_130px]">
           <Field label="Slug" hint="Used in /category/slug URLs">
             <Input value={String(form.slug ?? "")} onChange={(e) => setForm((f) => ({ ...f, slug: slugify(e.target.value) }))} />
           </Field>
@@ -240,16 +253,13 @@ function CategoryModal({
             <Input type="number" value={Number(form.sort ?? 0)} onChange={(e) => setForm((f) => ({ ...f, sort: Number(e.target.value) || 0 }))} />
           </Field>
         </div>
-        <Field label="Blurb">
-          <Input value={String(form.blurb ?? "")} onChange={(e) => setForm((f) => ({ ...f, blurb: e.target.value }))} maxLength={160} />
-        </Field>
-        <Field label="Icon" hint="Shown on the Explore page, category pages and the sidebar.">
+        <FieldGroup label="Icon">
           <IconPicker
             value={String(form.icon ?? "")}
             slug={category?.slug}
             onChange={(key) => setForm((f) => ({ ...f, icon: key }))}
           />
-        </Field>
+        </FieldGroup>
         <Field label="Card gradient">
           <Select value={String(form.gradient ?? "")} onChange={(e) => setForm((f) => ({ ...f, gradient: e.target.value }))}>
             {GRADIENTS.map((g) => (
@@ -283,7 +293,7 @@ function CategoryModal({
             </label>
           </div>
         </Field>
-        <div className="flex justify-end gap-2 border-t border-white/6 pt-4">
+        <div className="sticky bottom-0 -mx-5 -mb-5 flex justify-end gap-2 border-t border-white/8 bg-ink-900/95 px-5 py-4 backdrop-blur md:-mx-6 md:-mb-5 md:px-6">
           <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
           <Btn variant="primary" busy={busy} onClick={save}>Save changes</Btn>
         </div>

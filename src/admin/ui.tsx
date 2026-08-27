@@ -100,6 +100,21 @@ export function Field({ label, hint, error, children }: { label: string; hint?: 
   );
 }
 
+/**
+ * Same visual treatment as <Field>, but rendered as a <div>. Use it when the
+ * control is a group of buttons — a <label> would associate with (and
+ * double-activate) the first labelable child.
+ */
+export function FieldGroup({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div role="group" aria-label={label}>
+      <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-fog-500">{label}</span>
+      {children}
+      {hint && <span className="mt-1.5 block text-[11px] text-fog-600">{hint}</span>}
+    </div>
+  );
+}
+
 const inputCls =
   "w-full rounded-lg border border-white/10 bg-ink-850 px-3.5 text-sm text-white placeholder-fog-600 outline-none transition focus:border-brand-500/50 focus:ring-2 focus:ring-brand-500/20";
 
@@ -242,14 +257,21 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-[88] flex items-end justify-center p-4 sm:items-center" role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={onClose} />
-      <div className={cn("relative w-full rounded-2xl border border-white/10 bg-ink-900 p-5 shadow-2xl animate-scale-in md:p-6", wide ? "max-w-2xl" : "max-w-lg")}>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-white">{title}</h2>
-          <button type="button" aria-label="Close" onClick={onClose} className="grid size-8 place-items-center rounded-full text-fog-500 hover:bg-white/5 hover:text-white">
+      {/* Flex column + scrollable body keeps tall forms inside the viewport
+          on every screen size instead of overflowing the desktop layout. */}
+      <div
+        className={cn(
+          "relative flex max-h-[calc(100dvh-2rem)] w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-900 shadow-2xl animate-scale-in sm:max-h-[calc(100dvh-4rem)]",
+          wide ? "max-w-2xl" : "max-w-lg"
+        )}
+      >
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/8 px-5 py-4 md:px-6">
+          <h2 className="truncate text-base font-semibold text-white">{title}</h2>
+          <button type="button" aria-label="Close" onClick={onClose} className="grid size-8 shrink-0 place-items-center rounded-full text-fog-500 hover:bg-white/5 hover:text-white">
             <X className="size-4.5" aria-hidden />
           </button>
         </div>
-        {children}
+        <div className="min-w-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 md:px-6">{children}</div>
       </div>
     </div>
   );
