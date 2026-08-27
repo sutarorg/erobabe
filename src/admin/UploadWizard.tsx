@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CloudUpload, FileVideo, ImagePlus, Loader2, Wand2, XCircle,
+  AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CloudUpload, FileVideo,
+  ImagePlus, Loader2, RefreshCw, Sparkles, Wand2, XCircle,
 } from "lucide-react";
 import { api, type UploadPlan, type MultiPlan } from "./api";
 import { fmtBytes, fmtDuration, probeVideoFile, uploadMissingParts, uploadToStorage, UploadCancelled } from "./uploader";
@@ -9,7 +10,8 @@ import {
   analyzeComplexity, analyzeVideo, compressionSupported, compressVideoAggressive, planEncode,
   CompressionCancelled, type EncodePlan, type VideoAnalysis,
 } from "./compress";
-import { Btn, Field, Input, PageHeader, Select, TagEditor, Textarea, useFetch } from "./ui";
+import { Btn, Field, Input, PageHeader, Select, TagEditor, Textarea, Toggle, useFetch } from "./ui";
+import { buildTrendingTags, generateTags } from "./autoTags";
 import { toast } from "@/components/Feedback";
 import { cn } from "@/lib/format";
 
@@ -35,6 +37,8 @@ export default function UploadWizard() {
   const [encodePlan, setEncodePlan] = useState<EncodePlan | null>(null);
   const [optimizePct, setOptimizePct] = useState(0);
   const [optimized, setOptimized] = useState<File | null>(null);
+  /** Automatic optimization is on by default; the admin can switch it off. */
+  const [optimizeEnabled, setOptimizeEnabled] = useState(true);
 
   const [plan, setPlan] = useState<UploadPlan | null>(null);
   const [loaded, setLoaded] = useState(0);
@@ -52,6 +56,26 @@ export default function UploadWizard() {
 
   const catsFetch = useFetch(() => api.categories(), []);
   const categories = catsFetch.data?.categories ?? [];
+
+  /* ── Automatic tagging ──
+     Trending tags come from the live catalog, ranked by momentum, and
+     are matched against the title/description to pick the best five. */
+  const tagsFetch = useFetch(() => api.videos({ limit: 100, sort: "newest" }), []);
+  const trending = useMemo(() => {
+    const items = tagsFetch.data?.items ?? [];
+    return buildTrendingTags(
+      items.map((v) => ({
+        tags: v.tags,
+        views: v.views,
+        daysAgo: v.published_at
+          ? Math.max(0, Math.floor((Date.now() - Date.parse(v.published_at)) / 86_400_000))
+          : 0,
+      }))
+    );
+  }, [tagsFetch.data]);
+  /** Cleared once the admin edits tags, so we never overwrite their work. */
+  const tagsTouched = useRef(false);
+  const [tagsAuto, setTagsAuto] = useState(false);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -97,7 +121,7 @@ export default function UploadWizard() {
     try {
       // ── Step A: automatic optimization ──
       let payload = optimized ?? file;
-      if (!optimized && encodePlan?.compress) {
+      if (!optimized && optimizeEnabled && encodePlan?.compress) {
         setPhase({ step: "optimizing" });
         setOptimizePct(0);
         try {
@@ -145,6 +169,7 @@ export default function UploadWizard() {
 
       toast("Upload complete — processing finished");
       setPhase({ step: "details" });
+      autoFillTags(title, description, categoryId);
     } catch (e) {
       if (e instanceof UploadCancelled) {
         setPhase({ step: "select" });
@@ -197,6 +222,31 @@ export default function UploadWizard() {
     }
   };
 
+  /**
+   * Write the five best tags straight into the Tags field. Runs whenever
+   * the title, description or category changes — until the admin edits
+   * the tags themselves, after which it stops interfering.
+   */
+  const autoFillTags = useCallback(
+    (t: string, d: string, catId: string) => {
+      if (tagsTouched.current) return;
+      const categoryName = categories.find((c) => c.id === catId)?.name ?? null;
+      const generated = generateTags(t, d, trending, categoryName, 5);
+      if (generated.length) {
+        setTags(generated);
+        setTagsAuto(true);
+      }
+    },
+    [categories, trending]
+  );
+
+  // Keep tags in step with the metadata while they remain auto-generated.
+  useEffect(() => {
+    if (phase.step !== "details" || tagsTouched.current) return;
+    const id = window.setTimeout(() => autoFillTags(title, description, categoryId), 400);
+    return () => window.clearTimeout(id);
+  }, [phase.step, title, description, categoryId, autoFillTags]);
+
   const cancelUpload = async () => {
     abortRef.current?.abort();
     if (plan) await api.abortUpload(plan.videoId).catch(() => {});
@@ -243,7 +293,7 @@ export default function UploadWizard() {
 
       {/* Stepper */}
       <ol className="mb-8 flex items-center gap-2 text-xs font-semibold">
-        {["1 · File", "2 · Optimize & upload", "3 · Details"].map((label, i) => {
+        {["1 · File", optimizeEnabled ? "2 · Optimize & upload" : "2 · Upload", "3 · Details"].map((label, i) => {
           const current = phase.step === "select" ? 0 : phase.step === "details" ? 2 : 1;
           return (
             <li key={label} className="flex items-center gap-2">
@@ -321,22 +371,28 @@ export default function UploadWizard() {
                   <XCircle className="size-5" aria-hidden />
                 </button>
               </div>
-              {/* Automatic optimization summary */}
+              {/* Automatic optimization — toggleable */}
               {!probing && (
                 <div className="mt-4 rounded-xl border border-white/6 bg-ink-850 p-3.5">
                   <div className="flex items-start gap-2.5">
-                    <Wand2 className="mt-0.5 size-4 shrink-0 text-brand-400" aria-hidden />
+                    <Wand2
+                      className={cn(
+                        "mt-0.5 size-4 shrink-0",
+                        optimizeEnabled ? "text-brand-400" : "text-fog-600"
+                      )}
+                      aria-hidden
+                    />
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-white">
-                        {encodePlan?.compress ? "Automatic optimization" : "No optimization needed"}
-                      </p>
+                      <p className="text-xs font-semibold text-white">Automatic optimization</p>
                       <p className="mt-0.5 text-[11px] leading-relaxed text-fog-500">
-                        {encodePlan?.reason ??
-                          (compressionSupported()
-                            ? "Analyzing…"
-                            : "This browser can't re-encode video — the original will be uploaded.")}
+                        {!optimizeEnabled
+                          ? "Off — the original file will be uploaded unchanged."
+                          : (encodePlan?.reason ??
+                            (compressionSupported()
+                              ? "Analyzing…"
+                              : "This browser can't re-encode video — the original will be uploaded."))}
                       </p>
-                      {encodePlan?.compress && (
+                      {optimizeEnabled && encodePlan?.compress && (
                         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fog-400">
                           <span>
                             {analysis?.height}p → <span className="text-brand-300">{encodePlan.targetHeight}p</span>
@@ -351,7 +407,17 @@ export default function UploadWizard() {
                           </span>
                         </div>
                       )}
+                      {!optimizeEnabled && (
+                        <p className="mt-2 text-[11px] text-amber-300/90">
+                          Uploading {fmtBytes(file.size)} — larger files are slower to stream.
+                        </p>
+                      )}
                     </div>
+                    <Toggle
+                      checked={optimizeEnabled}
+                      onChange={setOptimizeEnabled}
+                      label="Toggle automatic optimization"
+                    />
                   </div>
                 </div>
               )}
@@ -485,7 +551,34 @@ export default function UploadWizard() {
           </div>
 
           <Field label="Tags">
-            <TagEditor tags={tags} onChange={setTags} />
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              {tagsAuto && tags.length > 0 && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-brand-500/12 px-2 py-1 text-[11px] font-semibold text-brand-300">
+                  <Sparkles className="size-3" aria-hidden />
+                  Auto-generated from title & description
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  tagsTouched.current = false;
+                  autoFillTags(title, description, categoryId);
+                }}
+                className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/4 px-2 py-1 text-[11px] font-medium text-fog-300 transition hover:border-brand-500/40 hover:text-white"
+              >
+                <RefreshCw className="size-3" aria-hidden />
+                Regenerate tags
+              </button>
+            </div>
+            <TagEditor
+              tags={tags}
+              onChange={(t) => {
+                // Any manual edit hands control to the admin permanently.
+                tagsTouched.current = true;
+                setTagsAuto(false);
+                setTags(t);
+              }}
+            />
           </Field>
 
           {(probe?.poster || thumbOverride) && (
