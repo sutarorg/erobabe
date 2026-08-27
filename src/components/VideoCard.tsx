@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Film, Flame, Play, Sparkles } from "lucide-react";
+import { Film, Play } from "lucide-react";
 import type { Video } from "@/data/videos";
 import { categoryName } from "@/data/videos";
 import { cn } from "@/lib/format";
@@ -100,20 +100,11 @@ export function VideoCard({ video, priority = false, className }: { video: Video
           <Play className="ml-0.5 size-5 fill-white" />
         </span>
 
-        {/* Badges */}
+        {/* Duration — the only overlay kept on the thumbnail. Editorial
+            badges (NEW / HOT and similar) were removed for a cleaner look. */}
         <span className="glass absolute bottom-1.5 right-1.5 rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-white">
           {video.durationLabel}
         </span>
-        {video.isNew && !video.hot && (
-          <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-md bg-violet-600/90 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white">
-            <Sparkles className="size-2.5" aria-hidden /> NEW
-          </span>
-        )}
-        {video.hot && (
-          <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-md bg-gradient-to-r from-brand-500 to-brand-600 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white">
-            <Flame className="size-2.5" aria-hidden /> HOT
-          </span>
-        )}
       </figure>
 
       <div className="mt-2.5 space-y-1 px-0.5">

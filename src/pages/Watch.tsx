@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useUi } from "@/context/ui";
 import {
-  BadgeCheck, Bookmark, CalendarDays, ChevronDown, Eye, Flame, Link2,
-  Share2, ThumbsUp, VideoOff, type LucideIcon,
+  BadgeCheck, Bookmark, CalendarDays, ChevronDown, Eye, Flame, Link2, Play,
+  Share2, ThumbsUp, VideoOff, X, type LucideIcon,
 } from "lucide-react";
 import { CAPTIONS_URL, categoryName, getVideoById, relatedVideos, type Video } from "@/data/videos";
 import { trackLike, trackProgress, trackView } from "@/data/dynamic";
@@ -11,7 +11,7 @@ import { useHistory, useLikes, useSaved } from "@/hooks/store";
 import { absUrl, isoDuration, siteOrigin, useSEO, SITE_DESCRIPTION } from "@/lib/seo";
 import { Player } from "@/components/Player";
 import { ShareModal } from "@/components/ShareModal";
-import { EmptyState, Tag } from "@/components/Sections";
+import { EmptyState, Tag, VideoGrid } from "@/components/Sections";
 import { toast } from "@/components/Feedback";
 import { cn, formatPercent, fullDate } from "@/lib/format";
 
@@ -66,6 +66,38 @@ function RecoRow({ video }: { video: Video }) {
         </p>
       </div>
     </Link>
+  );
+}
+
+/** Desktop shows exactly four Up Next videos. */
+const UP_NEXT_COUNT = 4;
+/** The mobile Up Next overlay appears this many seconds before the end. */
+const UP_NEXT_LEAD_SECONDS = 5;
+/**
+ * Related videos: 4 × 5 = 20 on desktop and 2 × 10 = 20 on mobile.
+ * View More reveals anything beyond this first page.
+ */
+const RELATED_STEP = 20;
+/** How many Up Next entries View More expands to. */
+const UP_NEXT_EXPANDED = 12;
+
+/** Shared View More / Show Less control for the expandable rails. */
+function ViewMoreButton({
+  expanded, onToggle, moreCount,
+}: { expanded: boolean; onToggle: () => void; moreCount: number }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      className="mx-auto mt-6 flex h-10 items-center gap-2 rounded-full border border-white/10 bg-ink-800/80 px-6 text-xs font-semibold text-fog-200 transition hover:border-brand-500/40 hover:text-white active:scale-95"
+    >
+      <ChevronDown
+        className={cn("size-4 transition-transform", expanded && "rotate-180")}
+        aria-hidden
+      />
+      {expanded ? "Show Less" : `View More${moreCount > 0 ? ` (${moreCount})` : ""}`}
+    </button>
   );
 }
 
@@ -163,11 +195,25 @@ export default function Watch() {
     trackProgress(id, s.watched, s.completion);
   }, []);
 
+  /* ── Mobile Up Next overlay: appears shortly before the video ends ── */
+  const [showUpNext, setShowUpNext] = useState(false);
+  const upNextArmed = useRef(false);
+  const upNextDismissed = useRef(false);
+
   const handleProgress = useCallback(
     (currentTime: number, dur: number) => {
       const s = watchRef.current;
       s.watched = Math.max(s.watched, currentTime);
       if (dur > 0) s.completion = Math.min(100, (currentTime / dur) * 100);
+      if (
+        dur > 0 &&
+        !upNextArmed.current &&
+        dur - currentTime <= UP_NEXT_LEAD_SECONDS
+      ) {
+        upNextArmed.current = true;
+        // A viewer who already closed the card shouldn't have it come back.
+        if (!upNextDismissed.current) setShowUpNext(true);
+      }
       // Heartbeat every ~15s of playback.
       if (s.watched - s.sent >= 15) flushProgress();
     },
@@ -176,6 +222,9 @@ export default function Watch() {
 
   useEffect(() => {
     watchRef.current = { watched: 0, completion: 0, sent: 0 };
+    upNextArmed.current = false;
+    upNextDismissed.current = false;
+    setShowUpNext(false);
   }, [video?.id]);
 
   useEffect(() => {
@@ -192,6 +241,8 @@ export default function Watch() {
   /* ── Autoplay next (Playback Preferences) ── */
   const nextRef = useRef<string | null>(null);
   const playNext = useCallback(() => {
+    // A viewer who closed the Up Next card opted out of continuing.
+    if (upNextDismissed.current) return;
     if (!prefs.autoplayNext || !nextRef.current) return;
     flushProgress();
     navigate(`/video/${nextRef.current}`);
@@ -221,8 +272,22 @@ export default function Watch() {
   const liked = likes.has(video.id);
   const isSaved = saved.has(video.id);
   const url = `${window.location.origin}/video/${video.id}`;
-  const related = relatedVideos(video, 10);
+  const related = relatedVideos(video, 40);
   nextRef.current = related[0]?.id ?? null;
+  const upNext = related[0];
+
+  /* ── Expandable rails ── */
+  const [relatedExpanded, setRelatedExpanded] = useState(false);
+  const [upNextExpanded, setUpNextExpanded] = useState(false);
+  const relatedVisible = relatedExpanded ? related : related.slice(0, RELATED_STEP);
+  const upNextItems = upNextExpanded
+    ? related.slice(0, UP_NEXT_EXPANDED)
+    : related.slice(0, UP_NEXT_COUNT);
+
+  useEffect(() => {
+    setRelatedExpanded(false);
+    setUpNextExpanded(false);
+  }, [video?.id]);
 
   const copyLink = async () => {
     try {
@@ -238,16 +303,85 @@ export default function Watch() {
       <div className="grid gap-8 xl:grid-cols-[1fr_380px]">
         {/* ── Main column ── */}
         <div className="min-w-0">
-          <Player
-            key={video.id}
-            src={video.videoUrl}
-            poster={video.thumbnail}
-            title={video.title}
-            captionsUrl={CAPTIONS_URL}
-            onProgress={handleProgress}
-            startMuted={prefs.muteOnStart}
-            onEnded={playNext}
-          />
+          <div className="relative">
+            <Player
+              key={video.id}
+              src={video.videoUrl}
+              poster={video.thumbnail}
+              title={video.title}
+              captionsUrl={CAPTIONS_URL}
+              onProgress={handleProgress}
+              startMuted={prefs.muteOnStart}
+              onEnded={playNext}
+            />
+
+            {/* ── Mobile Up Next overlay ──
+                Appears ~5s before the end and sits clear of the control bar,
+                so it never blocks play/pause or the seek bar. Dismissing it
+                leaves playback completely untouched. */}
+            {showUpNext && upNext && (
+              <div
+                role="dialog"
+                aria-label="Up next video"
+                className="absolute inset-x-2 bottom-24 z-30 animate-fade-up sm:inset-x-4 xl:hidden"
+              >
+                <div className="glass flex items-center gap-3 rounded-xl border border-white/12 p-2 pr-2 shadow-2xl">
+                  <Link
+                    to={`/video/${upNext.id}`}
+                    onClick={flushProgress}
+                    className="relative aspect-video w-24 shrink-0 overflow-hidden rounded-lg bg-ink-800 ring-1 ring-white/10 sm:w-28"
+                  >
+                    <img
+                      src={upNext.thumbnail}
+                      alt={`${upNext.title} thumbnail`}
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                    <span className="absolute bottom-0.5 right-0.5 rounded bg-black/80 px-1 text-[10px] font-semibold text-white">
+                      {upNext.durationLabel}
+                    </span>
+                  </Link>
+
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-brand-300">Up next</p>
+                    <Link
+                      to={`/video/${upNext.id}`}
+                      onClick={flushProgress}
+                      className="line-clamp-2 text-xs font-medium leading-snug text-white transition hover:text-brand-300"
+                    >
+                      {upNext.title}
+                    </Link>
+                  </div>
+
+                  <div className="flex shrink-0 flex-col gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        flushProgress();
+                        playNext();
+                      }}
+                      aria-label="Play next video now"
+                      className="grid size-8 place-items-center rounded-lg bg-gradient-to-r from-brand-500 to-violet-600 text-white transition hover:brightness-110 active:scale-90"
+                    >
+                      <Play className="ml-0.5 size-3.5 fill-white" aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // Dismissing never touches the player — it only hides
+                        // the card and cancels auto-advance for this video.
+                        upNextDismissed.current = true;
+                        setShowUpNext(false);
+                      }}
+                      aria-label="Close Up Next"
+                      className="grid size-8 place-items-center rounded-lg border border-white/12 bg-white/6 text-fog-300 transition hover:bg-white/12 hover:text-white active:scale-90"
+                    >
+                      <X className="size-3.5" aria-hidden />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
 
           <h1 className="mt-4 text-lg font-semibold leading-snug tracking-tight text-white md:text-2xl">
             {video.title}
@@ -328,19 +462,50 @@ export default function Watch() {
           </Panel>
         </div>
 
-        {/* ── Recommendations ── */}
-        <aside aria-label="Recommended videos" className="min-w-0">
+        {/* ── Up Next — desktop sidebar (mobile uses the end-of-video overlay) ── */}
+        <aside aria-label="Up next videos" className="hidden min-w-0 xl:block">
           <h2 className="mb-4 flex items-center gap-2 text-base font-semibold tracking-tight text-white">
             <Flame className="size-4 text-brand-400" aria-hidden />
             Up next
           </h2>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-            {related.map((v) => (
+          <div className="grid gap-4">
+            {upNextItems.map((v) => (
               <RecoRow key={v.id} video={v} />
             ))}
           </div>
+          {related.length > UP_NEXT_COUNT && (
+            <ViewMoreButton
+              expanded={upNextExpanded}
+              onToggle={() => setUpNextExpanded((e) => !e)}
+              moreCount={related.length - UP_NEXT_COUNT}
+            />
+          )}
         </aside>
       </div>
+
+      {/* ── Related videos ──
+          Spans the full page width so the 4-column grid fills the screen
+          with no dead space beside the Up Next sidebar. */}
+      {related.length > 0 && (
+        <section aria-label="Related videos" className="mt-10 border-t border-white/6 pt-8">
+          <h2 className="mb-4 text-base font-semibold tracking-tight text-white">Related videos</h2>
+          {/* Collapsed: exactly one page (4×5 desktop / 2×10 mobile).
+              Expanded: everything available. */}
+          <VideoGrid
+            videos={relatedVisible}
+            desktopCols={4}
+            count={RELATED_STEP}
+            showAll={relatedExpanded}
+          />
+          {related.length > RELATED_STEP && (
+            <ViewMoreButton
+              expanded={relatedExpanded}
+              onToggle={() => setRelatedExpanded((e) => !e)}
+              moreCount={related.length - RELATED_STEP}
+            />
+          )}
+        </section>
+      )}
 
       <ShareModal open={shareOpen} onClose={() => setShareOpen(false)} url={url} title={video.title} />
     </div>

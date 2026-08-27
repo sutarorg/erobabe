@@ -103,7 +103,7 @@ export default function SearchPage() {
       {results.length > 0 ? (
         <>
           <FilterChips ariaLabel="Sort results" options={SORTS} value={sort} onChange={setSort} className="mb-5" />
-          <VideoGrid videos={results} />
+          <VideoGrid videos={results} showAll />
         </>
       ) : (
         <EmptyState

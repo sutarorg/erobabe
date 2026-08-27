@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { CalendarDays, Clock, Compass, Eye, Flame, LayoutGrid, TrendingUp } from "lucide-react";
 import { CATEGORIES, VIDEOS, trendingVideos, risingVideos, popularVideos, newVideos, editorsPicks, categoryCount } from "@/data/videos";
-import { Carousel, CategoryCard, FilterChips, RankList, SectionHeader, VideoGrid, type ChipOption } from "@/components/Sections";
+import { CategoryCard, FilterChips, RankList, SectionHeader, VideoGrid, type ChipOption } from "@/components/Sections";
 import { useSEO } from "@/lib/seo";
 
 const CHIPS: ChipOption[] = [
@@ -60,7 +60,7 @@ export default function Explore() {
         <p className="mb-4 mt-1 text-xs font-medium text-fog-600 md:mt-3">
           {videos.length} videos · {CHIPS.find((c) => c.key === filter)?.label}
         </p>
-        <VideoGrid videos={videos} />
+        <VideoGrid videos={videos} showAll />
       </section>
 
       <div className="grid gap-8 lg:grid-cols-2">
@@ -79,7 +79,7 @@ export default function Explore() {
         <section aria-label="Rising now">
           <SectionHeader eyebrow="Gaining momentum" title="Rising Now" href="/trending" />
           {risingVideos.length > 0 ? (
-            <Carousel videos={risingVideos} />
+            <VideoGrid videos={risingVideos} />
           ) : (
             <p className="rounded-3xl border border-white/6 bg-ink-900/40 px-4 py-10 text-center text-sm text-fog-600">
               Rising videos appear here as new content gains momentum.

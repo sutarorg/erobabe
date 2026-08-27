@@ -118,7 +118,7 @@ export default function CategoryPage() {
         </div>
       </div>
 
-      <VideoGrid videos={videos} />
+      <VideoGrid videos={videos} showAll />
     </div>
   );
 }

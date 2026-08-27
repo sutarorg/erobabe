@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { Clock, Eye, Flame, Play, TrendingUp } from "lucide-react";
 import { trendingVideos, risingVideos, BROWSE_CATEGORIES, categoryCount, type Video } from "@/data/videos";
-import { Carousel, CategoryCard, RankList, SectionHeader } from "@/components/Sections";
+import { CategoryCard, RankList, SectionHeader, VideoGrid } from "@/components/Sections";
 import { useSEO } from "@/lib/seo";
 import { cn } from "@/lib/format";
 
@@ -101,7 +101,7 @@ export default function Trending() {
       {risingVideos.length > 0 && (
         <section aria-label="Rising videos">
           <SectionHeader eyebrow="Fastest growing right now" title="Rising Now" />
-          <Carousel videos={risingVideos} />
+          <VideoGrid videos={risingVideos} />
         </section>
       )}
 

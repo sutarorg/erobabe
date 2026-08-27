@@ -49,7 +49,7 @@ export default function ListPage({ kind }: { kind: keyof typeof CONFIG }) {
           {videos.length} videos · {cfg.blurb}
         </p>
       </header>
-      <VideoGrid videos={videos} />
+      <VideoGrid videos={videos} showAll />
     </div>
   );
 }

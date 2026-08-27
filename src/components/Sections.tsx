@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowUpRight, ChevronLeft, ChevronRight, Inbox,
@@ -60,9 +60,61 @@ export function SectionHeader({
   );
 }
 
-/* ── Responsive dense grid ── */
-export function VideoGrid({ videos, className }: { videos: Video[]; className?: string }) {
-  if (videos.length === 0) {
+/* ── Responsive grid ─────────────────────────────────────────────
+ * Normal video sections never scroll horizontally. Columns:
+ *   mobile 2×4 = 8 · tablet 3×4 = 12 · laptop 4×4 = 16 · desktop 5×4 = 20
+ * ────────────────────────────────────────────────────────────── */
+const GRID_LIMITS: [number, number][] = [
+  [1536, 20], // desktop  — 5 columns × 4 rows
+  [1280, 16], // laptop   — 4 columns × 4 rows
+  [768, 12],  // tablet   — 3 columns × 4 rows
+  [0, 8],     // mobile   — 2 columns × 4 rows
+];
+
+function gridLimitFor(width: number) {
+  for (const [min, limit] of GRID_LIMITS) if (width >= min) return limit;
+  return 8;
+}
+
+/** How many cards fill exactly four rows at the current breakpoint. */
+export function useGridLimit() {
+  const [limit, setLimit] = useState(() =>
+    typeof window === "undefined" ? 20 : gridLimitFor(window.innerWidth)
+  );
+  useEffect(() => {
+    let raf = 0;
+    const onResize = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setLimit(gridLimitFor(window.innerWidth)));
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+  return limit;
+}
+
+export function VideoGrid({
+  videos,
+  className,
+  /** Show every video instead of capping at four rows (catalog listings). */
+  showAll = false,
+  /** Columns on the widest breakpoint. Defaults to 5; some sections use 4. */
+  desktopCols = 5,
+  /** Fixed card count, overriding the four-rows-per-breakpoint default. */
+  count,
+}: {
+  videos: Video[];
+  className?: string;
+  showAll?: boolean;
+  desktopCols?: 4 | 5;
+  count?: number;
+}) {
+  const rowLimit = useGridLimit();
+  const items = showAll ? videos : videos.slice(0, count ?? rowLimit);
+  if (items.length === 0) {
     return (
       <EmptyState
         title="Nothing here yet"
@@ -73,21 +125,13 @@ export function VideoGrid({ videos, className }: { videos: Video[]; className?: 
   return (
     <div
       className={cn(
-        // Mobile: a single horizontally scrolling row of cards, edge-to-edge.
-        "no-scrollbar -mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-1",
-        // Tablet and up: the dense responsive grid.
-        "md:mx-0 md:grid md:grid-cols-3 md:gap-x-4 md:gap-y-8 md:overflow-visible md:px-0 md:pb-0 xl:grid-cols-4 2xl:grid-cols-5",
+        "grid grid-cols-2 gap-x-3 gap-y-6 sm:gap-x-4 md:grid-cols-3 md:gap-y-8 xl:grid-cols-4",
+        desktopCols === 5 && "2xl:grid-cols-5",
         className
       )}
     >
-      {videos.map((v, i) => (
-        <div
-          key={v.id}
-          // Card width mirrors the carousel so every rail on the homepage
-          // scrolls with the same rhythm on small screens.
-          className="w-[64vw] max-w-[300px] shrink-0 snap-start animate-fade-up sm:w-[36vw] md:w-auto"
-          style={{ animationDelay: `${Math.min(i, 12) * 45}ms` }}
-        >
+      {items.map((v, i) => (
+        <div key={v.id} className="min-w-0 animate-fade-up" style={{ animationDelay: `${Math.min(i, 12) * 45}ms` }}>
           <VideoCard video={v} priority={i < 4} />
         </div>
       ))}

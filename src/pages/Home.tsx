@@ -145,7 +145,7 @@ export default function Home() {
 
       <section aria-label="Popular videos">
         <SectionHeader eyebrow="Viewer favorites" title="Popular Videos" href="/popular" icon={Trophy} />
-        <VideoGrid videos={popularVideos.slice(0, 10)} />
+        <VideoGrid videos={popularVideos} desktopCols={4} />
       </section>
 
       <section aria-label="New releases">
