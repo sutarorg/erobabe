@@ -1,29 +1,47 @@
+import { formatDuration, formatViews, timeAgo } from "@/lib/format";
+import { rankSections, sectionsFromIds, type DiscoverySections } from "@/lib/ranking";
+
 /**
- * EroBabe demo catalog.
- * All titles, performers and metadata are fictional. Thumbnails are tasteful
- * editorial stock photography; demo playback uses public sample video files.
- * Replace `thumbnail` / `videoUrl` with real assets later — no component
- * changes required.
+ * ─────────────────────────────────────────────────────────────
+ * EroBabe demo dataset.
+ *
+ * EVERYTHING here is fictional UI-demo content: invented titles,
+ * invented performer names, tasteful stock thumbnails and openly
+ * licensed placeholder video files. Swap `thumbnail` / `videoUrl`
+ * with your own media (e.g. /assets/thumbnails/thumb-01.jpg and
+ * /assets/videos/video-01.mp4) without touching any component.
+ * ─────────────────────────────────────────────────────────────
  */
 
+export type CategorySlug = "studio" | "premium" | "couples" | "solo" | "amateur" | "compilation";
+
 export interface Video {
+  /** Routing key — the SEO slug for CMS videos (`/watch/{slug}`). */
   id: string;
-  slug: string;
+  /** Database uuid when the video comes from the CMS (used for view tracking). */
+  uuid?: string;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
   title: string;
-  category: string; // category slug
-  tags: string[];
-  durationSec: number;
+  category: CategorySlug;
+  duration: number; // seconds
+  durationLabel: string;
   views: number;
-  daysAgo: number; // recency used for "x ago" labels + trending math
-  performer: string;
-  studio?: string;
-  quality: "4K" | "HD";
-  featured?: boolean;
-  trending?: boolean;
+  viewsLabel: string;
+  daysAgo: number;
+  dateLabel: string;
+  likeRatio: number; // 0–100
   thumbnail: string;
   videoUrl: string;
+  tags: string[];
+  performer: string;
   description: string;
-  createdAt: string; // ISO
+  featured?: boolean;
+  trending?: boolean;
+  hot?: boolean;
+  isNew?: boolean;
+  editorsPick?: boolean;
+  score: number; // internal trend score
 }
 
 export interface Category {
@@ -31,200 +49,445 @@ export interface Category {
   name: string;
   blurb: string;
   image: string;
-  accent: string; // tailwind gradient classes
-  icon: string; // key from ICON_REGISTRY (shared with the admin CMS)
-  virtual?: boolean; // feed-style category (trending/popular/new) — no slug filter
+  gradient: string;
+  href?: string;
 }
 
-/* ------------------------------------------------------------------ */
-/* Media pools                                                         */
-/* ------------------------------------------------------------------ */
-
-const px = (id: number) =>
+/* ── Placeholder thumbnails (tasteful, cinematic stock photography) ── */
+const P = (id: number) =>
   `https://images.pexels.com/photos/${id}/pexels-photo-${id}.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=627&w=1200`;
 
-export const THUMBS = [
-  px(36806859), px(16077169), px(35032199), px(14536731), px(32260697),
-  px(32260696), px(12429764), px(37258529), px(38291937), px(8271461),
-  px(8983546), px(11565547), px(8553208), px(6800204), px(3077733),
-  px(27700168), px(31011826), px(6800200), px(9278288), px(4636394),
-  px(219650), px(9097277), px(17767908), px(36689954), px(16078511),
-  px(5645105), px(919382), px(9130235), px(30536608), px(31663603),
-  px(38422741), px(37737571), px(38394973), px(38394971), px(37737570),
-  px(37538266), px(37942450), px(37557736), px(36208816), px(36267051),
+export const THUMBS = {
+  satinBlack: P(6843237),
+  silkPurple: P(36095039),
+  velvetRed: P(6843283),
+  satinRedBlue: P(36095048),
+  satinIridescent: P(38422741),
+  satinRipples: P(36095038),
+  neonCorridor: P(32260697),
+  neonPhone: P(19665186),
+  neonRedGlow: P(36806859),
+  furRedNight: P(16077169),
+  suitNight: P(14096150),
+  neonBlue: P(8271461),
+  danceTwilight: P(27700168),
+  corridorPair: P(18546264),
+  kissMotion: P(32236360),
+  streetCouple: P(9676247),
+  candleSleep: P(9663182),
+  candlesSoft: P(37368064),
+  candleDark: P(10699340),
+  candleGlass: P(35710028),
+  candleBedside: P(6514239),
+} as const;
+
+export const HERO_IMAGE = "/assets/hero.jpg";
+
+/** Flat list used for deterministic thumbnail assignment. */
+const THUMB_LIST = Object.values(THUMBS);
+
+/* ── Placeholder demo video files (openly licensed samples) ── */
+const G = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample";
+export const DEMO_SOURCES = [
+  `${G}/Sintel.mp4`,
+  `${G}/TearsOfSteel.mp4`,
+  `${G}/ElephantsDream.mp4`,
+  `${G}/BigBuckBunny.mp4`,
+  `${G}/ForBiggerBlazes.mp4`,
+  `${G}/ForBiggerEscapes.mp4`,
+  `${G}/ForBiggerFun.mp4`,
+  `${G}/ForBiggerJoyrides.mp4`,
+  `${G}/ForBiggerMeltdowns.mp4`,
 ];
 
-/** Public sample MP4s used as demo playback sources (easily replaced). */
-const gtv = (name: string) =>
-  `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/${name}.mp4`;
+export const CAPTIONS_URL = "/assets/captions-demo.vtt";
 
-export const VIDEO_POOL = [
-  gtv("ForBiggerBlazes"),
-  gtv("ForBiggerEscapes"),
-  gtv("ForBiggerFun"),
-  gtv("ForBiggerJoyrides"),
-  gtv("ForBiggerMeltdowns"),
-  gtv("BigBuckBunny"),
-  gtv("ElephantsDream"),
-  gtv("Sintel"),
-  gtv("TearsOfSteel"),
-];
-
-export const FALLBACK_THUMB = "/assets/brand/og-cover.jpg";
-
-/* ------------------------------------------------------------------ */
-/* Categories                                                          */
-/* ------------------------------------------------------------------ */
-
+/* ── Categories ── */
 export const CATEGORIES: Category[] = [
-  { slug: "trending", name: "Trending", blurb: "What everyone is watching right now.", image: THUMBS[31], accent: "from-rose-600/60", icon: "flame", virtual: true },
-  { slug: "popular", name: "Popular", blurb: "All-time viewer favorites.", image: THUMBS[0], accent: "from-violet-600/60", icon: "crown", virtual: true },
-  { slug: "new", name: "New", blurb: "The latest uploads, freshest first.", image: THUMBS[38], accent: "from-fuchsia-600/60", icon: "sparkles", virtual: true },
-  { slug: "amateur", name: "Amateur", blurb: "Unpolished, authentic, self-shot.", image: THUMBS[24], accent: "from-pink-600/60", icon: "camera" },
-  { slug: "hardcore", name: "Hardcore", blurb: "Intense, full-throttle scenes.", image: THUMBS[4], accent: "from-red-700/60", icon: "zap" },
-  { slug: "young-18", name: "Young 18+", blurb: "Fresh faces — strictly verified adults.", image: THUMBS[6], accent: "from-amber-500/60", icon: "sprout" },
-  { slug: "masturbation", name: "Masturbation", blurb: "Solo scenes, full focus.", image: THUMBS[21], accent: "from-purple-600/60", icon: "hand" },
-  { slug: "lesbian", name: "Lesbian", blurb: "Women-only chemistry.", image: THUMBS[12], accent: "from-fuchsia-600/60", icon: "hearts" },
-  { slug: "threesome", name: "Threesome", blurb: "Three's company.", image: THUMBS[16], accent: "from-rose-500/60", icon: "users" },
-  { slug: "ebony", name: "Ebony", blurb: "Melanin-rich performers.", image: THUMBS[20], accent: "from-amber-900/70", icon: "moon" },
-  { slug: "creampie", name: "Creampie", blurb: "The warmest finales.", image: THUMBS[36], accent: "from-rose-400/60", icon: "icecream" },
-  { slug: "asian", name: "Asian", blurb: "East Asian performers.", image: THUMBS[9], accent: "from-sky-600/60", icon: "flower" },
-  { slug: "massage", name: "Massage", blurb: "Oiled hands, slow release.", image: THUMBS[22], accent: "from-teal-600/60", icon: "waves" },
-  { slug: "blonde", name: "Blonde", blurb: "Golden-haired scenes.", image: THUMBS[1], accent: "from-amber-400/60", icon: "sun" },
+  {
+    slug: "trending",
+    name: "Trending",
+    blurb: "What everyone is watching right now.",
+    image: THUMBS.neonRedGlow,
+    gradient: "from-rose-600/80 via-rose-900/40",
+    href: "/trending",
+  },
+  {
+    slug: "popular",
+    name: "Popular",
+    blurb: "All-time viewer favorites.",
+    image: THUMBS.satinIridescent,
+    gradient: "from-fuchsia-600/80 via-fuchsia-900/40",
+    href: "/popular",
+  },
+  {
+    slug: "new",
+    name: "New",
+    blurb: "Fresh arrivals, added weekly.",
+    image: THUMBS.candleGlass,
+    gradient: "from-violet-600/80 via-violet-900/40",
+    href: "/new",
+  },
+  {
+    slug: "studio",
+    name: "Studio",
+    blurb: "Polished productions with a cinematic finish.",
+    image: THUMBS.satinBlack,
+    gradient: "from-zinc-500/70 via-zinc-800/40",
+  },
+  {
+    slug: "premium",
+    name: "Premium",
+    blurb: "The flagship collection — slow, deliberate, gorgeous.",
+    image: THUMBS.silkPurple,
+    gradient: "from-purple-600/80 via-purple-900/40",
+  },
+  {
+    slug: "couples",
+    name: "Couples",
+    blurb: "Shared moments, chemistry first.",
+    image: THUMBS.danceTwilight,
+    gradient: "from-pink-600/80 via-pink-900/40",
+  },
+  {
+    slug: "solo",
+    name: "Solo",
+    blurb: "Intimate, understated, atmospheric.",
+    image: THUMBS.neonCorridor,
+    gradient: "from-red-600/80 via-red-900/40",
+  },
+  {
+    slug: "amateur",
+    name: "Amateur",
+    blurb: "Candid, unscripted energy.",
+    image: THUMBS.streetCouple,
+    gradient: "from-amber-600/80 via-amber-900/40",
+  },
+  {
+    slug: "compilation",
+    name: "Compilation",
+    blurb: "Curated highlights and best-of cuts.",
+    image: THUMBS.corridorPair,
+    gradient: "from-indigo-600/80 via-indigo-900/40",
+  },
 ];
 
-export const VIRTUAL_CATEGORY_SORT: Record<string, "trending" | "viewed" | "newest"> = {
-  trending: "trending",
-  popular: "viewed",
-  new: "newest",
-};
+export const BROWSE_CATEGORIES: Category[] = CATEGORIES.filter((c) => !c.href);
+export const categoryBySlug: Map<string, Category> = new Map(CATEGORIES.map((c) => [c.slug, c]));
+export const categoryName = (slug: string) => categoryBySlug.get(slug)?.name ?? slug;
 
-/* ------------------------------------------------------------------ */
-/* Catalog                                                             */
-/* ------------------------------------------------------------------ */
+/* ── Fictional performer names (demo only) ── */
+const PERFORMERS = [
+  "Ava Noir",
+  "Luna Rey",
+  "Mia Voss",
+  "Ivy Laurent",
+  "Roxanne Vale",
+  "Cleo Marchetti",
+  "Dahlia Storm",
+  "Violet Asher",
+  "Naomi Faye",
+  "Scarlett Devine",
+  "Jade Wren",
+  "Sofia Black",
+];
 
-// [title, category, durSec, views, daysAgo, performer, tags, quality, featured, trending]
-type Row = [string, string, number, number, number, string, string[], "4K" | "HD", boolean, boolean];
-
-const ROWS: Row[] = [
-  ["Midnight Studio Session", "hardcore", 1422, 2410000, 2, "Lena Moreau", ["Featured", "Night"], "4K", true, true],
-  ["Neon Reverie", "masturbation", 958, 1890000, 1, "Ava Noir", ["Neon", "Moody"], "4K", false, true],
-  ["Velvet Hours", "massage", 1734, 1220000, 5, "Camille Rose", ["Silk", "Slow"], "HD", false, false],
-  ["Afterglow", "creampie", 1290, 3140000, 3, "Scarlett Vane & Max Doyle", ["Intimate", "Warm"], "4K", false, true],
-  ["Crimson Silk", "blonde", 2081, 980000, 7, "Vera Sinclair", ["Exclusive", "Editorial"], "4K", true, false],
-  ["Two in the Dark", "threesome", 1104, 764000, 9, "Ruby Castell & Leo Ardant", ["Low Light"], "HD", false, false],
-  ["Windowsill", "blonde", 812, 2260000, 4, "Isabella Hart", ["Natural Light"], "4K", false, true],
-  ["Static & Silk", "asian", 2642, 612000, 12, "Various", ["Best Of", "Edited"], "HD", false, false],
-  ["Penthouse Lights", "ebony", 1512, 1430000, 6, "Bianca Snow", ["City", "High Rise"], "4K", false, true],
-  ["Raw Cut: Morning", "amateur", 693, 538000, 2, "Freya Lindt", ["Self Shot", "Authentic"], "HD", false, false],
-  ["Slow Motion Hearts", "lesbian", 1876, 1750000, 8, "Jade Marlowe", ["Story", "Slow Burn"], "4K", false, true],
-  ["Rosewater", "masturbation", 1044, 891000, 11, "Mila Laurent", ["Soft", "Close Up"], "HD", false, false],
-  ["Champagne Static", "blonde", 1338, 2010000, 5, "Sienna Fox", ["Party", "Gold"], "4K", false, true],
-  ["After Hours", "hardcore", 1602, 1190000, 14, "Nadia Belle", ["Late Night"], "4K", false, false],
-  ["Fever Dream", "asian", 1266, 940000, 10, "Ava Noir", ["Haze", "Neon"], "HD", false, false],
-  ["Her Favorite Song", "young-18", 927, 1320000, 3, "Odette Reyes", ["Music", "Playful"], "4K", false, true],
-  ["Moonlight Confession", "massage", 1951, 702000, 16, "Clara Vale", ["Story", "Moonlight"], "4K", false, false],
-  ["The Red Room", "creampie", 2214, 1680000, 9, "Vera Sinclair", ["Exclusive", "Red"], "4K", false, true],
-  ["Weekend at Home", "amateur", 1188, 2890000, 2, "Ivy Delacroix", ["Real", "Morning"], "HD", false, true],
-  ["Second Skin", "massage", 1459, 565000, 18, "Camille Rose", ["Lace", "Shadow"], "HD", false, false],
-  ["Midnight Radio", "hardcore", 3011, 1980000, 4, "Various", ["Mix", "Late Night"], "4K", false, true],
-  ["Slow Burn", "creampie", 1537, 845000, 13, "Scarlett Vane & Max Doyle", ["Chemistry"], "4K", false, false],
-  ["Nightshift", "ebony", 1092, 477000, 21, "Jade Marlowe", ["City", "Neon"], "HD", false, false],
-  ["Satin & Smoke", "asian", 1648, 2130000, 6, "Bianca Snow", ["Satin", "Haze"], "4K", false, true],
-  ["First Takes", "amateur", 845, 689000, 7, "Freya Lindt", ["Unedited"], "HD", false, false],
-  ["The Director's Cut", "hardcore", 2473, 1050000, 20, "Lena Moreau", ["Extended"], "4K", false, false],
-  ["One More Glass", "blonde", 1326, 914000, 15, "Sienna Fox", ["Evening"], "4K", false, false],
-  ["Pink Noise", "young-18", 1008, 2470000, 1, "Mila Laurent", ["Playful", "Color"], "4K", false, true],
-  ["Best of 2026 — Vol. 4", "creampie", 3284, 1540000, 3, "Various", ["Best Of", "Top Rated"], "4K", false, true],
-  ["Letter from Lyon", "lesbian", 1789, 612000, 24, "Odette Reyes", ["Story", "Travel"], "4K", false, false],
-  ["After the Party", "amateur", 762, 1890000, 5, "Ivy Delacroix", ["Real", "Night"], "HD", false, true],
-  ["Marlowe & Vane", "threesome", 1695, 1410000, 12, "Jade Marlowe & Nico Vane", ["Group"], "4K", true, false],
-  ["Studio 54 Sessions", "ebony", 1581, 733000, 17, "Nadia Belle", ["Retro", "Disco"], "HD", false, false],
-  ["Undressed Light", "blonde", 1214, 968000, 19, "Clara Vale", ["Window Light"], "4K", false, false],
-  ["High Rise Hearts", "asian", 1467, 1280000, 8, "Bianca Snow", ["Skyline"], "4K", false, false],
-  ["Long Exposure", "young-18", 1902, 2650000, 2, "Clara Vale", ["Art", "Slow"], "4K", true, true],
-  ["Fitted for Silk", "massage", 2057, 587000, 26, "Vera Sinclair", ["Editorial"], "4K", false, false],
-  ["Close-Up: Iris", "masturbation", 894, 1120000, 10, "Isabella Hart", ["Intimate"], "HD", false, false],
-  ["The Loft Tapes", "amateur", 1349, 806000, 22, "Freya Lindt", ["Loft", "RAW"], "HD", false, false],
-  ["Noir Étude", "ebony", 1823, 1360000, 6, "Ava Noir", ["Study", "Shadow"], "4K", true, true],
+const TAG_POOL = [
+  "Cinematic", "4K", "Slow Burn", "Remastered", "Exclusive", "Late Night",
+  "Studio Cut", "Award Winner", "Staff Pick", "Score", "Intimate", "Neon",
+  "Candlelit", "Premium Cut", "Series", "BTS",
 ];
 
 const DESCRIPTIONS = [
-  "A slow-burning session shot with cinematic lighting and an intimate, unhurried pace. One of the most requested scenes in the catalog this month.",
-  "Filmed across a single evening with practical neon and haze, this scene leans into atmosphere first — moody, stylish and deliberately paced.",
-  "A soft, editorial production with silk textures and natural window light. Warm, elegant and unmistakably premium.",
-  "Real chemistry carries this scene from beginning to end. Unscripted, playful and intimate — a viewer favorite since release.",
-  "A flagship production with editorial grading, designer styling and an extended cut exclusive to EroBabe.",
+  (cat: string) =>
+    `A slow-burning ${cat} feature shot after midnight — low practical light, deliberate pacing and a cinematic grade that keeps every frame looking like a film still. Stream now in up to 4K.`,
+  (cat: string) =>
+    `This ${cat} cut trades noise for atmosphere: long lenses, warm shadows and an unhurried rhythm. One of the most requested sessions in the EroBabe archive.`,
+  (cat: string) =>
+    `Produced as part of the EroBabe ${cat} series, this session keeps things understated and intimate, with the focus on mood, texture and light.`,
+  (cat: string) =>
+    `A fan favorite from the ${cat} collection — remastered with richer blacks, softer highlights and a slower, more deliberate edit.`,
+  (cat: string) =>
+    `Minimal dialogue, maximal mood. This ${cat} entry leans on candlelight, silk and city glow to build a slow, atmospheric experience.`,
 ];
 
-export const VIDEOS: Video[] = ROWS.map((r, i) => {
-  const [title, category, durationSec, views, daysAgo, performer, tags, quality, featured, trending] = r;
-  return {
-    id: String(i + 1),
-    slug: slugify(title),
-    title,
-    category,
-    tags,
-    durationSec,
-    views,
-    daysAgo,
-    performer,
-    studio: category === "studio" || category === "premium" ? "EroBabe Originals" : undefined,
-    quality,
-    featured,
-    trending,
-    thumbnail: THUMBS[i % THUMBS.length],
-    videoUrl: VIDEO_POOL[i % VIDEO_POOL.length],
-    description: DESCRIPTIONS[i % DESCRIPTIONS.length],
-    createdAt: new Date(Date.now() - daysAgo * 864e5).toISOString(),
+interface RawRow {
+  t: string; // title
+  c: CategorySlug; // category
+  d: number; // days ago
+  p: number; // performer index
+}
+
+const RAW: RawRow[] = [
+  { t: "Midnight Studio Session", c: "studio", d: 2, p: 0 },
+  { t: "Velvet Hour", c: "solo", d: 3, p: 1 },
+  { t: "Neon Silhouettes", c: "couples", d: 5, p: 2 },
+  { t: "Afterglow", c: "couples", d: 6, p: 3 },
+  { t: "Slow Burn", c: "premium", d: 8, p: 4 },
+  { t: "Crimson Silk", c: "solo", d: 9, p: 1 },
+  { t: "City Lights Rendezvous", c: "couples", d: 11, p: 5 },
+  { t: "Golden Hour", c: "amateur", d: 12, p: 6 },
+  { t: "Satin & Shadows", c: "studio", d: 14, p: 7 },
+  { t: "Last Call", c: "amateur", d: 15, p: 8 },
+  { t: "Dusk Till Dawn", c: "compilation", d: 16, p: 9 },
+  { t: "Soft Focus", c: "solo", d: 18, p: 10 },
+  { t: "Candlelight", c: "couples", d: 20, p: 11 },
+  { t: "Late Checkout", c: "amateur", d: 21, p: 5 },
+  { t: "Ember", c: "studio", d: 22, p: 4 },
+  { t: "Nightcap", c: "couples", d: 1, p: 2 },
+  { t: "After Hours", c: "premium", d: 23, p: 0 },
+  { t: "Heatwave", c: "compilation", d: 24, p: 8 },
+  { t: "Linger", c: "solo", d: 4, p: 1 },
+  { t: "Moonlit", c: "couples", d: 25, p: 6 },
+  { t: "The Red Door", c: "studio", d: 26, p: 11 },
+  { t: "Pink Champagne", c: "premium", d: 2, p: 7 },
+  { t: "Dark Room", c: "amateur", d: 27, p: 9 },
+  { t: "Between the Sheets", c: "couples", d: 28, p: 3 },
+  { t: "First Light", c: "solo", d: 30, p: 10 },
+  { t: "Low Light", c: "amateur", d: 31, p: 8 },
+  { t: "Warm Static", c: "studio", d: 33, p: 0 },
+  { t: "Silhouette Study", c: "solo", d: 34, p: 4 },
+  { t: "Velvet Rope", c: "premium", d: 35, p: 11 },
+  { t: "Private Screening", c: "premium", d: 5, p: 2 },
+  { t: "Room Service", c: "couples", d: 36, p: 5 },
+  { t: "Scarlet Hour", c: "studio", d: 38, p: 7 },
+  { t: "Midnight Oil", c: "solo", d: 40, p: 10 },
+  { t: "Honeymoon Phase", c: "couples", d: 41, p: 6 },
+  { t: "Slow Motion", c: "compilation", d: 42, p: 8 },
+  { t: "Sweet Spot", c: "amateur", d: 44, p: 9 },
+  { t: "Close Up", c: "solo", d: 45, p: 1 },
+  { t: "Whispers", c: "studio", d: 47, p: 3 },
+  { t: "Desire Lines", c: "premium", d: 7, p: 0 },
+  { t: "Touch of Pink", c: "solo", d: 49, p: 10 },
+  { t: "Deep Red", c: "studio", d: 50, p: 11 },
+  { t: "Lantern Light", c: "couples", d: 52, p: 2 },
+  { t: "Blush", c: "amateur", d: 55, p: 6 },
+  { t: "Fever Dream", c: "premium", d: 6, p: 4 },
+  { t: "Second Skin", c: "compilation", d: 58, p: 9 },
+  { t: "Night Shift", c: "studio", d: 60, p: 8 },
+];
+
+const EDITORS_PICKS = new Set(["slow-burn", "fever-dream", "desire-lines", "after-hours", "velvet-rope", "private-screening"]);
+
+/* Deterministic PRNG so the demo data is stable between builds. */
+function mulberry32(seed: number) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-});
-
-/* ------------------------------------------------------------------ */
-/* Helpers                                                             */
-/* ------------------------------------------------------------------ */
-
-export function slugify(s: string) {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
 }
 
-export function formatViews(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
-  return String(n);
+const slugify = (s: string) =>
+  s.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+
+function build(): Video[] {
+  const list = RAW.map((row, i): Video => {
+    const rng = mulberry32(i * 9301 + 49297);
+    const views = Math.floor(180_000 + rng() * 8_600_000);
+    const duration = Math.floor(190 + rng() * 1500); // ~3–28 min
+    const cat = categoryName(row.c);
+    const tag2 = TAG_POOL[Math.floor(rng() * TAG_POOL.length)];
+    const tag3 = TAG_POOL[(i * 5 + 3) % TAG_POOL.length];
+    const tags = Array.from(new Set([cat, tag2, tag3]));
+    return {
+      id: slugify(row.t),
+      title: row.t,
+      category: row.c,
+      duration,
+      durationLabel: formatDuration(duration),
+      views,
+      viewsLabel: formatViews(views),
+      daysAgo: row.d,
+      dateLabel: timeAgo(row.d),
+      likeRatio: Math.floor(78 + rng() * 20),
+      thumbnail: THUMB_LIST[(i * 7 + 2) % THUMB_LIST.length],
+      videoUrl: DEMO_SOURCES[i % DEMO_SOURCES.length],
+      tags,
+      performer: PERFORMERS[row.p % PERFORMERS.length],
+      description: DESCRIPTIONS[i % DESCRIPTIONS.length](cat),
+      score: 0,
+    } satisfies Video;
+  });
+
+  // Flags derived after the base pass.
+  for (const v of list) v.score = v.views / Math.pow(v.daysAgo + 2, 0.78);
+  const byScore = [...list].sort((a, b) => b.score - a.score);
+  byScore.slice(0, 12).forEach((v) => (v.trending = true));
+  for (const v of list) {
+    v.hot = v.views >= 4_200_000;
+    v.isNew = v.daysAgo <= 10;
+    v.editorsPick = EDITORS_PICKS.has(v.id);
+  }
+  const featured = list.find((v) => v.id === "velvet-hour");
+  if (featured) featured.featured = true;
+  return list;
 }
 
-export function formatDuration(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
+export let VIDEOS: Video[] = build();
+
+let byId = new Map(VIDEOS.map((v) => [v.id, v]));
+/** Resolve by slug (primary routing key) and fall back to the database uuid. */
+export const getVideoById = (id: string) => byId.get(id) ?? VIDEOS.find((v) => v.uuid === id);
+
+export const byCategory = (slug: string) => VIDEOS.filter((v) => v.category === slug);
+export const categoryCount = (slug: string) => byCategory(slug).length;
+
+/* ── Static rails (unchanged behaviour) ── */
+export let popularVideos = [...VIDEOS].sort((a, b) => b.views - a.views);
+export let newVideos = [...VIDEOS].sort((a, b) => a.daysAgo - b.daysAgo);
+export let mostViewed = popularVideos.slice(0, 10);
+
+/* ── Algorithm-driven discovery sections (limits enforced centrally) ── */
+const initialSections: DiscoverySections = rankSections(VIDEOS);
+export let featuredVideos: Video[] = initialSections.featured;   // max 5
+export let trendingVideos: Video[] = initialSections.trending;   // max 8
+export let risingVideos: Video[] = initialSections.rising;       // max 3
+export let editorsPicks: Video[] = initialSections.editors;      // max 5
+export let featuredVideo: Video = featuredVideos[0] ?? VIDEOS[0];
+
+export let TOTAL_VIDEOS = VIDEOS.length;
+export let TOTAL_VIEWS = VIDEOS.reduce((n, v) => n + v.views, 0);
+
+/**
+ * Hot-swap the built-in demo catalog for the live published catalog
+ * fetched from the CMS backend. Called once by bootstrapCatalog()
+ * before first render — every page derives from these live bindings.
+ */
+export function installCatalog(videos: Video[]) {
+  VIDEOS = videos;
+  byId = new Map(videos.map((v) => [v.id, v]));
+  popularVideos = [...videos].sort((a, b) => b.views - a.views);
+  newVideos = [...videos].sort((a, b) => a.daysAgo - b.daysAgo);
+  mostViewed = popularVideos.slice(0, 10);
+  applySections(rankSections(videos));
+  TOTAL_VIDEOS = videos.length;
+  TOTAL_VIEWS = videos.reduce((n, v) => n + v.views, 0);
 }
 
-export function timeAgo(days: number): string {
-  if (days <= 0) return "Today";
-  if (days === 1) return "1 day ago";
-  if (days < 7) return `${days} days ago`;
-  if (days < 30) return `${Math.round(days / 7)} week${days >= 14 ? "s" : ""} ago`;
-  return `${Math.round(days / 30)} month${days >= 60 ? "s" : ""} ago`;
+function applySections(next: DiscoverySections) {
+  featuredVideos = next.featured;
+  trendingVideos = next.trending;
+  risingVideos = next.rising;
+  editorsPicks = next.editors;
+  featuredVideo = next.featured[0] ?? VIDEOS[0];
 }
 
-export function categoryBySlug(slug: string) {
-  return CATEGORIES.find((c) => c.slug === slug);
+/**
+ * Install the server-ranked line-ups produced by the analytics scoring
+ * engine (`/api/public/discovery`). Ordering and limits come straight
+ * from the algorithm; unresolved ids are skipped.
+ */
+export function applyDiscovery(ids: {
+  featured: string[];
+  trending: string[];
+  rising: string[];
+  editors: string[];
+}) {
+  const ranked = sectionsFromIds(VIDEOS, ids);
+  const local = rankSections(VIDEOS);
+  // Fall back per-section so a cold analytics window never blanks a rail.
+  applySections({
+    featured: ranked.featured.length ? ranked.featured : local.featured,
+    trending: ranked.trending.length ? ranked.trending : local.trending,
+    rising: ranked.rising.length ? ranked.rising : local.rising,
+    editors: ranked.editors,
+  });
 }
 
-/** Simple trending score: recency-weighted views. */
-export function trendingScore(v: Video): number {
-  return v.views / Math.pow(v.daysAgo + 1.4, 1.35);
+/** Merge backend categories into the display catalog (names, blurbs, gradients, covers). */
+export function mergeRemoteCategories(
+  remote: { slug: string; name: string; blurb: string | null; gradient: string | null; image: string | null }[]
+) {
+  const fallbackImages = Object.values(THUMBS);
+  for (const [i, rc] of remote.entries()) {
+    if (rc.slug === "trending" || rc.slug === "popular" || rc.slug === "new") continue;
+    const existing = CATEGORIES.find((c) => c.slug === rc.slug && !c.href);
+    if (existing) {
+      existing.blurb = rc.blurb || existing.blurb;
+      existing.gradient = rc.gradient || existing.gradient;
+      if (rc.image) existing.image = rc.image;
+    } else {
+      CATEGORIES.push({
+        slug: rc.slug,
+        name: rc.name,
+        blurb: rc.blurb ?? "",
+        gradient: rc.gradient ?? "from-zinc-500/70 via-zinc-800/40",
+        image: rc.image ?? fallbackImages[(i * 7 + 3) % fallbackImages.length],
+      });
+    }
+  }
+  categoryBySlug.clear();
+  CATEGORIES.forEach((c) => categoryBySlug.set(c.slug, c));
+  BROWSE_CATEGORIES.length = 0;
+  BROWSE_CATEGORIES.push(...CATEGORIES.filter((c) => !c.href));
 }
 
-export function formatBytes(bytes: number): string {
-  if (!bytes) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+/** Category neighbours first, then trending, then everything else. */
+export function relatedVideos(video: Video, count = 10): Video[] {
+  const seen = new Set([video.id]);
+  const out: Video[] = [];
+  const push = (v: Video) => {
+    if (out.length >= count || seen.has(v.id)) return;
+    seen.add(v.id);
+    out.push(v);
+  };
+  byCategory(video.category)
+    .sort((a, b) => b.views - a.views)
+    .forEach(push);
+  trendingVideos.forEach(push);
+  popularVideos.forEach(push);
+  return out.slice(0, count);
 }
+
+export const popularTags = [
+  "Cinematic", "4K", "Slow Burn", "Neon", "Candlelit", "Exclusive",
+  "Studio Cut", "Late Night", "Series", "Remastered",
+];
+
+/** Client-side search over title, category, tags, performer and duration. */
+export function searchVideos(query: string): Video[] {
+  const tokens = query.toLowerCase().split(/[^a-z0-9:]+/).filter(Boolean);
+  if (!tokens.length) return [];
+  const scored: { v: Video; s: number }[] = [];
+  for (const v of VIDEOS) {
+    const hay =
+      `${v.title} ${categoryName(v.category)} ${v.tags.join(" ")} ${v.performer} ${v.durationLabel}`.toLowerCase();
+    let s = 0;
+    let ok = true;
+    for (const t of tokens) {
+      if (!hay.includes(t)) {
+        ok = false;
+        break;
+      }
+      if (v.title.toLowerCase().includes(t)) s += 3;
+      else if (v.tags.some((tag) => tag.toLowerCase().includes(t))) s += 2;
+      else s += 1;
+    }
+    if (ok) scored.push({ v, s: s + v.views / 1e8 });
+  }
+  return scored.sort((a, b) => b.s - a.s).map((x) => x.v);
+}
+
+/** Lightweight suggestions for the search overlay. */
+export function suggest(query: string, limit = 7): { label: string; kind: "video" | "category" | "tag"; id?: string }[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const out: { label: string; kind: "video" | "category" | "tag"; id?: string }[] = [];
+  for (const c of CATEGORIES) {
+    if (c.name.toLowerCase().includes(q)) out.push({ label: c.name, kind: "category" });
+  }
+  for (const tag of TAG_POOL) {
+    if (tag.toLowerCase().includes(q) && !out.some((o) => o.label === tag)) out.push({ label: tag, kind: "tag" });
+  }
+  for (const v of popularVideos) {
+    if (v.title.toLowerCase().includes(q)) out.push({ label: v.title, kind: "video", id: v.id });
+    if (out.length >= limit) break;
+  }
+  return out.slice(0, limit);
+}
+
+export const demoNotice =
+  "An 18+ adult-content website featuring videos and media intended exclusively for adults. Please use the website responsibly and ensure your access complies with applicable laws in your jurisdiction.";

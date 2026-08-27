@@ -1,8 +1,6 @@
-# EroBabe — robots.txt
-# Adults-only website (18+). RTA labelled via HTML meta tags.
+# EroBabe — demo adult-only interface (fictional content)
 User-agent: *
 Allow: /
-Disallow: /admin
-Disallow: /api
+Disallow: /search
 
-Sitemap: https://erobabe.com/sitemap.xml
+Sitemap: https://erobabe.example.com/sitemap.xml

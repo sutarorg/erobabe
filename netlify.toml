@@ -1,15 +1,32 @@
-# EroBabe — Netlify configuration
 [build]
   command = "npm run build"
   publish = "dist"
+  functions = "netlify/functions"
 
-# Serverless API → single router function (see netlify/functions/api.ts)
+[functions]
+  node_bundler = "esbuild"
+
+# Admin/public API → serverless function (kept before the SPA fallback)
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
+  force = true
 
-# SPA fallback — client-side routes like /watch/:id must serve index.html
+# Dynamic SEO assets (generated from the live published catalog)
+[[redirects]]
+  from = "/sitemap.xml"
+  to = "/.netlify/functions/api/sitemap.xml"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/robots.txt"
+  to = "/.netlify/functions/api/robots.txt"
+  status = 200
+  force = true
+
+# SPA fallback so /watch/:id, /admin, /category/:slug never 404
 [[redirects]]
   from = "/*"
   to = "/index.html"
