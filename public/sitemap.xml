@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Replace the host below with your production domain before launch. -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://erobabe.example.com/</loc><priority>1.0</priority></url>
-  <url><loc>https://erobabe.example.com/explore</loc><priority>0.8</priority></url>
-  <url><loc>https://erobabe.example.com/trending</loc><priority>0.9</priority></url>
-  <url><loc>https://erobabe.example.com/categories</loc><priority>0.8</priority></url>
-  <url><loc>https://erobabe.example.com/popular</loc><priority>0.7</priority></url>
-  <url><loc>https://erobabe.example.com/new</loc><priority>0.7</priority></url>
-  <url><loc>https://erobabe.example.com/legal/privacy</loc><priority>0.3</priority></url>
-  <url><loc>https://erobabe.example.com/legal/terms</loc><priority>0.3</priority></url>
-  <url><loc>https://erobabe.example.com/legal/dmca</loc><priority>0.3</priority></url>
+  <url><loc>https://erobabe.com/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>
+  <url><loc>https://erobabe.com/trending</loc><changefreq>hourly</changefreq><priority>0.9</priority></url>
+  <url><loc>https://erobabe.com/popular</loc><changefreq>daily</changefreq><priority>0.8</priority></url>
+  <url><loc>https://erobabe.com/new</loc><changefreq>hourly</changefreq><priority>0.8</priority></url>
+  <url><loc>https://erobabe.com/explore</loc><changefreq>daily</changefreq><priority>0.8</priority></url>
+  <url><loc>https://erobabe.com/categories</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://erobabe.com/category/amateur</loc><changefreq>daily</changefreq><priority>0.6</priority></url>
+  <url><loc>https://erobabe.com/category/hardcore</loc><changefreq>daily</changefreq><priority>0.6</priority></url>
+  <url><loc>https://erobabe.com/category/lesbian</loc><changefreq>daily</changefreq><priority>0.6</priority></url>
+  <url><loc>https://erobabe.com/category/massage</loc><changefreq>daily</changefreq><priority>0.6</priority></url>
+  <url><loc>https://erobabe.com/category/blonde</loc><changefreq>daily</changefreq><priority>0.6</priority></url>
 </urlset>

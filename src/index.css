@@ -1,173 +1,199 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
 @theme {
-  /* ── EroBabe palette: near-black inks, warm fog text, rose→violet accent ── */
-  --color-ink-950: #050506;
-  --color-ink-900: #0a0a0c;
-  --color-ink-850: #0e0e11;
-  --color-ink-800: #131316;
-  --color-ink-750: #18181c;
-  --color-ink-700: #1e1e23;
-  --color-ink-600: #2a2a31;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
 
-  --color-fog-100: #f5f1f4;
-  --color-fog-300: #d9d2d8;
-  --color-fog-400: #bdb3bc;
-  --color-fog-500: #9d93a0;
-  --color-fog-600: #756c78;
+  --color-eb-950: #050505;
+  --color-eb-900: #0a0a0b;
+  --color-eb-850: #0f0f11;
+  --color-eb-800: #141416;
+  --color-eb-750: #1a1a1d;
+  --color-eb-700: #232327;
+  --color-eb-line: rgba(255, 255, 255, 0.07);
+  --color-eb-line-strong: rgba(255, 255, 255, 0.12);
 
-  --color-brand-300: #fda4c8;
-  --color-brand-400: #fb6fa8;
-  --color-brand-500: #f43f7f;
-  --color-brand-600: #dd1f66;
-  --color-brand-700: #b3124f;
+  --color-eb-rose: #ff2d78;
+  --color-eb-violet: #a855f7;
+  --color-eb-rose-soft: #ff5c96;
 
-  --font-sans: "Outfit", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-
-  --animate-fade-in: fade-in 0.4s ease both;
-  --animate-fade-up: fade-up 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
-  --animate-scale-in: scale-in 0.16s ease-out both;
-  --animate-zoom-slow: zoom-slow 16s ease-in-out infinite alternate;
-  --animate-shimmer: shimmer 1.6s linear infinite;
-  --animate-pulse-soft: pulse-soft 2.4s ease-in-out infinite;
-  --animate-flicker: flicker 3.5s ease-in-out infinite;
-
-  @keyframes fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-  @keyframes fade-up {
-    from { opacity: 0; transform: translateY(14px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes scale-in {
-    from { opacity: 0; transform: scale(0.96); }
-    to { opacity: 1; transform: scale(1); }
-  }
-  @keyframes zoom-slow {
-    from { transform: scale(1); }
-    to { transform: scale(1.08); }
-  }
-  @keyframes shimmer {
-    from { background-position: 200% 0; }
-    to { background-position: -200% 0; }
-  }
-  @keyframes pulse-soft {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.55; }
-  }
-  @keyframes flicker {
-    0%, 100% { opacity: 1; }
-    8% { opacity: 0.82; }
-    9% { opacity: 1; }
-    52% { opacity: 0.92; }
-    53% { opacity: 1; }
-  }
+  --color-eb-text: #f7f7f8;
+  --color-eb-muted: #9a9aa3;
+  --color-eb-faint: #6d6d76;
 }
 
-/* Keyframes referenced directly by utilities below */
-@keyframes shimmer {
-  from { background-position: 200% 0; }
-  to { background-position: -200% 0; }
+html {
+  scroll-behavior: smooth;
 }
 
-@layer base {
-  html {
-    color-scheme: dark;
-    scroll-behavior: smooth;
-  }
-  body {
-    @apply bg-ink-950 text-fog-100 font-sans antialiased;
-    text-rendering: optimizeLegibility;
-  }
-  ::selection {
-    background: rgba(244, 63, 127, 0.35);
-    color: #fff;
-  }
-  :focus-visible {
-    outline: 2px solid rgba(244, 63, 127, 0.75);
-    outline-offset: 2px;
-    border-radius: 6px;
-  }
-  *::-webkit-scrollbar {
-    width: 10px;
-    height: 8px;
-  }
-  *::-webkit-scrollbar-thumb {
-    background: #232329;
-    border-radius: 999px;
-    border: 2px solid #050506;
-  }
-  *::-webkit-scrollbar-thumb:hover {
-    background: #33333b;
-  }
-  *::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  input[type="range"] {
-    accent-color: #f43f7f;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-      animation-duration: 0.01ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 0.01ms !important;
-      scroll-behavior: auto !important;
-    }
-  }
+body {
+  background: var(--color-eb-950);
+  color: var(--color-eb-text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
 }
 
-/* Hide scrollbars while keeping scroll — used by carousels & chip rows */
-@utility no-scrollbar {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  &::-webkit-scrollbar {
-    display: none;
-  }
+::selection {
+  background: rgba(255, 45, 120, 0.35);
+  color: #fff;
 }
 
-@utility text-gradient {
-  background: linear-gradient(92deg, #fb6fa8 0%, #a78bfa 55%, #67e8f9 115%);
+/* ------- scrollbar ------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0a0b;
+}
+::-webkit-scrollbar-thumb {
+  background: #26262b;
+  border-radius: 8px;
+  border: 2px solid #0a0a0b;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a41;
+}
+
+/* ------- helpers ------- */
+.font-display {
+  font-family: var(--font-display);
+}
+
+.text-gradient {
+  background: linear-gradient(100deg, #ff2d78 0%, #c455f7 55%, #7c5cff 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
-@utility glass {
-  background: rgba(9, 9, 11, 0.74);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
+.glass {
+  background: rgba(12, 12, 14, 0.72);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
 }
 
-/* Seek-bar preview: show the frame only — never native media chrome. */
-.eb-no-media-ui::-webkit-media-controls,
-.eb-no-media-ui::-webkit-media-controls-enclosure,
-.eb-no-media-ui::-webkit-media-controls-panel,
-.eb-no-media-ui::-webkit-media-controls-start-playback-button,
-.eb-no-media-ui::-webkit-media-controls-overlay-play-button,
-.eb-no-media-ui::-webkit-media-controls-timeline,
-.eb-no-media-ui::-webkit-media-controls-current-time-display,
-.eb-no-media-ui::-webkit-media-controls-time-remaining-display {
-  display: none !important;
-  -webkit-appearance: none;
-  appearance: none;
-  opacity: 0 !important;
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
-/* Shimmering loading block */
-@utility skeleton {
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.ring-focus:focus-visible {
+  outline: 2px solid rgba(255, 45, 120, 0.8);
+  outline-offset: 2px;
+}
+
+.outline-num {
+  color: transparent;
+  -webkit-text-stroke: 1.5px rgba(255, 255, 255, 0.22);
+}
+.outline-num-accent {
+  color: transparent;
+  -webkit-text-stroke: 1.5px rgba(255, 45, 120, 0.65);
+}
+
+/* ------- keyframes ------- */
+@keyframes eb-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes eb-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes eb-shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+@keyframes eb-ken-burns {
+  from {
+    transform: scale(1) translateX(0);
+  }
+  to {
+    transform: scale(1.08) translateX(-1.5%);
+  }
+}
+@keyframes eb-pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.8);
+  }
+}
+
+.anim-fade-up {
+  animation: eb-fade-up 0.5s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+.anim-fade {
+  animation: eb-fade 0.35s ease both;
+}
+.anim-ken-burns {
+  animation: eb-ken-burns 14s ease-in-out infinite alternate;
+}
+
+.skeleton {
   position: relative;
   overflow: hidden;
-  background: rgba(30, 30, 35, 0.6);
-  &::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.06) 50%, transparent 80%);
-    background-size: 200% 100%;
-    animation: shimmer 1.6s linear infinite;
+  background: #141416;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.055), transparent);
+  background-size: 400px 100%;
+  animation: eb-shimmer 1.4s infinite;
+}
+
+.live-dot {
+  animation: eb-pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* native video controls tint */
+video {
+  accent-color: #ff2d78;
+}
+
+input[type="range"] {
+  accent-color: #ff2d78;
+}
+
+/* ------- reduced motion ------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -1,339 +1,301 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { Link, Navigate, Route, Routes, useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
+/**
+ * Admin module shell: auth guard, login screen, professional CMS layout,
+ * and the admin route table.
+ */
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Link, Navigate, NavLink, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import {
-  BarChart3, Film, Flame, LayoutGrid, LogOut, Menu, Settings as SettingsIcon,
-  UploadCloud, X, LayoutDashboard, type LucideIcon,
+  Activity, BarChart3, ExternalLink, Eye, Film, FolderOpen, HardDrive,
+  LayoutDashboard, Lock, LogOut, Menu, Search, Settings, Tags, Upload, X,
 } from "lucide-react";
-import { api } from "./api";
-import { Logo } from "@/components/Brand";
-import { applySEO } from "@/lib/seo";
-import { cn } from "@/lib/format";
-
-/* ── auth context ── */
-interface AuthState {
-  user: { username: string } | null;
-  checked: boolean;
-  refresh: () => Promise<void>;
-  logout: () => Promise<void>;
-}
-const AuthCtx = createContext<AuthState | null>(null);
-export const useAuth = () => useContext(AuthCtx)!;
-
-function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<{ username: string } | null>(null);
-  const [checked, setChecked] = useState(false);
-
-  const refresh = useCallback(async () => {
-    try {
-      const { user } = await api.me();
-      setUser(user);
-    } catch {
-      setUser(null);
-    } finally {
-      setChecked(true);
-    }
-  }, []);
-
-  const logout = useCallback(async () => {
-    try {
-      await api.logout();
-    } catch {
-      /* cookie expires anyway */
-    }
-    setUser(null);
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    const force = () => setUser(null);
-    window.addEventListener("eb-admin-unauthorized", force);
-    return () => window.removeEventListener("eb-admin-unauthorized", force);
-  }, []);
-
-  return <AuthCtx.Provider value={{ user, checked, refresh, logout }}>{children}</AuthCtx.Provider>;
-}
-
-/* ── login ── */
-function Login() {
-  const { user, checked, refresh } = useAuth();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  if (checked && user) {
-    return <Navigate to={(location.state as { from?: string } | null)?.from ?? "/admin"} replace />;
-  }
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await api.login(username.trim(), password);
-      await refresh();
-      navigate((location.state as { from?: string } | null)?.from ?? "/admin", { replace: true });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Sign-in failed");
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink-950 p-4">
-      <div className="absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_20%,rgba(244,63,127,0.12),transparent_70%)]" aria-hidden />
-      <form
-        onSubmit={submit}
-        className="relative w-full max-w-sm rounded-3xl border border-white/10 bg-ink-900/80 p-8 shadow-2xl backdrop-blur-xl animate-scale-in"
-      >
-        <div className="flex items-center justify-between">
-          <Logo />
-        </div>
-        <h1 className="mt-6 text-lg font-semibold tracking-tight text-white">Admin sign in</h1>
-        <p className="mt-1 text-xs text-fog-500">Restricted area — authorized staff only.</p>
-
-        <div className="mt-6 space-y-4">
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-fog-500">Username</span>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              required
-              className="h-11 w-full rounded-xl border border-white/10 bg-ink-850 px-3.5 text-sm text-white outline-none transition focus:border-brand-500/50 focus:ring-2 focus:ring-brand-500/20"
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-fog-500">Password</span>
-            <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-              className="h-11 w-full rounded-xl border border-white/10 bg-ink-850 px-3.5 text-sm text-white outline-none transition focus:border-brand-500/50 focus:ring-2 focus:ring-brand-500/20"
-            />
-          </label>
-        </div>
-
-        {error && (
-          <p className="mt-4 rounded-xl border border-red-500/25 bg-red-500/8 px-3.5 py-2.5 text-xs font-medium text-red-300" role="alert">
-            {error}
-          </p>
-        )}
-
-        <button
-          type="submit"
-          disabled={busy}
-          className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-xl bg-gradient-to-r from-brand-500 to-violet-600 text-sm font-semibold text-white transition hover:brightness-110 active:scale-[0.98] disabled:opacity-60"
-        >
-          {busy ? "Signing in…" : "Sign in"}
-        </button>
-
-        <p className="mt-5 text-center text-[11px] leading-relaxed text-fog-600">
-          Credentials are configured via environment variables — see README.
-        </p>
-        <Link to="/" className="mt-3 block text-center text-[11px] font-medium text-fog-500 transition hover:text-white">
-          ← Back to public site
-        </Link>
-      </form>
-    </div>
-  );
-}
-
-/* ── layout ── */
-const NAV: { to: string; icon: LucideIcon; label: string; end?: boolean }[] = [
-  { to: "/admin", icon: LayoutDashboard, label: "Dashboard", end: true },
-  { to: "/admin/videos", icon: Film, label: "Videos" },
-  { to: "/admin/upload", icon: UploadCloud, label: "Upload" },
-  { to: "/admin/categories", icon: LayoutGrid, label: "Categories & Tags" },
-  { to: "/admin/analytics", icon: BarChart3, label: "Analytics" },
-  { to: "/admin/settings", icon: SettingsIcon, label: "Settings" },
-];
-
-function SideNav({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    <nav className="flex flex-col gap-1" onClick={onNavigate} aria-label="Admin navigation">
-      {NAV.map(({ to, icon: Icon, label, end }) => (
-        <NavLink
-          key={to}
-          to={to}
-          end={end}
-          className={({ isActive }) =>
-            cn(
-              "flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition",
-              isActive
-                ? "bg-gradient-to-r from-brand-500/15 to-violet-600/10 text-white ring-1 ring-brand-500/25"
-                : "text-fog-400 hover:bg-white/5 hover:text-white"
-            )
-          }
-        >
-          <Icon className="size-4.5" aria-hidden />
-          {label}
-        </NavLink>
-      ))}
-    </nav>
-  );
-}
-
-function AdminLayout() {
-  const { user, logout } = useAuth();
-  const [navOpen, setNavOpen] = useState(false);
-  const location = useLocation();
-  useEffect(() => setNavOpen(false), [location.pathname]);
-
-  return (
-    <div className="min-h-screen bg-ink-950">
-      {/* Desktop sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r border-white/6 bg-ink-900/50 backdrop-blur lg:flex">
-        <div className="flex h-16 items-center border-b border-white/6 px-4">
-          <Link to="/admin" aria-label="EroBabe admin">
-            <Logo />
-          </Link>
-          <span className="ml-2 rounded-md bg-brand-500/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-brand-300">CMS</span>
-        </div>
-        <div className="flex-1 overflow-y-auto p-3.5">
-          <SideNav />
-        </div>
-        <div className="border-t border-white/6 p-3.5">
-          <div className="flex items-center justify-between gap-2 rounded-xl bg-ink-800/70 px-3.5 py-3">
-            <div className="min-w-0">
-              <p className="truncate text-xs font-semibold text-white">{user?.username}</p>
-              <p className="text-[10px] text-fog-600">Administrator</p>
-            </div>
-            <button
-              type="button"
-              onClick={logout}
-              aria-label="Sign out"
-              className="grid size-8.5 place-items-center rounded-lg text-fog-500 transition hover:bg-red-500/10 hover:text-red-400"
-            >
-              <LogOut className="size-4" aria-hidden />
-            </button>
-          </div>
-          <Link to="/" className="mt-2 flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-medium text-fog-500 transition hover:text-white">
-            <Flame className="size-3.5" aria-hidden />
-            View public site
-          </Link>
-        </div>
-      </aside>
-
-      {/* Mobile topbar */}
-      <header className="glass sticky top-0 z-40 flex h-14 items-center gap-2 border-b border-white/6 px-3 lg:hidden">
-        <button
-          type="button"
-          aria-label="Open navigation"
-          onClick={() => setNavOpen(true)}
-          className="grid size-10 place-items-center rounded-full text-fog-400 hover:bg-white/5 hover:text-white"
-        >
-          <Menu className="size-5" aria-hidden />
-        </button>
-        <Link to="/admin" className="ml-1"><Logo /></Link>
-        <span className="ml-auto" />
-        <button
-          type="button"
-          onClick={logout}
-          aria-label="Sign out"
-          className="grid size-10 place-items-center rounded-full text-fog-400 hover:bg-white/5 hover:text-white"
-        >
-          <LogOut className="size-4.5" aria-hidden />
-        </button>
-      </header>
-
-      {/* Mobile drawer */}
-      {navOpen && (
-        <div className="fixed inset-0 z-[86] lg:hidden" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm animate-fade-in" onClick={() => setNavOpen(false)} />
-          <div className="glass absolute inset-y-0 left-0 w-72 max-w-[85vw] bg-ink-900/95 p-4 animate-fade-in">
-            <div className="mb-4 flex items-center justify-between">
-              <Logo />
-              <button type="button" aria-label="Close" onClick={() => setNavOpen(false)} className="grid size-9 place-items-center rounded-full text-fog-500 hover:bg-white/5 hover:text-white">
-                <X className="size-5" aria-hidden />
-              </button>
-            </div>
-            <SideNav onNavigate={() => setNavOpen(false)} />
-            <Link to="/" className="mt-4 flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-medium text-fog-500 hover:text-white">
-              <Flame className="size-3.5" aria-hidden />
-              View public site
-            </Link>
-          </div>
-        </div>
-      )}
-
-      <main className="overflow-x-hidden lg:pl-60">
-        <div className="mx-auto w-full max-w-[1200px] min-w-0 px-4 py-6 md:px-8 md:py-8">
-          <Outlet />
-        </div>
-      </main>
-    </div>
-  );
-}
-
-/* ── guard ── */
-function RequireAuth() {
-  const { user, checked } = useAuth();
-  const location = useLocation();
-  if (!checked) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-ink-950">
-        <div className="flex items-center gap-3 text-fog-500">
-          <span className="size-6 animate-spin rounded-full border-2 border-fog-600 border-t-brand-400" aria-hidden />
-          <span className="text-sm">Checking session…</span>
-        </div>
-      </div>
-    );
-  }
-  if (!user) return <Navigate to="/admin/login" state={{ from: location.pathname }} replace />;
-  return <Outlet />;
-}
+import { AdminProvider, useAdmin } from "./store";
+import { AdminDashboard } from "./dashboard";
+import { AdminVideosPage, AdminVideoEditorPage } from "./videos";
+import { AdminUploadPage } from "./upload";
+import {
+  AdminActivityPage, AdminAnalyticsPage, AdminCategoriesPage,
+  AdminSettingsPage, AdminStoragePage, AdminTagsPage,
+} from "./misc";
+import { cn } from "../utils/cn";
+import { Button } from "../components/ui";
 
 export default function AdminApp() {
-  useEffect(() => {
-    applySEO({ title: "Admin — EroBabe", robots: "noindex, nofollow" });
-    return () => applySEO();
-  }, []);
-
   return (
-    <AuthProvider>
+    <AdminProvider>
       <Routes>
-        <Route path="login" element={<Login />} />
+        <Route path="login" element={<LoginPage />} />
         <Route element={<RequireAuth />}>
           <Route element={<AdminLayout />}>
-            <Route index element={<Lazy name="dashboard" />} />
-            <Route path="videos" element={<Lazy name="videos" />} />
-            <Route path="videos/:id" element={<Lazy name="edit" />} />
-            <Route path="upload" element={<Lazy name="upload" />} />
-            <Route path="categories" element={<Lazy name="taxonomy" />} />
-            <Route path="analytics" element={<Lazy name="analytics" />} />
-            <Route path="settings" element={<Lazy name="settings" />} />
+            <Route index element={<AdminDashboard />} />
+            <Route path="videos" element={<AdminVideosPage />} />
+            <Route path="videos/new" element={<AdminUploadPage />} />
+            <Route path="videos/:id/edit" element={<AdminVideoEditorPage />} />
+            <Route path="categories" element={<AdminCategoriesPage />} />
+            <Route path="tags" element={<AdminTagsPage />} />
+            <Route path="analytics" element={<AdminAnalyticsPage />} />
+            <Route path="storage" element={<AdminStoragePage />} />
+            <Route path="activity" element={<AdminActivityPage />} />
+            <Route path="settings" element={<AdminSettingsPage />} />
             <Route path="*" element={<Navigate to="/admin" replace />} />
           </Route>
         </Route>
       </Routes>
-    </AuthProvider>
+    </AdminProvider>
   );
 }
 
-/* Route-level code splitting inside the admin bundle. */
-import { lazy, Suspense } from "react";
-const Dashboard = lazy(() => import("./Dashboard"));
-const VideosList = lazy(() => import("./VideosList"));
-const VideoEdit = lazy(() => import("./VideoEdit"));
-const UploadWizard = lazy(() => import("./UploadWizard"));
-const Taxonomy = lazy(() => import("./Taxonomy"));
-const Analytics = lazy(() => import("./Analytics"));
-const Settings = lazy(() => import("./Settings"));
+/* ------------------------------------------------------------------ */
+/* Auth guard                                                          */
+/* ------------------------------------------------------------------ */
 
-function Lazy({ name }: { name: "dashboard" | "videos" | "edit" | "upload" | "taxonomy" | "analytics" | "settings" }) {
-  const map = { dashboard: Dashboard, videos: VideosList, edit: VideoEdit, upload: UploadWizard, taxonomy: Taxonomy, analytics: Analytics, settings: Settings };
-  const C = map[name];
+function RequireAuth() {
+  const { session } = useAdmin();
+  const location = useLocation();
+  if (!session) return <Navigate to="/admin/login" state={{ from: location.pathname }} replace />;
+  return <Outlet />;
+}
+
+/* ------------------------------------------------------------------ */
+/* Login                                                               */
+/* ------------------------------------------------------------------ */
+
+function LoginPage() {
+  const { login, session, demo } = useAdmin();
+  const navigate = useNavigate();
+  const location = useLocation() as { state?: { from?: string } };
+  const [user, setUser] = useState("");
+  const [pass, setPass] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (session) return <Navigate to={location.state?.from ?? "/admin"} replace />;
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    // deliberate delay to blunt brute-force UX parity with server timing
+    setTimeout(() => {
+      const res = login(user.trim(), pass);
+      setBusy(false);
+      if (res.ok) navigate(location.state?.from ?? "/admin", { replace: true });
+      else setError(res.error ?? "Invalid credentials");
+    }, 350);
+  };
+
   return (
-    <Suspense fallback={<div className="flex items-center gap-3 py-20 text-fog-500"><span className="size-5 animate-spin rounded-full border-2 border-fog-600 border-t-brand-400" /><span className="text-sm">Loading…</span></div>}>
-      <C />
-    </Suspense>
+    <div className="flex min-h-screen items-center justify-center bg-eb-950 p-5">
+      <div className="w-full max-w-sm">
+        <div className="anim-fade-up rounded-3xl border border-eb-line bg-eb-900 p-8 shadow-2xl">
+          <span className="mx-auto mb-6 flex h-13 w-13 items-center justify-center rounded-2xl bg-gradient-to-br from-eb-rose to-eb-violet font-display text-xl font-bold text-white shadow-lg shadow-eb-rose/30" style={{ height: 52, width: 52 }}>
+            e
+          </span>
+          <h1 className="font-display text-center text-xl font-bold text-white">
+            Ero<span className="text-gradient">Babe</span> Studio
+          </h1>
+          <p className="mt-1.5 mb-6 flex items-center justify-center gap-1.5 text-xs text-eb-muted">
+            <Lock size={11} /> Restricted area — authorized administrators only
+          </p>
+          <form onSubmit={submit} className="space-y-3.5">
+            <div>
+              <label htmlFor="eb-user" className="mb-1.5 block text-xs font-semibold text-eb-muted">
+                Username
+              </label>
+              <input
+                id="eb-user"
+                value={user}
+                onChange={(e) => setUser(e.target.value)}
+                autoComplete="username"
+                required
+                className="ring-focus h-11 w-full rounded-xl border border-eb-line bg-eb-850 px-3.5 text-sm text-white outline-none transition focus:border-eb-rose/50"
+              />
+            </div>
+            <div>
+              <label htmlFor="eb-pass" className="mb-1.5 block text-xs font-semibold text-eb-muted">
+                Password
+              </label>
+              <input
+                id="eb-pass"
+                type="password"
+                value={pass}
+                onChange={(e) => setPass(e.target.value)}
+                autoComplete="current-password"
+                required
+                className="ring-focus h-11 w-full rounded-xl border border-eb-line bg-eb-850 px-3.5 text-sm text-white outline-none transition focus:border-eb-rose/50"
+              />
+            </div>
+            {error && <p className="rounded-xl border border-red-500/25 bg-red-500/10 px-3.5 py-2.5 text-xs font-medium text-red-400">{error}</p>}
+            <Button size="lg" className="w-full" disabled={busy}>
+              {busy ? "Verifying…" : "Sign in"}
+            </Button>
+          </form>
+          {demo && (
+            <div className="mt-5 rounded-xl border border-amber-500/20 bg-amber-500/8 px-3.5 py-3 text-[11px] leading-relaxed text-amber-300/90">
+              <strong className="font-bold">Demo mode.</strong> Credentials: <code className="rounded bg-black/40 px-1">admin</code> / <code className="rounded bg-black/40 px-1">erobabe-demo</code>. In production this screen authenticates against the secure API with HttpOnly sessions — never localStorage.
+            </div>
+          )}
+        </div>
+        <Link to="/" className="mt-5 block text-center text-xs text-eb-faint transition hover:text-white">
+          ← Back to erobabe.com
+        </Link>
+      </div>
+    </div>
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* Layout                                                              */
+/* ------------------------------------------------------------------ */
+
+const SIDE: { to: string; label: string; icon: typeof Film; end?: boolean }[] = [
+  { to: "/admin", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/admin/videos", label: "Videos", icon: Film, end: true },
+  { to: "/admin/videos/new", label: "New Upload", icon: Upload },
+  { to: "/admin/categories", label: "Categories", icon: FolderOpen },
+  { to: "/admin/tags", label: "Tags", icon: Tags },
+  { to: "/admin/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/admin/storage", label: "Storage", icon: HardDrive },
+  { to: "/admin/activity", label: "Activity", icon: Activity },
+  { to: "/admin/settings", label: "Settings", icon: Settings },
+];
+
+function AdminLayout() {
+  const { session, state, logout, demo } = useAdmin();
+  const [mobileNav, setMobileNav] = useState(false);
+  const [query, setQuery] = useState("");
+  const navigate = useNavigate();
+  const location = useLocation();
+  useEffect(() => setMobileNav(false), [location.pathname]);
+
+  const onSearch = (e: FormEvent) => {
+    e.preventDefault();
+    if (query.trim()) navigate(`/admin/videos?q=${encodeURIComponent(query.trim())}`);
+  };
+
+  const sidebar = (
+    <div className="flex h-full flex-col">
+      <div className="flex h-16 items-center gap-2.5 border-b border-eb-line px-5">
+        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-eb-rose to-eb-violet font-display text-sm font-bold text-white">
+          e
+        </span>
+        <div>
+          <p className="font-display text-sm font-bold text-white">
+            Ero<span className="text-gradient">Babe</span>
+          </p>
+          <p className="text-[9px] font-bold tracking-widest text-eb-faint uppercase">Studio CMS</p>
+        </div>
+      </div>
+      <nav className="flex-1 space-y-0.5 overflow-y-auto p-3 no-scrollbar" aria-label="Admin">
+        {SIDE.map((s) => (
+          <NavLink
+            key={s.to + s.label}
+            to={s.to}
+            end={s.end}
+            className={({ isActive }) =>
+              cn(
+                "ring-focus flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[13px] font-medium transition",
+                isActive ? "bg-white/7 text-white" : "text-eb-muted hover:bg-white/4 hover:text-white"
+              )
+            }
+          >
+            <s.icon size={16} className="shrink-0" />
+            {s.label}
+            {s.label === "Videos" && (
+              <span className="ml-auto rounded-full bg-eb-800 px-2 py-0.5 text-[10px] font-bold text-eb-muted">{state.videos.length}</span>
+            )}
+          </NavLink>
+        ))}
+      </nav>
+      <div className="space-y-0.5 border-t border-eb-line p-3">
+        <Link to="/" className="ring-focus flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-[13px] font-medium text-eb-muted transition hover:bg-white/4 hover:text-white">
+          <ExternalLink size={16} /> View website
+        </Link>
+        <button onClick={logout} className="ring-focus flex w-full cursor-pointer items-center gap-3 rounded-xl px-3.5 py-2.5 text-[13px] font-medium text-eb-muted transition hover:bg-red-500/10 hover:text-red-400">
+          <LogOut size={16} /> Log out
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-eb-950">
+      {/* sidebar */}
+      <aside className="fixed top-0 bottom-0 left-0 z-40 hidden w-60 border-r border-eb-line bg-eb-900 lg:block">{sidebar}</aside>
+
+      {/* mobile drawer */}
+      {mobileNav && (
+        <div className="fixed inset-0 z-[70] lg:hidden">
+          <div className="anim-fade absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setMobileNav(false)} />
+          <div className="anim-fade-up absolute top-0 bottom-0 left-0 w-64 border-r border-eb-line bg-eb-900">{sidebar}</div>
+        </div>
+      )}
+
+      <div className="lg:pl-60">
+        {/* topbar */}
+        <header className="sticky top-0 z-40 flex h-16 items-center gap-3 border-b border-eb-line glass px-4 sm:px-6">
+          <button onClick={() => setMobileNav(true)} aria-label="Open menu" className="ring-focus flex h-9 w-9 cursor-pointer items-center justify-center rounded-full text-eb-muted hover:bg-white/5 hover:text-white lg:hidden">
+            {mobileNav ? <X size={18} /> : <Menu size={18} />}
+          </button>
+          <form onSubmit={onSearch} role="search" className="flex h-10 w-full max-w-md items-center gap-2 rounded-full border border-eb-line bg-eb-850 px-4 transition focus-within:border-eb-rose/50">
+            <Search size={14} className="shrink-0 text-eb-faint" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search videos, IDs, slugs, tags…"
+              aria-label="Search admin videos"
+              className="h-full min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-eb-faint"
+            />
+          </form>
+          <div className="ml-auto flex items-center gap-3">
+            {demo && (
+              <span className="hidden items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[10px] font-bold tracking-widest text-amber-400 uppercase sm:inline-flex">
+                <Eye size={11} /> Demo mode
+              </span>
+            )}
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-eb-rose to-eb-violet text-xs font-bold text-white" title={session?.user}>
+              {session?.user?.slice(0, 2).toUpperCase()}
+            </span>
+          </div>
+        </header>
+
+        <main className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 sm:py-8">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Shared admin atoms                                                  */
+/* ------------------------------------------------------------------ */
+
+export function PageHeader({ title, sub, actions }: { title: string; sub?: string; actions?: ReactNode }) {
+  return (
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h1 className="font-display text-xl font-bold tracking-tight text-white sm:text-2xl">{title}</h1>
+        {sub && <p className="mt-1 text-sm text-eb-muted">{sub}</p>}
+      </div>
+      {actions && <div className="flex items-center gap-2">{actions}</div>}
+    </div>
+  );
+}
+
+export function Card({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cn("rounded-2xl border border-eb-line bg-eb-900/60", className)}>{children}</div>;
+}
+
+export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-semibold text-eb-muted">{label}</span>
+      {children}
+      {hint && <span className="mt-1 block text-[11px] text-eb-faint">{hint}</span>}
+    </label>
+  );
+}
+
+export const inputCls =
+  "ring-focus h-10 w-full rounded-xl border border-eb-line bg-eb-850 px-3.5 text-sm text-white outline-none transition focus:border-eb-rose/50 placeholder:text-eb-faint";
+export const areaCls =
+  "ring-focus w-full rounded-xl border border-eb-line bg-eb-850 px-3.5 py-2.5 text-sm text-white outline-none transition focus:border-eb-rose/50 placeholder:text-eb-faint";

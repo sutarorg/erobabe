@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# builds
+dist/
+dist-ssr/
+*.local
+
+# environment / secrets — never commit
+.env
+.env.*
+!.env.example
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+
+# serverless build caches
+.netlify/
+.vercel/
