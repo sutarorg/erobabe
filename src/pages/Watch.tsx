@@ -3,9 +3,10 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useUi } from "@/context/ui";
 import {
   BadgeCheck, Bookmark, CalendarDays, ChevronDown, Eye, Flame, Link2, Play,
-  Share2, ThumbsUp, VideoOff, X, type LucideIcon,
+  Share2, Sparkles, ThumbsUp, VideoOff, X, type LucideIcon,
 } from "lucide-react";
-import { CAPTIONS_URL, categoryName, getVideoById, relatedVideos, type Video } from "@/data/videos";
+import { CAPTIONS_URL, categoryName, getVideoById, type Video } from "@/data/videos";
+import { useRecommendations } from "@/lib/recommend";
 import { trackLike, trackProgress, trackView } from "@/data/dynamic";
 import { useHistory, useLikes, useSaved } from "@/hooks/store";
 import { absUrl, isoDuration, siteOrigin, useSEO, SITE_DESCRIPTION } from "@/lib/seo";
@@ -73,11 +74,10 @@ function RecoRow({ video }: { video: Video }) {
 const UP_NEXT_COUNT = 4;
 /** The mobile Up Next overlay appears this many seconds before the end. */
 const UP_NEXT_LEAD_SECONDS = 5;
-/**
- * Related videos: 4 × 5 = 20 on desktop and 2 × 10 = 20 on mobile.
- * View More reveals anything beyond this first page.
- */
-const RELATED_STEP = 20;
+/** Related: a 4 × 1 row on desktop, a 2 × 2 block on mobile. */
+const RELATED_COUNT = 4;
+/** Recommended: one page of 20 (4 × 5 desktop / 2 × 10 mobile). */
+const RECOMMENDED_STEP = 20;
 /** How many Up Next entries View More expands to. */
 const UP_NEXT_EXPANDED = 12;
 
@@ -195,6 +195,11 @@ export default function Watch() {
     trackProgress(id, s.watched, s.completion);
   }, []);
 
+  /* ── Personalized recommendations ── */
+  const recs = useRecommendations(video, { relatedCount: RELATED_COUNT, recommendedCount: 40 });
+  const [recommendedExpanded, setRecommendedExpanded] = useState(false);
+  const [upNextExpanded, setUpNextExpanded] = useState(false);
+
   /* ── Mobile Up Next overlay: appears shortly before the video ends ── */
   const [showUpNext, setShowUpNext] = useState(false);
   const upNextArmed = useRef(false);
@@ -225,6 +230,8 @@ export default function Watch() {
     upNextArmed.current = false;
     upNextDismissed.current = false;
     setShowUpNext(false);
+    setRecommendedExpanded(false);
+    setUpNextExpanded(false);
   }, [video?.id]);
 
   useEffect(() => {
@@ -272,22 +279,17 @@ export default function Watch() {
   const liked = likes.has(video.id);
   const isSaved = saved.has(video.id);
   const url = `${window.location.origin}/video/${video.id}`;
-  const related = relatedVideos(video, 40);
-  nextRef.current = related[0]?.id ?? null;
-  const upNext = related[0];
+  nextRef.current = recs.related[0]?.id ?? recs.recommended[0]?.id ?? null;
+  const upNext = recs.related[0] ?? recs.recommended[0];
 
   /* ── Expandable rails ── */
-  const [relatedExpanded, setRelatedExpanded] = useState(false);
-  const [upNextExpanded, setUpNextExpanded] = useState(false);
-  const relatedVisible = relatedExpanded ? related : related.slice(0, RELATED_STEP);
+  const upNextPool = [...recs.related, ...recs.recommended];
   const upNextItems = upNextExpanded
-    ? related.slice(0, UP_NEXT_EXPANDED)
-    : related.slice(0, UP_NEXT_COUNT);
-
-  useEffect(() => {
-    setRelatedExpanded(false);
-    setUpNextExpanded(false);
-  }, [video?.id]);
+    ? upNextPool.slice(0, UP_NEXT_EXPANDED)
+    : upNextPool.slice(0, UP_NEXT_COUNT);
+  const recommendedVisible = recommendedExpanded
+    ? recs.recommended
+    : recs.recommended.slice(0, RECOMMENDED_STEP);
 
   const copyLink = async () => {
     try {
@@ -473,35 +475,43 @@ export default function Watch() {
               <RecoRow key={v.id} video={v} />
             ))}
           </div>
-          {related.length > UP_NEXT_COUNT && (
+          {upNextPool.length > UP_NEXT_COUNT && (
             <ViewMoreButton
               expanded={upNextExpanded}
               onToggle={() => setUpNextExpanded((e) => !e)}
-              moreCount={related.length - UP_NEXT_COUNT}
+              moreCount={Math.min(upNextPool.length, UP_NEXT_EXPANDED) - UP_NEXT_COUNT}
             />
           )}
         </aside>
       </div>
 
-      {/* ── Related videos ──
-          Spans the full page width so the 4-column grid fills the screen
-          with no dead space beside the Up Next sidebar. */}
-      {related.length > 0 && (
+      {/* ── Related — content most similar to the video being watched.
+          Full page width: 4 × 1 on desktop, 2 × 2 on mobile. ── */}
+      {recs.related.length > 0 && (
         <section aria-label="Related videos" className="mt-10 border-t border-white/6 pt-8">
           <h2 className="mb-4 text-base font-semibold tracking-tight text-white">Related videos</h2>
-          {/* Collapsed: exactly one page (4×5 desktop / 2×10 mobile).
-              Expanded: everything available. */}
+          <VideoGrid videos={recs.related} layout="quad" count={RELATED_COUNT} />
+        </section>
+      )}
+
+      {/* ── Recommended — personalized to the viewer's own activity ── */}
+      {recs.recommended.length > 0 && (
+        <section aria-label="Recommended videos" className="mt-10 border-t border-white/6 pt-8">
+          <div className="mb-4 flex items-center gap-2">
+            <Sparkles className="size-4 text-brand-400" aria-hidden />
+            <h2 className="text-base font-semibold tracking-tight text-white">Recommended for you</h2>
+          </div>
           <VideoGrid
-            videos={relatedVisible}
+            videos={recommendedVisible}
             desktopCols={4}
-            count={RELATED_STEP}
-            showAll={relatedExpanded}
+            count={RECOMMENDED_STEP}
+            showAll={recommendedExpanded}
           />
-          {related.length > RELATED_STEP && (
+          {recs.recommended.length > RECOMMENDED_STEP && (
             <ViewMoreButton
-              expanded={relatedExpanded}
-              onToggle={() => setRelatedExpanded((e) => !e)}
-              moreCount={related.length - RELATED_STEP}
+              expanded={recommendedExpanded}
+              onToggle={() => setRecommendedExpanded((e) => !e)}
+              moreCount={recs.recommended.length - RECOMMENDED_STEP}
             />
           )}
         </section>

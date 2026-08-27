@@ -105,12 +105,18 @@ export function VideoGrid({
   desktopCols = 5,
   /** Fixed card count, overriding the four-rows-per-breakpoint default. */
   count,
+  /**
+   * "quad" pins the grid to 2 columns on mobile and 4 from tablet up —
+   * a 4 × 1 row on desktop and a tidy 2 × 2 block on mobile.
+   */
+  layout = "auto",
 }: {
   videos: Video[];
   className?: string;
   showAll?: boolean;
   desktopCols?: 4 | 5;
   count?: number;
+  layout?: "auto" | "quad";
 }) {
   const rowLimit = useGridLimit();
   const items = showAll ? videos : videos.slice(0, count ?? rowLimit);
@@ -125,8 +131,10 @@ export function VideoGrid({
   return (
     <div
       className={cn(
-        "grid grid-cols-2 gap-x-3 gap-y-6 sm:gap-x-4 md:grid-cols-3 md:gap-y-8 xl:grid-cols-4",
-        desktopCols === 5 && "2xl:grid-cols-5",
+        "grid grid-cols-2 gap-x-3 gap-y-6 sm:gap-x-4 md:gap-y-8",
+        layout === "quad"
+          ? "md:grid-cols-4"
+          : cn("md:grid-cols-3 xl:grid-cols-4", desktopCols === 5 && "2xl:grid-cols-5"),
         className
       )}
     >
