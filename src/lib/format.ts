@@ -47,3 +47,14 @@ export function fullDate(days: number): string {
 }
 
 export const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+
+/**
+ * Liked percentage for display. Values below 10% keep one decimal so a
+ * realistic like rate (typically a few percent of viewers) doesn't collapse
+ * to a round "3%" and lose all meaning.
+ */
+export function formatPercent(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n < 10) return n.toFixed(1).replace(/\.0$/, "");
+  return String(Math.round(n));
+}

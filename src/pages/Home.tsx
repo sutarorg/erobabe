@@ -9,7 +9,7 @@ import { Carousel, CategoryCard, RankList, SectionHeader, VideoGrid, Tag } from 
 import { AgeBadge } from "@/components/Brand";
 import { publicSettings } from "@/data/dynamic";
 import { siteOrigin, useSEO, websiteSchema } from "@/lib/seo";
-import { cn } from "@/lib/format";
+import { cn, formatPercent } from "@/lib/format";
 
 const HERO_INTERVAL = 3000;
 
@@ -78,7 +78,7 @@ function Hero({ videos }: { videos: Video[] }) {
         <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs font-medium text-fog-400 md:text-[13px]">
           <span className="inline-flex items-center gap-1.5"><Clock className="size-3.5 text-fog-500" aria-hidden />{video.durationLabel}</span>
           <span className="inline-flex items-center gap-1.5"><Eye className="size-3.5 text-fog-500" aria-hidden />{video.viewsLabel} views</span>
-          <span className="inline-flex items-center gap-1.5"><ThumbsUp className="size-3.5 text-fog-500" aria-hidden />{video.likeRatio}% liked</span>
+          <span className="inline-flex items-center gap-1.5"><ThumbsUp className="size-3.5 text-fog-500" aria-hidden />{formatPercent(video.likeRatio)}% liked</span>
           <span className="text-fog-500">{video.dateLabel}</span>
         </div>
 

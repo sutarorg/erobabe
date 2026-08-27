@@ -82,13 +82,19 @@ export function VideoCard({ video, priority = false, className }: { video: Video
           />
         )}
 
-        {/* Hover scrim + play affordance */}
+        {/* Hover scrim — stays up so the duration badge keeps its contrast
+            once the play affordance fades away. */}
         <div
           className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-0 transition duration-300 group-hover:opacity-100"
           aria-hidden
         />
+        {/* Play affordance: appears on hover, then fades out once the muted
+            preview is actually playing so it never sits on top of the video. */}
         <span
-          className="absolute left-1/2 top-1/2 grid size-12 -translate-x-1/2 -translate-y-1/2 scale-75 place-items-center rounded-full border border-white/25 bg-black/45 text-white opacity-0 backdrop-blur transition duration-300 group-hover:scale-100 group-hover:opacity-100"
+          className={cn(
+            "absolute left-1/2 top-1/2 grid size-12 -translate-x-1/2 -translate-y-1/2 scale-75 place-items-center rounded-full border border-white/25 bg-black/45 text-white opacity-0 backdrop-blur transition duration-300",
+            preview && previewReady ? "scale-75 opacity-0" : "group-hover:scale-100 group-hover:opacity-100"
+          )}
           aria-hidden
         >
           <Play className="ml-0.5 size-5 fill-white" />

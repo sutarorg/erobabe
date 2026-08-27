@@ -30,6 +30,8 @@ export interface Video {
   durationLabel: string;
   views: number;
   viewsLabel: string;
+  /** Real like count — drives the liked percentage. */
+  likes?: number;
   daysAgo: number;
   dateLabel: string;
   likeRatio: number; // 0–100
@@ -360,7 +362,10 @@ function build(): Video[] {
       viewsLabel: formatViews(views),
       daysAgo: row.d,
       dateLabel: timeAgo(row.d),
-      likeRatio: Math.floor(78 + rng() * 20),
+      // Like count grows with views at a realistic rate, and the percentage
+      // is derived from it so the two numbers always agree.
+      likes: Math.round(views * (0.015 + rng() * 0.055)),
+      likeRatio: 0,
       thumbnail: THUMB_LIST[(i * 7 + 2) % THUMB_LIST.length],
       videoUrl: DEMO_SOURCES[i % DEMO_SOURCES.length],
       tags,
@@ -372,6 +377,8 @@ function build(): Video[] {
 
   // Flags derived after the base pass.
   for (const v of list) v.score = v.views / Math.pow(v.daysAgo + 2, 0.78);
+  // Liked percentage is always derived from the real like and view counts.
+  for (const v of list) v.likeRatio = v.views > 0 ? Math.min(100, ((v.likes ?? 0) / v.views) * 100) : 0;
   const byScore = [...list].sort((a, b) => b.score - a.score);
   byScore.slice(0, 12).forEach((v) => (v.trending = true));
   for (const v of list) {
@@ -406,6 +413,36 @@ export let risingVideos: Video[] = initialSections.rising;       // max 3
 export let editorsPicks: Video[] = initialSections.editors;      // max 5
 export let featuredVideo: Video = featuredVideos[0] ?? VIDEOS[0];
 
+/* ──────────────────────────────────────────────────────────────
+ * Trending / Popular / New are curated collections (they route to
+ * their own pages) rather than database categories, so they have no
+ * videos of their own. Their card artwork mirrors the first video of
+ * the matching rail — exactly what the viewer sees first when they
+ * open the page — and re-syncs whenever the catalog or the ranking
+ * engine changes the line-up.
+ * ────────────────────────────────────────────────────────────── */
+const COLLECTION_FALLBACK_IMAGES: Record<string, string> = {
+  trending: THUMBS.neonRedGlow,
+  popular: THUMBS.satinIridescent,
+  new: THUMBS.candleGlass,
+};
+
+function syncCollectionThumbnails() {
+  const leads: Record<string, Video | undefined> = {
+    trending: trendingVideos[0],
+    popular: popularVideos[0],
+    new: newVideos[0],
+  };
+  for (const [slug, lead] of Object.entries(leads)) {
+    const category = CATEGORIES.find((c) => c.slug === slug);
+    if (!category) continue;
+    category.image =
+      lead?.thumbnail ?? COLLECTION_FALLBACK_IMAGES[slug] ?? category.image;
+  }
+}
+
+syncCollectionThumbnails();
+
 export let TOTAL_VIDEOS = VIDEOS.length;
 export let TOTAL_VIEWS = VIDEOS.reduce((n, v) => n + v.views, 0);
 
@@ -431,6 +468,8 @@ function applySections(next: DiscoverySections) {
   risingVideos = next.rising;
   editorsPicks = next.editors;
   featuredVideo = next.featured[0] ?? VIDEOS[0];
+  // A new #1 trending video should be reflected on its category card.
+  syncCollectionThumbnails();
 }
 
 /**

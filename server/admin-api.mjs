@@ -354,7 +354,13 @@ async function videoAnalytics(req, url, id) {
     },
     engagement: {
       likes: row.likes ?? 0,
-      likeRatio: row.like_ratio ?? 0,
+      // Same derivation the public site uses, so the numbers always agree.
+      likeRatio:
+        row.likes == null
+          ? (row.like_ratio ?? 0)
+          : (row.views ?? 0) > 0
+            ? Math.min(100, (Number(row.likes) / Number(row.views)) * 100)
+            : 0,
       engagementRate: (row.views ?? 0) > 0 ? (row.likes ?? 0) / (row.views ?? 1) : 0,
       viewsPerDay: rangeViews / days,
     },

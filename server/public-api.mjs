@@ -1,4 +1,4 @@
-import { dbApi, dbConfigMissing, enc, hasSlugColumn } from "./db.mjs";
+import { dbApi, dbConfigMissing, enc, hasColumn } from "./db.mjs";
 import { computeDiscovery, invalidateDiscovery, SECTION_LIMITS } from "./ranking.mjs";
 import { classifyReferrer, deviceFromUA } from "./traffic.mjs";
 import { json, clientIp, sha256hex, ENV } from "./util.mjs";
@@ -11,9 +11,12 @@ import { json, clientIp, sha256hex, ENV } from "./util.mjs";
 const VIDEO_COLS_BASE =
   "id,title,description,status,duration_s,views,like_ratio,tags,thumbnail_url,video_url,hls_url,featured,trending,editors_pick,seo_title,seo_description,published_at,created_at,source_size,category_id";
 
-/** Adds `slug` only when migration 0002 has been applied. */
+/** Adds optional columns only where the corresponding migration has run. */
 async function videoCols() {
-  return (await hasSlugColumn()) ? `${VIDEO_COLS_BASE},slug` : VIDEO_COLS_BASE;
+  const extras = [];
+  if (await hasColumn("videos", "slug")) extras.push("slug");
+  if (await hasColumn("videos", "likes")) extras.push("likes");
+  return extras.length ? `${VIDEO_COLS_BASE},${extras.join(",")}` : VIDEO_COLS_BASE;
 }
 
 let catCache = { at: 0, list: [] };
@@ -29,6 +32,14 @@ export function invalidateCategoryCache() {
   catCache = { at: 0, list: [] };
 }
 
+/** Liked percentage from actual like data: likes ÷ views. */
+function likedPercent(row) {
+  if (row.likes == null) return row.like_ratio ?? 0;
+  const views = Number(row.views) || 0;
+  if (views <= 0) return 0;
+  return Math.min(100, (Number(row.likes) / views) * 100);
+}
+
 export function shapeVideo(row, cats) {
   const cat = cats.find((c) => c.id === row.category_id);
   return {
@@ -42,7 +53,10 @@ export function shapeVideo(row, cats) {
     categoryName: cat?.name ?? null,
     durationS: row.duration_s ?? 0,
     views: row.views ?? 0,
-    likeRatio: row.like_ratio ?? 90,
+    likes: row.likes == null ? null : Number(row.likes),
+    // Percentage of viewers who liked the video, computed from real data.
+    // Falls back to the stored ratio only when likes aren't tracked yet.
+    likeRatio: likedPercent(row),
     tags: row.tags ?? [],
     thumbnailUrl: row.thumbnail_url ?? null,
     videoUrl: row.video_url ?? null,

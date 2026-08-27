@@ -13,7 +13,7 @@ import { Player } from "@/components/Player";
 import { ShareModal } from "@/components/ShareModal";
 import { EmptyState, Tag } from "@/components/Sections";
 import { toast } from "@/components/Feedback";
-import { cn, fullDate } from "@/lib/format";
+import { cn, formatPercent, fullDate } from "@/lib/format";
 
 function ActionButton({
   icon: Icon, label, active, onClick,
@@ -264,7 +264,7 @@ export default function Watch() {
             </span>
             <span className="inline-flex items-center gap-1.5">
               <ThumbsUp className="size-4 text-fog-500" aria-hidden />
-              {video.likeRatio}% liked
+              {formatPercent(video.likeRatio)}% liked
             </span>
             <span className="inline-flex items-center gap-1.5">
               <BadgeCheck className="size-4 text-fog-500" aria-hidden />

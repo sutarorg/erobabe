@@ -65,7 +65,8 @@ function percentile(values: number[]) {
 function rawSignals(v: Video): Record<SignalKey, number> {
   const age = Math.max(v.daysAgo, 0);
   const views = Math.max(v.views, 0);
-  const quality = (v.likeRatio ?? 0) / 100;
+  // Like rate comes from the real like and view counts.
+  const likeRate = views > 0 ? (v.likes ?? 0) / views : 0;
   // `score` is views decayed by age — a proxy for present-day pace.
   const pace = v.score ?? views / Math.pow(age + 2, 0.78);
   return {
@@ -74,11 +75,11 @@ function rawSignals(v: Video): Record<SignalKey, number> {
     velocity: pace / Math.max(age + 1, 1),
     momentum: pace / (Math.log2(age + 3) || 1),
     growth: views / Math.pow(age + 3, 1.15),
-    quality,
-    engagement: quality * Math.log10(1 + views),
+    quality: likeRate,
+    engagement: likeRate * Math.log10(1 + views),
     recency: Math.exp(-age / 21),
     ageAdjusted: views / Math.log2(age + 3),
-    uniqueness: quality * 0.5 + Math.exp(-age / 45) * 0.5,
+    uniqueness: likeRate * 0.5 + Math.exp(-age / 45) * 0.5,
   };
 }
 

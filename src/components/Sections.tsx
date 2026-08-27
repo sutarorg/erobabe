@@ -71,9 +71,23 @@ export function VideoGrid({ videos, className }: { videos: Video[]; className?: 
     );
   }
   return (
-    <div className={cn("grid grid-cols-2 gap-x-3 gap-y-6 sm:gap-x-4 md:grid-cols-3 md:gap-y-8 xl:grid-cols-4 2xl:grid-cols-5", className)}>
+    <div
+      className={cn(
+        // Mobile: a single horizontally scrolling row of cards, edge-to-edge.
+        "no-scrollbar -mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-1",
+        // Tablet and up: the dense responsive grid.
+        "md:mx-0 md:grid md:grid-cols-3 md:gap-x-4 md:gap-y-8 md:overflow-visible md:px-0 md:pb-0 xl:grid-cols-4 2xl:grid-cols-5",
+        className
+      )}
+    >
       {videos.map((v, i) => (
-        <div key={v.id} className="animate-fade-up" style={{ animationDelay: `${Math.min(i, 12) * 45}ms` }}>
+        <div
+          key={v.id}
+          // Card width mirrors the carousel so every rail on the homepage
+          // scrolls with the same rhythm on small screens.
+          className="w-[64vw] max-w-[300px] shrink-0 snap-start animate-fade-up sm:w-[36vw] md:w-auto"
+          style={{ animationDelay: `${Math.min(i, 12) * 45}ms` }}
+        >
           <VideoCard video={v} priority={i < 4} />
         </div>
       ))}

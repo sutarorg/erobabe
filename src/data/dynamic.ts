@@ -21,6 +21,7 @@ export interface RemoteVideo {
   categoryName: string | null;
   durationS: number;
   views: number;
+  likes: number | null;
   likeRatio: number;
   tags: string[];
   thumbnailUrl: string | null;
@@ -69,9 +70,13 @@ function mapRemote(rv: RemoteVideo, index: number): Video {
     durationLabel: formatDuration(rv.durationS ?? 0),
     views: rv.views ?? 0,
     viewsLabel: formatViews(rv.views ?? 0),
+    likes: rv.likes ?? 0,
     daysAgo,
     dateLabel: timeAgo(daysAgo),
-    likeRatio: rv.likeRatio ?? 95,
+    // Derived from real like data so the displayed percentage can never
+    // disagree with the like and view counts.
+    likeRatio:
+      rv.likes != null && rv.views > 0 ? Math.min(100, (rv.likes / rv.views) * 100) : (rv.likeRatio ?? 0),
     thumbnail: rv.thumbnailUrl ?? FALLBACK_THUMBS[index % FALLBACK_THUMBS.length],
     videoUrl: rv.hlsUrl ?? rv.videoUrl ?? "",
     tags: rv.tags?.length ? rv.tags : [rv.categoryName ?? "Featured"],
