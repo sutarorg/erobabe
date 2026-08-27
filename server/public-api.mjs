@@ -1,6 +1,7 @@
 import { dbApi, dbConfigMissing, enc, hasColumn, hasSlugColumn } from "./db.mjs";
 import { computeDiscovery, invalidateDiscovery, SECTION_LIMITS } from "./ranking.mjs";
 import { classifyReferrer, deviceFromUA } from "./traffic.mjs";
+import { sweepDueVideos } from "./scheduler.mjs";
 import { json, clientIp, sha256hex, ENV } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -144,6 +145,8 @@ export async function handlePublic(req, url, path) {
 
   /* ── GET /api/public/videos ── */
   if (first === "videos" && seg.length === 1 && req.method === "GET") {
+    // Cron-free fallback: release any scheduled videos that are now due.
+    sweepDueVideos();
     const limit = Math.min(Number(url.searchParams.get("limit") ?? 200) || 200, 500);
     const offset = Math.max(Number(url.searchParams.get("offset") ?? 0) || 0, 0);
     const parts = ["status=eq.published", `select=${await videoCols()}`];

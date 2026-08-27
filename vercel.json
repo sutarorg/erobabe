@@ -5,6 +5,12 @@
       "maxDuration": 30
     }
   },
+  "crons": [
+    {
+      "path": "/api/cron/publish",
+      "schedule": "0 * * * *"
+    }
+  ],
   "headers": [
     {
       "source": "/sitemap.xml",

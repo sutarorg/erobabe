@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CloudUpload, FileVideo,
+  AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CloudUpload, CopyCheck, FileVideo,
   ImagePlus, Loader2, RefreshCw, Sparkles, Wand2, XCircle,
 } from "lucide-react";
 import { api, type UploadPlan, type MultiPlan } from "./api";
@@ -12,6 +12,9 @@ import {
 } from "./compress";
 import { Btn, Field, Input, PageHeader, Select, TagEditor, Textarea, Toggle, useFetch } from "./ui";
 import { buildTrendingTags, generateTags } from "./autoTags";
+import { fingerprintFile } from "./fingerprint";
+import type { DuplicateMatch } from "./api";
+import BulkUpload from "./BulkUpload";
 import { toast } from "@/components/Feedback";
 import { cn } from "@/lib/format";
 
@@ -24,8 +27,33 @@ type Phase =
   | { step: "finishing" }
   | { step: "details" };
 
+/** Single vs. bulk upload switch. */
+function ModeSwitch({ mode, onChange }: { mode: "single" | "bulk"; onChange: (m: "single" | "bulk") => void }) {
+  return (
+    <div className="flex rounded-lg border border-white/8 bg-ink-900/60 p-1">
+      {(["single", "bulk"] as const).map((m) => (
+        <button
+          key={m}
+          type="button"
+          onClick={() => onChange(m)}
+          aria-pressed={mode === m}
+          className={cn(
+            "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+            mode === m
+              ? "bg-gradient-to-r from-brand-500 to-violet-600 text-white"
+              : "text-fog-400 hover:text-white"
+          )}
+        >
+          {m === "single" ? "Single" : "Bulk (up to 20)"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function UploadWizard() {
   const navigate = useNavigate();
+  const [mode, setMode] = useState<"single" | "bulk">("single");
   const [phase, setPhase] = useState<Phase>({ step: "select" });
   const [file, setFile] = useState<File | null>(null);
   const [probe, setProbe] = useState<{ durationS: number | null; poster: string | null } | null>(null);
@@ -39,6 +67,10 @@ export default function UploadWizard() {
   const [optimized, setOptimized] = useState<File | null>(null);
   /** Automatic optimization is on by default; the admin can switch it off. */
   const [optimizeEnabled, setOptimizeEnabled] = useState(true);
+  /** Fingerprint of the source file + any matching prior upload. */
+  const [contentHash, setContentHash] = useState<string | null>(null);
+  const [duplicate, setDuplicate] = useState<DuplicateMatch | null>(null);
+  const [dupAcknowledged, setDupAcknowledged] = useState(false);
 
   const [plan, setPlan] = useState<UploadPlan | null>(null);
   const [loaded, setLoaded] = useState(0);
@@ -87,6 +119,9 @@ export default function UploadWizard() {
     setEncodePlan(null);
     setOptimized(null);
     setOptimizePct(0);
+    setContentHash(null);
+    setDuplicate(null);
+    setDupAcknowledged(false);
     if (!f) return setFile(null);
     if (!f.type.startsWith("video/")) return setError("Only video files are allowed (mp4, mov, webm…)");
     if (f.size > MAX_BYTES) return setError(`File exceeds the 2 GB limit (${fmtBytes(f.size)})`);
@@ -106,6 +141,17 @@ export default function UploadWizard() {
         setProbing(false);
       })
       .catch(() => setProbing(false));
+
+    // Fingerprint the source and warn if it has been uploaded before.
+    void (async () => {
+      const hash = await fingerprintFile(f);
+      setContentHash(hash);
+      try {
+        setDuplicate((await api.checkDuplicate(hash)).duplicate);
+      } catch {
+        setDuplicate(null);
+      }
+    })();
   };
 
   const startUpload = async () => {
@@ -151,6 +197,7 @@ export default function UploadWizard() {
         size: payload.size,
         contentType: payload.type || "video/mp4",
         durationS: probe?.durationS ?? null,
+        contentHash: contentHash ?? undefined,
       });
       setPlan(p);
 
@@ -287,9 +334,26 @@ export default function UploadWizard() {
   const speed = elapsed > 1 ? loaded / elapsed : 0;
   const eta = speed > 0 && file ? Math.max(0, (file.size - loaded) / speed) : 0;
 
+  if (mode === "bulk") {
+    return (
+      <div className="mx-auto max-w-3xl">
+        <PageHeader
+          title="Upload videos"
+          sub={`Bulk upload up to ${20} videos. Metadata is generated automatically and videos publish one per hour.`}
+          actions={<ModeSwitch mode={mode} onChange={setMode} />}
+        />
+        <BulkUpload />
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto max-w-3xl">
-      <PageHeader title="Upload video" sub="Upload → Process → Draft → Preview → Publish. Nothing goes live until you publish it." />
+      <PageHeader
+        title="Upload video"
+        sub="Upload → Process → Draft → Preview → Publish. Nothing goes live until you publish it."
+        actions={phase.step === "select" ? <ModeSwitch mode={mode} onChange={setMode} /> : undefined}
+      />
 
       {/* Stepper */}
       <ol className="mb-8 flex items-center gap-2 text-xs font-semibold">
@@ -371,6 +435,50 @@ export default function UploadWizard() {
                   <XCircle className="size-5" aria-hidden />
                 </button>
               </div>
+              {/* Duplicate warning — shown before anything is uploaded. */}
+              {duplicate && (
+                <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/8 p-3.5">
+                  <div className="flex items-start gap-2.5">
+                    <CopyCheck className="mt-0.5 size-4 shrink-0 text-amber-400" aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-amber-200">
+                        This video looks like a duplicate
+                      </p>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-amber-200/80">
+                        An identical file was already uploaded as{" "}
+                        <span className="font-semibold">“{duplicate.title}”</span> ({duplicate.status}) on{" "}
+                        {new Date(duplicate.created_at).toLocaleDateString("en-US", {
+                          month: "short", day: "numeric", year: "numeric",
+                        })}
+                        .
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <Link
+                          to={`/admin/videos/${duplicate.id}`}
+                          className="rounded-md border border-amber-400/40 px-2 py-1 text-[11px] font-semibold text-amber-200 transition hover:bg-amber-400/10"
+                        >
+                          View existing video
+                        </Link>
+                        {!dupAcknowledged && (
+                          <button
+                            type="button"
+                            onClick={() => setDupAcknowledged(true)}
+                            className="rounded-md border border-white/15 px-2 py-1 text-[11px] font-semibold text-fog-200 transition hover:bg-white/10"
+                          >
+                            Upload anyway
+                          </button>
+                        )}
+                        {dupAcknowledged && (
+                          <span className="text-[11px] font-semibold text-emerald-300">
+                            Duplicate acknowledged — upload enabled.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Automatic optimization — toggleable */}
               {!probing && (
                 <div className="mt-4 rounded-xl border border-white/6 bg-ink-850 p-3.5">
@@ -424,8 +532,13 @@ export default function UploadWizard() {
 
               <div className="mt-4 flex justify-end gap-2">
                 <Btn variant="ghost" onClick={() => pick(null)}>Choose different file</Btn>
-                <Btn variant="primary" icon={ArrowRight} onClick={startUpload} disabled={probing}>
-                  {encodePlan?.compress ? "Optimize & upload" : "Start upload"}
+                <Btn
+                  variant="primary"
+                  icon={ArrowRight}
+                  onClick={startUpload}
+                  disabled={probing || (Boolean(duplicate) && !dupAcknowledged)}
+                >
+                  {optimizeEnabled && encodePlan?.compress ? "Optimize & upload" : "Start upload"}
                 </Btn>
               </div>
             </div>

@@ -351,16 +351,19 @@ export function EmptyState({
 }
 
 /* ── Toggle switch ── */
-export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+export function Toggle({
+  checked, onChange, label, disabled = false,
+}: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200",
+        "relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 disabled:opacity-50",
         checked ? "bg-gradient-to-r from-brand-500 to-violet-600" : "bg-ink-600"
       )}
     >

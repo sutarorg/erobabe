@@ -57,7 +57,8 @@ Both run the Vite dev server **and** the serverless functions locally.
    Then run **`supabase/migrations/0003_engagement_signals.sql`** — it adds watch-time, completion and likes tracking that feed the discovery ranking engine.
    Then run **`supabase/migrations/0004_category_icons.sql`** — it adds `categories.icon` and seeds the 11 content categories shown on Explore.
    Then run **`supabase/migrations/0005_traffic_analytics.sql`** — it records traffic source, referrer host and device per view, powering the Referral Sources / Traffic and per-video Audience analytics.
-   Finally run **`supabase/migrations/0006_impressions_ctr.sql`** — it adds `impressions` and `clicks` counters with batched tracking RPCs, powering the Impressions and CTR metrics in both analytics pages. All scripts are safe to re-run.
+   Then run **`supabase/migrations/0006_impressions_ctr.sql`** — it adds `impressions` and `clicks` counters with batched tracking RPCs, powering the Impressions and CTR metrics in both analytics pages.
+   Finally run **`supabase/migrations/0007_dedupe_and_scheduling.sql`** — it adds `content_hash` (duplicate detection), `scheduled_publish_at` and `bulk_batch` for the bulk-upload hourly release schedule. All scripts are safe to re-run.
 3. From **Project Settings → API**, copy:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY` (the **service_role** secret — server-only)
@@ -148,6 +149,42 @@ The bitrate never exceeds 95% of what the source already carries, audio uses 96 
 AAC, and the minimum worthwhile saving is 5%. If the browser can't re-encode, the video is over 45
 minutes, or a result would be *larger* than the original, the untouched original is uploaded — the
 engine never makes a file worse.
+
+### Duplicate detection
+
+Before anything is uploaded, the **original** source file is fingerprinted in the browser: SHA-256
+over three sampled 1 MB windows (head / middle / tail) mixed with the exact byte length. Hashing a
+2 GB file end-to-end would take minutes; this completes in milliseconds and still identifies exact
+re-uploads reliably. The optimized output is never hashed, since encoder bytes vary between runs.
+
+The hash is checked against `videos.content_hash`. A match blocks the upload button and shows the
+existing video's title, status, upload date and a link to it — with an **Upload anyway** override,
+because re-uploading is sometimes intentional.
+
+### Bulk upload (up to 20 videos)
+
+`Admin → Upload Videos → Bulk` accepts up to 20 files in one action. Per video the admin edits only
+the **title** and **thumbnail**; everything else is automated:
+
+| Field | Source |
+| --- | --- |
+| Description | One of 20 built-in descriptions, assigned sequentially so consecutive uploads never share copy |
+| Tags | Generated from the title + assigned description against live trending tags |
+| SEO title | `{title} \| Watch Free 18+ Video on EroBabe` |
+| SEO description | Derived from the assigned description |
+| Thumbnail | Auto-captured poster frame unless the admin uploads one |
+| Category | Inferred from the title where it matches a category name |
+
+Every video uploads as a **draft**, then publishes **one per hour** — first an hour after the batch
+finishes. Three independent triggers run the schedule, so it holds on any plan:
+
+1. **Platform cron** — `/api/cron/publish` (Vercel Crons hourly, Netlify Scheduled Functions).
+2. **Lazy sweep** — public API reads check for due videos at most once a minute. Works with no cron
+   at all, which matters on Vercel Hobby where cron frequency is limited.
+3. **Manual** — `POST /api/admin/publish-due` from the CMS.
+
+Only bulk actions schedule. A single upload keeps the existing flow: manual metadata, auto-tagging,
+and publish-when-you-choose.
 
 ### Impressions & CTR
 

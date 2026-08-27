@@ -2,6 +2,7 @@ import { handlePublic } from "./public-api.mjs";
 import { handleAdmin } from "./admin-api.mjs";
 import { handleSitemap, handleRobots } from "./sitemap.mjs";
 import { handleOEmbed, handleVideoPage } from "./video-page.mjs";
+import { handleCronPublish } from "./scheduler.mjs";
 import { json, toError } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -23,6 +24,10 @@ export async function handle(request) {
     }
     if (path === "/robots.txt" || path === "/api/robots.txt") {
       return handleRobots(request);
+    }
+    // Scheduled publishing — hit by Vercel Crons / Netlify Scheduled Functions.
+    if (path === "/api/cron/publish" || path === "/cron/publish") {
+      return await handleCronPublish();
     }
     // Vercel dispatches /api/seo/video/:slug; Netlify may preserve the
     // original /video/:slug path when invoking the rewritten function.

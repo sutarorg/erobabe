@@ -201,7 +201,22 @@ export const api = {
     contentType: string;
     durationS?: number | null;
     replaceId?: string;
+    /** Fingerprint of the original source file (duplicate detection). */
+    contentHash?: string;
+    /** Groups videos uploaded in one bulk action. */
+    bulkBatch?: string;
+    title?: string;
   }) => req<SinglePlan | MultiPlan>("/uploads", { body }),
+
+  checkDuplicate: (hash: string) =>
+    req<{ available: boolean; duplicate: DuplicateMatch | null }>("/videos/check-duplicate", {
+      body: { hash },
+    }),
+  scheduleVideo: (id: string, at: string | null) =>
+    req<{ video: AdminVideo }>(`/videos/${id}/schedule`, { body: { at } }),
+  scheduled: () =>
+    req<{ available: boolean; scheduled: ScheduledVideo[] }>("/schedule"),
+  publishDue: () => req<{ ok: boolean; published: number }>("/publish-due", { body: {} }),
   presignParts: (videoId: string, partNumbers: number[]) =>
     req<{ parts: { partNumber: number; url: string }[] }>(`/uploads/${videoId}/parts`, { body: { partNumbers } }),
   completeUpload: (videoId: string, body: { parts?: { partNumber: number; etag: string }[]; durationS?: number | null }) =>
@@ -230,6 +245,24 @@ export const api = {
   videoAnalytics: (id: string, days: number) =>
     req<VideoAnalyticsResponse>(`/videos/${id}/analytics?days=${days}`),
 };
+
+export interface DuplicateMatch {
+  id: string;
+  slug?: string | null;
+  title: string;
+  status: VideoStatus;
+  thumbnail_url: string | null;
+  created_at: string;
+}
+
+export interface ScheduledVideo {
+  id: string;
+  title: string;
+  status: VideoStatus;
+  thumbnail_url: string | null;
+  scheduled_publish_at: string;
+  bulk_batch: string | null;
+}
 
 export interface Share {
   name: string;

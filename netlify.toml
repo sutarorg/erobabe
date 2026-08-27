@@ -6,6 +6,10 @@
 [functions]
   node_bundler = "esbuild"
 
+# Releases bulk-uploaded drafts on their hourly schedule.
+[functions."scheduled-publish"]
+  schedule = "@hourly"
+
 # Admin/public API → serverless function (kept before the SPA fallback)
 [[redirects]]
   from = "/api/*"

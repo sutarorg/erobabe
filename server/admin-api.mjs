@@ -4,6 +4,7 @@ import {
   abortMultipartUpload, putObject, deleteObject, publicUrlFor, r2ConfigMissing,
 } from "./r2.mjs";
 import { categoryIndex, invalidateCategoryCache, shapeVideo } from "./public-api.mjs";
+import { publishDueVideos } from "./scheduler.mjs";
 import {
   json, readJson, HttpError, badRequest, unauthorized, notFound,
   parseCookies, serializeCookie, createSessionToken, verifySessionToken,
@@ -412,6 +413,63 @@ async function videoAnalytics(req, url, id) {
   });
 }
 
+/* ── Duplicate detection ── */
+
+async function checkDuplicate(req) {
+  const body = await readJson(req);
+  const hash = cleanText(body.hash, 80);
+  if (!hash) throw badRequest("A content hash is required");
+  if (!(await hasColumn("videos", "content_hash"))) {
+    return json({ available: false, duplicate: null });
+  }
+  const cols = `id,title,status,thumbnail_url,created_at${(await hasSlugColumn()) ? ",slug" : ""}`;
+  const match = await dbApi
+    .one("videos", `content_hash=eq.${encodeURIComponent(hash)}&select=${cols}&order=created_at.asc`)
+    .catch(() => null);
+  return json({ available: true, duplicate: match ?? null });
+}
+
+/* ── Scheduled publishing ── */
+
+async function scheduleVideo(req, id) {
+  const admin = requireAdmin(req);
+  const row = await getVideoOr404(id);
+  if (!(await hasColumn("videos", "scheduled_publish_at"))) {
+    throw new HttpError(503, "Scheduling requires migration 0007", "config");
+  }
+  const body = await readJson(req);
+  const at = body.at ? new Date(body.at) : null;
+  if (at && Number.isNaN(at.getTime())) throw badRequest("Invalid schedule time");
+
+  const patch = {
+    scheduled_publish_at: at ? at.toISOString() : null,
+    updated_at: nowIso(),
+  };
+  // A scheduled video waits as a draft until its slot arrives.
+  if (at && row.status === "published") patch.status = "draft";
+  if (at && ["uploading", "processing"].includes(row.status)) {
+    throw badRequest("Video is still uploading or processing");
+  }
+  const updated = await dbApi.update("videos", `id=eq.${row.id}`, patch);
+  await logActivity(admin.sub, at ? "video.schedule" : "video.unschedule", "video", row.id, {
+    title: row.title,
+    at: at?.toISOString() ?? null,
+  });
+  return json({ video: await withCategory(updated?.[0] ?? row) });
+}
+
+async function listScheduled() {
+  if (!(await hasColumn("videos", "scheduled_publish_at"))) {
+    return json({ available: false, scheduled: [] });
+  }
+  const cols = `id,title,status,thumbnail_url,scheduled_publish_at,bulk_batch`;
+  const { data } = await dbApi.select(
+    "videos",
+    `scheduled_publish_at=not.is.null&select=${cols}&order=scheduled_publish_at.asc&limit=200`
+  );
+  return json({ available: true, scheduled: data });
+}
+
 /* ── Videos ── */
 
 async function listVideos(req, url) {
@@ -628,24 +686,27 @@ async function createUpload(req) {
     });
     row = updated?.[0] ?? existing;
   } else {
-    const initialTitle = fileName.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ").slice(0, 120);
-    // Every upload gets its own /watch/{slug} page once migration 0002 is applied.
-    row = await dbApi.insert(
-      "videos",
-      withSlug(
-        {
-          title: initialTitle,
-          status: "uploading",
-          upload_key: key,
-          upload_id: uploadId,
-          source_size: size,
-          content_type: contentType,
-          duration_s: Number(body.durationS) > 0 ? Math.round(Number(body.durationS)) : null,
-          tags: [],
-        },
-        await uniqueSlug(initialTitle)
-      )
-    );
+    const initialTitle =
+      cleanText(body.title, 120) ||
+      fileName.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ").slice(0, 120);
+    const insert = {
+      title: initialTitle,
+      status: "uploading",
+      upload_key: key,
+      upload_id: uploadId,
+      source_size: size,
+      content_type: contentType,
+      duration_s: Number(body.durationS) > 0 ? Math.round(Number(body.durationS)) : null,
+      tags: [],
+    };
+    // Fingerprint + batch id land with migration 0007.
+    const hash = cleanText(body.contentHash, 80);
+    if (hash && (await hasColumn("videos", "content_hash"))) insert.content_hash = hash;
+    const batch = cleanText(body.bulkBatch, 40);
+    if (batch && (await hasColumn("videos", "bulk_batch"))) insert.bulk_batch = batch;
+
+    // Every upload gets its own /video/{slug} page once migration 0002 is applied.
+    row = await dbApi.insert("videos", withSlug(insert, await uniqueSlug(initialTitle)));
   }
 
   await logActivity(admin.sub, "upload.start", "video", row.id, { fileName, size, mode: uploadId ? "multipart" : "single" });
@@ -918,6 +979,12 @@ export async function handleAdmin(req, url, path) {
 
   if (first === "videos" && !second && m === "GET") return listVideos(req, url);
   if (first === "videos" && second === "bulk" && m === "POST") return bulk(req, await readJson(req));
+  if (first === "videos" && second === "check-duplicate" && m === "POST") return checkDuplicate(req);
+  if (first === "schedule" && m === "GET") return listScheduled();
+  if (first === "publish-due" && m === "POST") {
+    const result = await publishDueVideos();
+    return json({ ok: true, ...result });
+  }
   if (first === "videos" && UUID_RE.test(second ?? "")) {
     if (!third) {
       if (m === "GET") return getVideo(req, second);
@@ -926,6 +993,7 @@ export async function handleAdmin(req, url, path) {
     }
     if ((third === "publish" || third === "unpublish") && m === "POST") return setStatus(req, second, third);
     if (third === "analytics" && m === "GET") return videoAnalytics(req, url, second);
+    if (third === "schedule" && m === "POST") return scheduleVideo(req, second);
   }
 
   if (first === "uploads" && !second && m === "POST") return createUpload(req);
