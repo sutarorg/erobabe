@@ -1,110 +1,58 @@
-import { Suspense, lazy, useEffect, useState } from "react";
-import { Route, Routes, useLocation } from "react-router-dom";
+/**
+ * EroBabe — root router. Public experience + lazy-loaded admin CMS.
+ */
+import { lazy, Suspense } from "react";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { PublicLayout } from "./components/chrome";
+import HomePage from "./pages/home";
+import TrendingPage from "./pages/trending";
+import WatchPage from "./pages/watch";
+import {
+  CategoriesPage, CategoryPage, ExplorePage, HistoryPage, LegalPage,
+  ListingPage, NotFoundPage, SearchPage,
+} from "./pages/browse";
 
-const AdminApp = lazy(() => import("@/admin/AdminApp"));
-import { UiProvider, useUi } from "@/context/ui";
-import { readStore, writeStore } from "@/hooks/store";
-import { cn } from "@/lib/format";
+const AdminApp = lazy(() => import("./admin/AdminApp"));
 
-import { Header } from "@/components/Header";
-import { Sidebar } from "@/components/Sidebar";
-import { BottomNav } from "@/components/BottomNav";
-import { Footer } from "@/components/Footer";
-import { AgeGate } from "@/components/AgeGate";
-import { Toaster } from "@/components/Feedback";
-import { RouteLoading } from "@/components/Skeletons";
-
-const Home = lazy(() => import("@/pages/Home"));
-const Explore = lazy(() => import("@/pages/Explore"));
-const Trending = lazy(() => import("@/pages/Trending"));
-const Categories = lazy(() => import("@/pages/Categories"));
-const CategoryPage = lazy(() => import("@/pages/CategoryPage"));
-const Watch = lazy(() => import("@/pages/Watch"));
-const SearchPage = lazy(() => import("@/pages/SearchPage"));
-const History = lazy(() => import("@/pages/History"));
-const Legal = lazy(() => import("@/pages/Legal"));
-const ListPage = lazy(() => import("@/pages/ListPage"));
-const NotFound = lazy(() => import("@/pages/NotFound"));
-
-function ScrollToTop() {
-  const { pathname } = useLocation();
-  useEffect(() => {
-    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-  }, [pathname]);
-  return null;
-}
-
-function Shell() {
-  const { collapsed } = useUi();
-  const location = useLocation();
-  const [verified, setVerified] = useState(() => readStore<boolean>("eb:age-verified", false));
-
-  const enter = () => {
-    writeStore("eb:age-verified", true);
-    setVerified(true);
-  };
-
-  // The admin CMS runs its own full-screen chrome (and its own auth),
-  // bypassing the public layout and age gate.
-  if (location.pathname.startsWith("/admin")) {
-    return (
-      <>
-        <Suspense fallback={<RouteLoading />}>
-          <Routes>
-            <Route path="/admin/*" element={<AdminApp />} />
-          </Routes>
-        </Suspense>
-        <Toaster />
-      </>
-    );
-  }
-
+function AdminFallback() {
   return (
-    <div className="min-h-screen">
-      <ScrollToTop />
-      <Header />
-      <Sidebar />
-
-      <main
-        id="main"
-        className={cn(
-          "pt-14 transition-[padding] duration-300 md:pt-16",
-          collapsed ? "lg:pl-[76px]" : "lg:pl-60"
-        )}
-      >
-        <div className="min-h-[70vh] pb-20 lg:pb-8">
-          <Suspense fallback={<RouteLoading />}>
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/explore" element={<Explore />} />
-              <Route path="/trending" element={<Trending />} />
-              <Route path="/popular" element={<ListPage kind="popular" />} />
-              <Route path="/new" element={<ListPage kind="new" />} />
-              <Route path="/categories" element={<Categories />} />
-              <Route path="/category/:slug" element={<CategoryPage />} />
-              <Route path="/watch/:id" element={<Watch />} />
-              <Route path="/search" element={<SearchPage />} />
-              <Route path="/history" element={<History />} />
-              <Route path="/legal/:topic" element={<Legal />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
-        </div>
-        <Footer />
-      </main>
-
-      <BottomNav />
-      <Toaster />
-
-      {!verified && <AgeGate onEnter={enter} />}
+    <div className="flex min-h-screen items-center justify-center bg-eb-950">
+      <div className="flex flex-col items-center gap-4">
+        <span className="h-10 w-10 animate-spin rounded-full border-2 border-eb-rose border-t-transparent" />
+        <p className="text-xs tracking-widest text-eb-faint uppercase">Loading studio…</p>
+      </div>
     </div>
   );
 }
 
 export default function App() {
   return (
-    <UiProvider>
-      <Shell />
-    </UiProvider>
+    <BrowserRouter>
+      <Routes>
+        <Route element={<PublicLayout />}>
+          <Route index element={<HomePage />} />
+          <Route path="explore" element={<ExplorePage />} />
+          <Route path="trending" element={<TrendingPage />} />
+          <Route path="popular" element={<ListingPage kind="popular" />} />
+          <Route path="new" element={<ListingPage kind="new" />} />
+          <Route path="categories" element={<CategoriesPage />} />
+          <Route path="category/:slug" element={<CategoryPage />} />
+          <Route path="watch/:id" element={<WatchPage />} />
+          <Route path="search" element={<SearchPage />} />
+          <Route path="history" element={<HistoryPage />} />
+          <Route path="legal/:page" element={<LegalPage />} />
+          <Route path="legal" element={<Navigate to="/legal/about" replace />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Route>
+        <Route
+          path="/admin/*"
+          element={
+            <Suspense fallback={<AdminFallback />}>
+              <AdminApp />
+            </Suspense>
+          }
+        />
+      </Routes>
+    </BrowserRouter>
   );
 }
