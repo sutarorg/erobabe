@@ -64,7 +64,7 @@ function mapRemote(rv: RemoteVideo, index: number): Video {
     seoTitle: rv.seoTitle,
     seoDescription: rv.seoDescription,
     title: rv.title,
-    category: (rv.category as CategorySlug) ?? "studio",
+    category: (rv.category as CategorySlug) ?? "amateur",
     duration: rv.durationS ?? 0,
     durationLabel: formatDuration(rv.durationS ?? 0),
     views: rv.views ?? 0,
@@ -120,10 +120,16 @@ export async function bootstrapCatalog(): Promise<void> {
 
     if (cRes.ok) {
       const c = (await cRes.json()) as {
-        categories: { slug: string; name: string; blurb: string; gradient: string; imageUrl: string | null; count: number }[];
+        categories: {
+          slug: string; name: string; blurb: string; gradient: string;
+          imageUrl: string | null; icon: string | null; count: number;
+        }[];
       };
       mergeRemoteCategories(
-        c.categories.map((x) => ({ slug: x.slug, name: x.name, blurb: x.blurb, gradient: x.gradient, image: x.imageUrl }))
+        c.categories.map((x) => ({
+          slug: x.slug, name: x.name, blurb: x.blurb,
+          gradient: x.gradient, image: x.imageUrl, icon: x.icon,
+        }))
       );
     }
 

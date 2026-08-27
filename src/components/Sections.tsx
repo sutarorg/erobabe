@@ -1,28 +1,17 @@
 import { useRef, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
-  ArrowUpRight, Camera as CameraIcon, ChevronLeft, ChevronRight, Clapperboard,
-  Flame, Gem, Inbox, Layers, Sparkles, TrendingUp, User, Users,
+  ArrowUpRight, ChevronLeft, ChevronRight, Inbox,
   type LucideIcon,
 } from "lucide-react";
+import { resolveCategoryIcon } from "@/lib/categoryIcons";
 import type { Category, Video } from "@/data/videos";
 import { cn } from "@/lib/format";
 import { VideoCard } from "./VideoCard";
 
-/* ── Category icon mapping (single source of truth) ── */
-export function categoryIcon(slug: string): LucideIcon {
-  switch (slug) {
-    case "trending": return Flame;
-    case "popular": return TrendingUp;
-    case "new": return Sparkles;
-    case "studio": return Clapperboard;
-    case "premium": return Gem;
-    case "couples": return Users;
-    case "solo": return User;
-    case "amateur": return CameraIcon;
-    default: return Layers; // compilation & fallback
-  }
-}
+/* ── Category icons resolve through the shared registry ── */
+export const categoryIcon = (slug: string, icon?: string | null): LucideIcon =>
+  resolveCategoryIcon(slug, icon);
 
 /* ── Section header ── */
 export function SectionHeader({
@@ -179,7 +168,7 @@ export function RankList({ videos, className }: { videos: Video[]; className?: s
 
 /* ── Category card ── */
 export function CategoryCard({ category, count, className }: { category: Category; count?: number; className?: string }) {
-  const Icon = categoryIcon(category.slug);
+  const Icon = categoryIcon(category.slug, category.icon);
   return (
     <Link
       to={category.href ?? `/category/${category.slug}`}

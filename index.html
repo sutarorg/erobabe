@@ -3,38 +3,53 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>EroBabe — Premium Adult Video Streaming</title>
-    <meta
-      name="description"
-      content="EroBabe is a premium 18+ video discovery and streaming experience. Browse trending, popular and new releases in a cinematic dark interface. Adults only."
-    />
+    <title>EroBabe — Watch 18+ Adult Videos Online | erobabe.com</title>
+    <meta name="description" content="Stream premium 18+ adult videos online on EroBabe — trending categories, cinematic playback, fast private browsing and new releases daily. Adults only." />
     <meta name="rating" content="adult" />
     <meta name="RATING" content="RTA-5042-1996-1400-1577-RTA" />
-    <meta name="theme-color" content="#050505" />
+    <meta name="robots" content="index,follow,max-image-preview:large,max-video-preview:-1,max-snippet:-1" />
     <link rel="canonical" href="https://erobabe.com/" />
+    <meta name="theme-color" content="#050506" />
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="EroBabe" />
-    <meta property="og:title" content="EroBabe — Premium Adult Video Streaming" />
-    <meta
-      property="og:description"
-      content="A cinematic, premium 18+ video discovery and streaming experience. Adults only."
-    />
+    <meta property="og:title" content="EroBabe — Watch 18+ Adult Videos Online | erobabe.com" />
+    <meta property="og:description" content="Stream premium 18+ adult videos online on EroBabe — trending categories, cinematic playback and new releases daily. Adults only." />
     <meta property="og:url" content="https://erobabe.com/" />
-    <meta property="og:image" content="/assets/brand/og-cover.jpg" />
+    <meta property="og:image" content="https://erobabe.com/assets/hero.jpg" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="EroBabe — Premium Adult Video Streaming" />
-    <meta
-      name="twitter:description"
-      content="A cinematic, premium 18+ video discovery and streaming experience. Adults only."
-    />
-    <meta name="twitter:image" content="/assets/brand/og-cover.jpg" />
+    <meta name="twitter:title" content="EroBabe — Watch 18+ Adult Videos Online | erobabe.com" />
+    <meta name="twitter:description" content="Stream premium 18+ adult videos online on EroBabe — trending categories, cinematic playback and new releases daily. Adults only." />
+    <meta name="twitter:image" content="https://erobabe.com/assets/hero.jpg" />
 
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- Baseline structured data (per-route SEO is maintained client-side) -->
+    <script type="application/ld+json" id="eb-schema">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "EroBabe",
+        "url": "https://erobabe.com/",
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": {
+            "@type": "EntryPoint",
+            "urlTemplate": "https://erobabe.com/search?q={search_term_string}"
+          },
+          "query-input": "required name=search_term_string"
+        }
+      }
+    </script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="root"></div>

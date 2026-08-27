@@ -1,260 +1,210 @@
-# EroBabe — Premium Adult Video Streaming (18+)
+# EroBabe — 18+ Video Streaming Platform + Admin CMS
 
-A production-oriented **adult (18+) video discovery & streaming platform** built with React, Vite, TypeScript and Tailwind CSS — a cinematic dark public site plus a complete admin CMS with secure authentication, direct-to-R2 uploads, a video-processing pipeline abstraction, real view analytics and one-click publishing.
+EroBabe is a **production-ready adult video platform** built with **React 19, TypeScript, Vite and Tailwind CSS v4**, with a full **admin CMS** at `/admin` for real uploads, processing, publishing and analytics. It deploys to **Vercel** or **Netlify** as a static frontend + serverless API.
 
-> **Demo content notice:** every title, performer and thumbnail in this
-> repository is **fictional or placeholder media** used to demonstrate the
-> interface. Nothing explicit is included. The site is RTA-labelled and
-> gated for adults.
-
----
-
-## Table of contents
-
-1. [What this is](#what-this-is)
-2. [Tech stack](#tech-stack)
-3. [Quick start](#quick-start)
-4. [Demo mode vs production mode](#demo-mode-vs-production-mode)
-5. [The public site](#the-public-site)
-6. [The admin CMS](#the-admin-cms)
-7. [Media architecture (replace thumbnails/videos)](#media-architecture)
-8. [Supabase setup](#supabase-setup)
-9. [Cloudflare R2 setup](#cloudflare-r2-setup)
-10. [Admin password](#admin-password)
-11. [Deploying to Vercel](#deploying-to-vercel)
-12. [Deploying to Netlify](#deploying-to-netlify)
-13. [Connecting erobabe.com](#connecting-erobabecom)
-14. [Editing the dataset](#editing-the-dataset)
-15. [localStorage features](#localstorage-features)
-16. [View counting & anti-abuse](#view-counting--anti-abuse)
-17. [Costs & free-tier limits](#costs--free-tier-limits)
-18. [Backup strategy](#backup-strategy)
-19. [Security checklist](#security-checklist)
-20. [Project structure](#project-structure)
+> **18+ Adults only.** The shipped demo content is entirely fictional (invented titles/performers, tasteful stock thumbnails, openly licensed placeholder videos) for interface demonstration.
+>
+> **The whole platform also runs with zero backend**: without environment variables the site stays a beautiful, fully browsable demo. Connect Supabase + Cloudflare R2 and everything becomes live — uploads, publishing, views and analytics work for real.
 
 ---
 
-## What this is
+## Architecture
 
-- **Public experience** — YouTube-style discovery with a premium dark identity: hero, trending, popular, new releases, categories, most-watched rankings, full-text search with suggestions, watch pages with recommendations, watch history, likes, saves and a share sheet.
-- **Admin CMS** (`/admin`) — Vercel-d dashboard meets YouTube Studio: statistics, video library with bulk operations, a 5-step upload wizard, category/tag managers, analytics charts, storage overview, activity log and site settings.
-- **Publishing pipeline** — upload (direct browser → Cloudflare R2 via presigned multipart URLs) → optional FFmpeg processing → draft → preview → **Publish**. The public site reflects new content instantly; no frontend redeploy.
+```
+┌────────────────────────┐        presigned URLs         ┌────────────────┐
+│  Admin (React, /admin) │ ─────────── direct ─────────▶ │ Cloudflare R2  │
+│  Public site (React)   │        500 MB–2 GB multipart  │  (media store) │
+└─────────┬──────────────┘                               └───────▲────────┘
+          │ fetch /api/* (HttpOnly session cookie)                │
+┌─────────▼──────────────┐        PostgREST (service role)        │
+│ Serverless API (Vercel │ ─────────────────────────▶┌───────────┴────────┐
+│ api/index.js · Netlify │                            │ Supabase / Postgres│
+│ functions/api.mjs)     │ ◀────────── RPC/track ──── │ videos, categories,│
+└────────────────────────┘                            │ analytics_events,  │
+                                                      │ settings, activity │
+                                                      └────────────────────┘
+```
 
-## Tech stack
+**Key design choices**
 
-| Layer | Choice |
-| --- | --- |
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS v4, React Router, Lucide icons |
-| Player | Native HTML5 `<video>` (HLS served when processing is configured) |
-| API | Provider-agnostic Web-standard router (`server/app.ts`) mounted as Vercel/Netlify functions |
-| Database | Supabase Postgres (+ Row Level Security) — metadata only |
-| Storage | Cloudflare R2 (S3-compatible, zero egress fees) |
-| Auth | Single-owner account, scrypt hash + HMAC-signed HttpOnly session cookies |
-| Processing | Swappable `VideoProcessingProvider` (FFmpeg worker reference implementation) |
+- **Direct-to-R2 uploads** — files (up to 2 GB) never pass through serverless functions (which have 4.5–6 MB payload limits). The browser uploads with short-lived SigV4 **presigned URLs** in resumable 16 MB multipart chunks, 4-way parallel, auto-retry.
+- **Zero-dependency server core** (`/server`) shared by two tiny adapters: Vercel (`api/index.js`) and Netlify (`netlify/functions/api.mjs`). No Express, no framework lock-in.
+- **Supabase accessed with the service-role key only inside functions.** The browser only ever talks to `/api/*`. Row Level Security restricts anonymous reads to `status = 'published'`.
+- **Publish-gated workflow**: `Upload → Process → Draft → Preview → Publish`. Public API never returns non-published rows.
+- **Dynamic hot-swap**: on boot the frontend probes `/api/public/health`. If the backend is configured, the entire site (home, search, categories, trending, watch pages) switches to the live catalog before first paint — no code changes or redeploys.
 
-## Quick start
+## Local development
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
-npm run build      # → dist/ (static SPA)
-npm run preview    # serve the production build locally
+npm run dev          # static demo (no backend needed)
 ```
 
-The project runs out of the box in **Demo Mode** — no external services needed.
-
-## Demo mode vs production mode
-
-`VITE_DEMO_MODE` (default `true`) switches the whole app between two data planes with **identical UI**:
-
-| | Demo mode | Production mode |
-| --- | --- | --- |
-| Catalog | `src/data/videos.ts` + admin state in localStorage | Supabase via `/api` |
-| Admin login | `admin` / `erobabe-demo` (client-side, clearly labelled) | scrypt-verified, HttpOnly cookie session |
-| Uploads | Browser-local object URLs, honest "provider not configured" messages | Presigned multipart → R2 → processing job |
-| Analytics | Real local view events + clearly-marked seed data | `view_events` table |
-
-Nothing in demo mode pretends to be a server: the UI explicitly says *"Demo mode"*, *"not configured"*, or *"session-only"* wherever a real backend would take over.
-
-## The public site
-
-| Route | Purpose |
-| --- | --- |
-| `/` | Hero + trending / popular / new / categories / most watched / editor's picks |
-| `/explore` | Filter chips (All, Trending, New, Popular, Most Viewed, Recently Added) |
-| `/trending` | Podium #1–#3, rising list, trending grid, hot categories |
-| `/popular`, `/new` | Sorted listings |
-| `/categories`, `/category/:slug` | Category browsing with sort controls |
-| `/watch/:id` | Player, metadata, like/share/save/copy, tags, description, recommendations |
-| `/search?q=` | Results with count, empty state, recent searches |
-| `/history` | Locally-stored watch history (remove items / clear all) |
-| `/legal/:page` | Privacy, Terms, DMCA, Age Policy, Contact, About placeholders |
-
-Design system: near-black `#050505` surfaces, pink→violet accent gradient, Space Grotesk display + Inter body type, muted micro-animations (150–300 ms), full `prefers-reduced-motion` support, skeleton loaders on every async surface.
-
-## The admin CMS
-
-| Route | Purpose |
-| --- | --- |
-| `/admin/login` | Rate-limited login (lockout after 5 failures) |
-| `/admin` | Dashboard: 8 real stat cards, views chart, recent activity, recent uploads |
-| `/admin/videos` | Library: search, status filters, sort, pagination, bulk publish/unpublish/feature/trending/delete |
-| `/admin/videos/new` | Upload wizard: Upload → Details → Thumbnail → SEO → Review → Publish |
-| `/admin/videos/:id/edit` | Full editor: metadata, thumbnail replace, source replace, SEO, publish workflow, delete |
-| `/admin/categories` | Create / rename / delete / reorder with usage counts |
-| `/admin/tags` | Create / rename / multi-select merge / delete with usage counts |
-| `/admin/analytics` | 24h · 7d · 30d · All-time ranges, top videos, category performance, avg watch time |
-| `/admin/storage` | Breakdown chart, R2 status, orphan-object review with confirmations |
-| `/admin/activity` | Full audit log |
-| `/admin/settings` | Site identity, homepage sections, age gate, view threshold, analytics |
-
-**Status workflow:** `UPLOAD → PROCESSING → READY → DRAFT → PUBLISHED` (+ `UNPUBLISHED`, `FAILED`). Publish validates title, category, thumbnail and a playable source; failures never show fake success states.
-
-## Media architecture
-
-```text
-/public/assets/brand/og-cover.jpg     # generated brand/OG art
-Thumbnails                            # URL-based (see src/data/videos.ts → THUMBS)
-Demo playback                         # public sample MP4s (VIDEO_POOL)
-```
-
-Production object layout in R2 (IDs, never user filenames):
-
-```text
-originals/{video-id}/source.mp4
-thumbnails/{video-id}/poster.webp
-previews/{video-id}/preview.mp4
-encoded/{video-id}/{360p,480p,720p,1080p}/… + master.m3u8
-```
-
-**To replace demo media:** edit `THUMBS` / `VIDEO_POOL` in `src/data/videos.ts`, or simply replace the rows' `thumbnail` / `videoUrl` values — no component changes are required.
-
-## Supabase setup
-
-1. Create a free project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor** → paste `supabase/migrations/0001_init.sql` → **Run**. This creates `videos`, `categories`, `tags`, `video_tags`, `view_events`, `site_settings`, `processing_jobs`, `activity_logs`, plus RLS policies (public can only read `PUBLISHED` videos) and seed categories.
-3. Grab **Project URL**, **anon key** and **service_role key** from *Settings → API*.
-4. Add them as environment variables (see `.env.example`). The service-role key is used **only** by `server/app.ts` — it is never shipped to the browser.
-
-Video files are **never** stored in Supabase — only metadata and object keys.
-
-## Cloudflare R2 setup
-
-1. Create a Cloudflare account → **R2** → **Create bucket** (`erobabe`).
-2. **Manage R2 API Tokens** → create a token with Object Read & Write scoped to the bucket. Copy the Access Key ID, Secret and your Account ID.
-3. Attach a custom domain (e.g. `cdn.erobabe.com`) or enable public access for the delivery hostname you set as `R2_PUBLIC_BASE_URL`.
-4. Add CORS rules on the bucket allowing your site origin (`PUT/POST/GET` from `https://erobabe.com` and `http://localhost:5173`).
-5. Set `R2_*` environment variables. Uploads then flow browser → R2 directly; the server only signs URLs.
-
-## Admin password
-
-The password exists only as a scrypt hash in `ADMIN_PASSWORD_HASH` — never in source control, never readable by the browser.
+For full-stack work (API + frontend together):
 
 ```bash
-# generate a hash (format: scrypt:N:salt_hex:hash_hex)
-node -e "const s=require('crypto').randomBytes(16);require('crypto').scrypt('YOUR_PASSWORD',s,64,(e,k)=>console.log('scrypt:16384:'+s.toString('hex')+':'+k.toString('hex')))"
+npx vercel dev       # or
+npx netlify dev
 ```
 
-Set `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH`, and a random `SESSION_SECRET` (`openssl rand -hex 32`) as deployment secrets.
+Both run the Vite dev server **and** the serverless functions locally.
 
-## Deploying to Vercel
+## Setup: Supabase (database)
 
-1. Push the repo to GitHub/GitLab → **Import Project** in Vercel (framework preset: Vite; defaults work).
-2. Add all environment variables from `.env.example` (Production scope).
-3. For uploads, also `npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner` and commit the updated lockfile (the API imports them dynamically).
-4. Deploy. `vercel.json` routes `/api/*` to `api/handler.ts` and everything else to the SPA — deep links like `/watch/12` work out of the box.
+1. Create a project at [supabase.com](https://supabase.com) (free tier is enough).
+2. Open **SQL Editor → New query**, paste the contents of **`supabase/migrations/0001_init.sql`**, and run it. This creates tables (`videos`, `categories`, `analytics_events`, `settings`, `activity_log`), indexes, RLS policies, the atomic `track_view` function, and seeds categories.
+   Then run **`supabase/migrations/0002_video_slugs.sql`** — it adds the unique `slug` column that powers every `/watch/{video-slug}` page and the dynamic sitemap.
+   Then run **`supabase/migrations/0003_engagement_signals.sql`** — it adds watch-time, completion and likes tracking that feed the discovery ranking engine.
+   Finally run **`supabase/migrations/0004_category_icons.sql`** — it adds `categories.icon` and seeds the 11 content categories shown on Explore. All scripts are safe to re-run.
+3. From **Project Settings → API**, copy:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY` (the **service_role** secret — server-only)
 
-## Deploying to Netlify
+## Setup: Cloudflare R2 (media storage)
 
-1. **Add new site → Import from Git.** Build command `npm run build`, publish `dist` (already in `netlify.toml`).
-2. Add the same environment variables. Netlify Functions picks up `netlify/functions/api.ts`; `netlify.toml` maps `/api/*` to it and installs the SPA fallback.
+1. In the Cloudflare dashboard: **R2 → Create bucket** (e.g. `erobabe-media`).
+2. **Expose it publicly** so the player can stream files: either enable the `r2.dev` public URL (**Settings → Public access**) or attach a custom domain (recommended for production, e.g. `media.erobabe.com`). The resulting base URL is your `R2_PUBLIC_BASE_URL`.
+3. **Set CORS** on the bucket (`aws s3api put-bucket-cors` or the dashboard) using **`r2-cors.json`** — it allows browser `PUT` uploads from your domains and exposes `ETag` (required for multipart).
+4. Create an **R2 API token** (Object Read & Write, scoped to this bucket) and record `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`.
 
-## Connecting erobabe.com
+## Setup: credentials
 
-The domain is not assumed anywhere in code — only `PUBLIC_SITE_URL`:
-
-1. Purchase `erobabe.com` at a registrar; point its nameservers to Cloudflare (required for R2 custom domains anyway).
-2. In Cloudflare DNS: create a `CNAME` for `erobabe.com` and `www` to your Vercel/Netlify target (proxied is fine; SSL on *Full* or managed by the host).
-3. Add the domain in your Vercel/Netlify project settings; wait for certificate issuance.
-4. Set `PUBLIC_SITE_URL=https://erobabe.com` and redeploy. Update `robots.txt` / `sitemap.xml` hostnames if you use a different domain.
-
-## Editing the dataset
-
-`src/data/videos.ts` holds ~40 fictional videos generated from compact tuples:
-
-```ts
-[title, category, durationSec, views, daysAgo, performer, tags, quality, featured, trending]
+```bash
+node scripts/hash-password.mjs "choose-a-strong-password"
+# prints:  ADMIN_USERNAME / ADMIN_PASSWORD_SCRYPT / SESSION_SECRET
 ```
 
-Add/edit rows to change the demo catalog. Categories live beside them (`CATEGORIES`, 10 entries). IDs and slugs are auto-derived. **Removing demo data:** delete the `ROWS` entries (keep the helpers) and, in production, truncate the seeded rows in Supabase.
+## Environment variables
 
-## localStorage features
+Copy `.env.example` → `.env` locally, and add the same values in **Vercel → Project → Settings → Environment Variables** (or Netlify → Site configuration). All are server-side only. **None of these ever appear in the client bundle** — Vite only inlines `VITE_*` vars, and we use none.
 
-| Key | Feature |
+| Variable | Purpose |
 | --- | --- |
-| `eb:age` | 18+ confirmation |
-| `eb:history` | Watch history (max 60, removable, clearable) |
-| `eb:likes` / `eb:saves` | Like & save UI state |
-| `eb:searches` | Recent searches (clearable) |
-| `eb:view-events` | Real view events (demo analytics source) |
-| `eb:admin:v1` | Demo admin CMS state — **the same record the public catalog reads**, so publishing in `/admin` is reflected everywhere instantly |
-| `eb:prefs`, `eb:sidebar` | UI preferences |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD_SCRYPT` | Admin login (scrypt hash, never a plaintext password) |
+| `SESSION_SECRET` | HMAC key for signed session cookies |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Database + PostgREST (service role, server-only) |
+| `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` / `R2_PUBLIC_BASE_URL` | Object storage |
+| `PROCESSING_MODE` | `original` (default) or `callback` |
+| `PROCESSING_WEBHOOK_SECRET` | Shared secret for the processing callback |
+| `SITE_URL` | Absolute site URL |
 
-Admin security in production does **not** use localStorage — it uses server-verified HttpOnly cookies.
+## Deploy
 
-## View counting & anti-abuse
+### Vercel
+Import the repo (framework preset **Vite** is auto-detected). `vercel.json` ships with:
+- the `/api/:path* → api/index.js` rewrite for serverless functions,
+- SPA fallback for all frontend routes (including `/admin`),
+- hardened HTTP headers.
 
-- A view counts only after the configured watch threshold (default **10 s**, adjustable in Settings).
-- Demo mode dedupes by session + 6-hour window; the API additionally rate-limits per IP, validates the video server-side and ignores duplicate session windows.
-- Analytics consume the stored events — nothing is fabricated at read time (demo seeds are clearly marked).
+`npx vercel dev` gives you the same stack locally.
 
-## Costs & free-tier limits
+### Netlify
+Import the repo. `netlify.toml` configures the build (`npm run build` → `dist`), bundles `netlify/functions/api.mjs` with esbuild, and redirects `/api/*` to it before the SPA fallback. Use **`npx netlify dev`** locally.
 
-| Component | Free allowance (approx.) | What happens beyond |
+### Connecting erobabe.com
+1. Buy the domain anywhere, then add it in your host's **Domains** page (Vercel or Netlify both auto-issue TLS).
+2. Update `SITE_URL`, the canonical/OG URLs in `index.html`, `public/robots.txt`, `public/sitemap.xml`, and the origins in `r2-cors.json`.
+
+## The upload workflow (real end-to-end)
+
+1. **Upload** — `/admin/upload`: drag-and-drop, validation (type/size ≤ 2 GB), client-side duration + auto poster capture, direct-to-R2 resumable upload with live progress, speed/ETA, cancel & resume-failed-parts. On completion the server finalizes the multipart upload. A unique SEO **slug** is generated immediately, giving the video its own page at `/watch/{video-slug}` (the slug refreshes with the title while the video is a draft, then locks on publish so indexed URLs never break).
+2. **Process** — with `PROCESSING_MODE=original` the file is marked **ready** immediately (single-file playback). With `callback`, it stays in **processing** until an external worker posts renditions to `POST /api/admin/process/callback` (`x-process-secret` header), which flips it to **ready** and stores `hls_url` (the player then uses HLS via Safari natively and **hls.js** elsewhere — loaded lazily).
+3. **Draft** — metadata (title, description, category, tags, thumbnail override) is saved privately; nothing is public.
+4. **Preview** — the editor (`/admin/videos/:id`) streams the actual stored file before publishing.
+5. **Publish** — flips `status = 'published'` and it appears on the public site instantly: homepage sections, search, category pages, trending, recommendations.
+
+Every mutation writes to the **activity log**; **views** are tracked through a deduplicating Postgres function (one view per viewer/IP-hash/day) and power the Analytics dashboard (daily series, range totals, top videos, storage).
+
+## Discovery ranking engine
+
+Featured, Trending, Rising Now and Editor's Pick are **fully automatic**. A single scoring service
+(`server/ranking.mjs`, mirrored client-side in `src/lib/ranking.ts`) ranks every eligible video from
+live analytics and enforces hard section limits:
+
+| Section | Limit | Optimizes for |
 | --- | --- | --- |
-| Vercel/Netlify hosting | Generous static + function quotas | Paid function/compute tiers |
-| Cloudflare R2 | 10 GB storage, 10M/1M ops per month, **$0 egress** | Pay-as-you-go storage/ops (egress stays free) |
-| Supabase Free | 500 MB DB, 1 GB bandwidth, pauses after inactivity | $25/mo Pro |
-| FFmpeg worker | Your own (e.g. a small VM/Worker + Queue) | First likely paid component for heavy libraries |
+| Featured | 5 | Balanced popularity + recent performance + engagement + quality + recency + momentum |
+| Trending | 8 | Recent views, velocity and acceleration — lifetime views barely count |
+| Rising Now | 3 | Acceleration, growth and performance relative to age (popularity actively penalized) |
+| Editor's Pick | 5 | Admin-flagged pool, ranked on quality, engagement and recent performance |
 
-R2's lack of egress fees is why videos live there and Supabase stores metadata only. If no processing provider is configured, videos publish as single-source MP4 at zero processing cost — the UI says so honestly.
+**Signals**: 1/3/7/14/30-day view windows, unique viewers, watch time, completion rate, likes,
+engagement rate, velocity, acceleration, age-adjusted performance, recency and log-damped lifetime
+popularity. Every signal is **percentile-normalized**, so one viral video cannot flatten the catalog,
+and Rising Now applies an explicit popularity penalty plus excludes the top of Trending — historically
+huge videos can never permanently occupy every slot.
 
-## Backup strategy
+Scores are recomputed whenever new analytics arrive (views, watch-time beacons and likes invalidate a
+60-second cache), and ineligible videos — unpublished, deleted or without playable media — are filtered
+out automatically. Missing migrations degrade gracefully: whatever signals exist are used.
 
-- **Supabase:** *Settings → Database → Backups* (daily on free tiers is manual → schedule `pg_dump` via cron/CI); export `videos`, `categories`, `tags`, `site_settings` JSON periodically.
-- **R2:** objects are immutable-addressed by video ID; enabling bucket versioning or lifecycle rules is optional. A video's full record can be reconstructed from its DB row (`original_key`, `hls_master_url`, `thumbnail_url`) as long as the objects remain.
+Tune the model in one place — `SECTION_WEIGHTS` and `SECTION_LIMITS` in `server/ranking.mjs` — and every
+discovery surface follows without UI changes.
 
-## Security checklist
+## Admin features map
 
-- [x] No credentials in source, Git history, or the public bundle
-- [x] Service-role + R2 secrets server-only (no `VITE_` prefix)
-- [x] Admin auth via scrypt hash, generic errors, IP rate limit, 5-strike lockout (demo parity included)
-- [x] Sessions: HMAC-signed HttpOnly SameSite cookies, Secure in production, verified on every privileged request
-- [x] Public API exposes `PUBLISHED` rows only (RLS enforced at the DB too)
-- [x] Upload MIME + size validation; UUID object keys; no path traversal
-- [x] CSRF origin checks for cookie-authenticated mutations
-- [x] Destructive actions require confirmation UI-side and auth server-side
-- [x] `.env*` git-ignored; response hardening headers (`nosniff`, `DENY`)
+- **Dashboard** — totals (videos/published/drafts/processing/views/storage), 14-day chart, top videos, recent activity
+- **Videos** — search, status/category filters, sorting, pagination, bulk publish/unpublish/delete, quick publish toggles
 
-## Project structure
+### Category icons
 
-```text
-├─ api/handler.ts                 # Vercel API adapter (/api/*)
-├─ netlify/functions/api.ts       # Netlify API adapter
-├─ server/app.ts                  # provider-agnostic secure API router
-├─ supabase/migrations/0001_init.sql
-├─ public/
-│  ├─ assets/brand/og-cover.jpg   # generated brand art
-│  ├─ _redirects · robots.txt · sitemap.xml · manifest.webmanifest · favicon.svg
-├─ src/
-│  ├─ data/videos.ts              # demo catalog + categories + helpers
-│  ├─ lib/ (api.ts · store.ts)    # data plane + local persistence
-│  ├─ components/ (chrome · video · ui)
-│  ├─ pages/ (home · browse · trending · watch)
-│  └─ admin/ (AdminApp · store · dashboard · videos · upload · misc)
-├─ netlify.toml · vercel.json · .env.example
+Icons are stored as short keys (`categories.icon`) and resolved through one shared registry,
+`src/lib/categoryIcons.ts`, so the Explore page, sidebar, category pages and the CMS always render the
+same glyph. The 14 default Explore categories each ship with a unique icon; the CMS picker offers 9
+options. To add a glyph, import it in the registry and add an entry to `CATEGORY_ICONS` (plus
+`ICON_OPTIONS` to expose it in the picker).
+- **Editor** — full metadata, Editor's Pick flag (the only manual discovery control), SEO fields, thumbnail replace, **video file replace**, live preview, publish/unpublish/delete
+- **Categories & Tags** — CRUD with slugs/gradients/cover uploads, **icon picker (9 options, each representing a category type)**, sort order, usage counts, safe delete protection, tag cleanup
+- **Analytics** — 7/14/30-day series, lifetime totals, storage monitoring, top-performers, full audit log
+- **Settings** — site title, announcement, homepage hero toggle, pinned featured video, age-gate copy, infrastructure status
+
+## Security model
+
+- Server-side verification of an **HttpOnly, Secure, SameSite=Lax** cookie containing an HMAC-signed token (12 h)
+- Passwords hashed with **scrypt** (per-user salt, timing-safe compare); constant-time path on unknown usernames
+- **Rate limiting** on login (5/min/IP) and on all mutations (in-memory sliding window — best-effort on serverless; front with Cloudflare WAF for hard guarantees)
+- CSRF: custom `X-Requested-With` header required on all mutations
+- Strict input validation and field whitelists on every endpoint; UUID-checked ids; PostgREST-parameterized queries only
+- Uploads accepted only for `video/*` ≤ 2 GB; thumbnails are validated data URLs ≤ 4 MB
+- R2 credentials and the Supabase service key exist **only** in server env; short-lived signed URLs (4 h) for upload parts
+- RLS: anonymous DB role can read published videos/categories only — everything else is behind the service role
+- Tight outbound headers (nosniff, frame, permissions-policy, referrer)
+
+## Video processing (optional transcoding to 360p–1080p + HLS)
+
+Serverless functions shouldn't run ffmpeg. The honest, extensible contract is:
+
+1. Set `PROCESSING_MODE=callback` and `PROCESSING_WEBHOOK_SECRET`.
+2. Point any worker (a small ffmpeg container, a queue consumer, or a Cloudflare Stream bridge) at new rows in `processing` status.
+3. When renditions exist, the worker calls:
+   ```http
+   POST /api/admin/process/callback
+   x-process-secret: <secret>
+   { "videoId": "…", "hlsUrl": "https://media…/master.m3u8",
+     "renditions": [{"label":"1080p","url":"…"}, …], "durationS": 1523, "thumbnailUrl": "…" }
+   ```
+4. The row becomes `ready` with `hls_url`; the public player automatically prefers HLS (360p/480p/720p/1080p ladder).
+
+Until a worker exists, `original` mode streams the uploaded file directly — fully functional.
+
+## Project structure (additions over the static base)
+
+```
+api/index.js                  # Vercel serverless adapter
+netlify/functions/api.mjs     # Netlify functions adapter
+server/
+  handler.mjs                 # router shared by both adapters
+  public-api.mjs              # public read API (published content only)
+  admin-api.mjs               # auth, uploads, CRUD, taxonomy, analytics, settings
+  r2.mjs                      # SigV4 presigning + multipart lifecycle (zero deps)
+  db.mjs                      # PostgREST client (service role)
+  util.mjs                    # sessions, scrypt, rate limiting, HTTP helpers
+supabase/migrations/0001_init.sql
+src/admin/                    # the /admin CMS (React)
+src/data/dynamic.ts           # hot-swap of demo catalog ←→ live catalog
+.env.example · r2-cors.json · scripts/hash-password.mjs
 ```
 
 ---
 
-**18+ / Adults Only.** This repository ships a fictional-content demonstration of a premium adult streaming product — interface, CMS and infrastructure included.
+© EroBabe. 18+ Adults Only. Demo content is fictional; connect your own licensed media and policies before operating a real service.

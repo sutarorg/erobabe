@@ -63,7 +63,7 @@ export default function CategoryPage() {
     );
   }
 
-  const Icon = categoryIcon(category.slug);
+  const Icon = categoryIcon(category.slug, category.icon);
 
   return (
     <div className="mx-auto max-w-[1600px] px-4 pt-4 md:px-8 md:pt-6">

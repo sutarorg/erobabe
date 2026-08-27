@@ -82,7 +82,7 @@ function SidebarNav({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?
         )}
         {collapsed && <div aria-hidden className="mx-2 border-t border-white/5 pb-2" />}
         {BROWSE_CATEGORIES.map((c) => (
-          <NavItem key={c.slug} to={`/category/${c.slug}`} icon={categoryIcon(c.slug)} label={c.name} collapsed={collapsed} />
+          <NavItem key={c.slug} to={`/category/${c.slug}`} icon={categoryIcon(c.slug, c.icon)} label={c.name} collapsed={collapsed} />
         ))}
       </div>
 

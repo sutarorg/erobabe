@@ -1,219 +1,144 @@
--- ============================================================
--- EroBabe — Supabase schema (run in the SQL editor or via CLI)
--- Metadata only. Video binaries live in Cloudflare R2.
--- ============================================================
+-- ═══════════════════════════════════════════════════════════════
+-- EroBabe CMS — initial schema (Supabase / Postgres)
+-- Run in: Supabase Dashboard → SQL Editor → New query → Run
+-- ═══════════════════════════════════════════════════════════════
 
-create extension if not exists "pgcrypto";
+create extension if not exists pgcrypto;
 
--- ---------- enums ----------
-do $$ begin
-  create type video_status as enum ('DRAFT','PROCESSING','READY','PUBLISHED','UNPUBLISHED','FAILED');
-exception when duplicate_object then null; end $$;
-
--- ---------- videos ----------
-create table if not exists public.videos (
-  id                uuid primary key default gen_random_uuid(),
-  title             text not null,
-  slug              text not null unique,
-  description       text default '',
-  category_slug     text,
-  tags              text[] default '{}',
-  performer         text default '',
-  studio            text,
-  quality           text default 'HD',
-  duration_sec      int default 0,
-  width             int,
-  height            int,
-  views             bigint default 0,
-  -- storage references (Cloudflare R2 object keys / public URLs)
-  thumbnail_url     text,
-  poster_url        text,
-  original_key      text,            -- originals/{id}/source.mp4
-  playback_url      text,            -- MP4 fallback URL
-  hls_master_url    text,            -- encoded/{id}/master.m3u8
-  preview_url       text,
-  -- publishing
-  status            video_status not null default 'DRAFT',
-  featured          boolean default false,
-  trending          boolean default false,
-  published_at      timestamptz,
-  scheduled_at      timestamptz,
-  error             text,
-  -- seo
-  seo_title         text,
-  seo_description   text,
-  canonical_url     text,
-  created_at        timestamptz not null default now(),
-  updated_at        timestamptz not null default now()
-);
-
-create index if not exists videos_status_idx      on public.videos (status);
-create index if not exists videos_category_idx    on public.videos (category_slug);
-create index if not exists videos_published_idx   on public.videos (published_at desc);
-create index if not exists videos_views_idx       on public.videos (views desc);
-
--- ---------- categories ----------
+-- ── Categories ──
 create table if not exists public.categories (
-  slug          text primary key,
-  name          text not null unique,
-  blurb         text default '',
-  description   text default '',
-  image_url     text,
-  accent        text default 'from-rose-600/60',
-  seo_title     text,
-  seo_description text,
-  sort_order    int default 0,
-  created_at    timestamptz not null default now()
-);
-
--- ---------- tags (relational) ----------
-create table if not exists public.tags (
-  id          bigint generated always as identity primary key,
-  name        text not null unique,
+  id          uuid primary key default gen_random_uuid(),
+  slug        text not null unique,
+  name        text not null,
+  blurb       text,
+  gradient    text not null default 'from-zinc-500/70 via-zinc-800/40',
+  image_url   text,
+  sort        int  not null default 0,
   created_at  timestamptz not null default now()
 );
 
-create table if not exists public.video_tags (
-  video_id uuid references public.videos(id) on delete cascade,
-  tag_id   bigint references public.tags(id) on delete cascade,
-  primary key (video_id, tag_id)
+-- ── Videos ──
+create table if not exists public.videos (
+  id              uuid primary key default gen_random_uuid(),
+  title           text not null,
+  description     text,
+  status          text not null default 'draft'
+                  check (status in ('uploading','draft','processing','ready','published','unpublished')),
+  category_id     uuid references public.categories(id) on delete set null,
+  tags            text[] not null default '{}',
+  duration_s      int,
+  views           bigint not null default 0,
+  like_ratio      int not null default 95,
+  seo_title       text,
+  seo_description text,
+
+  -- media
+  video_key       text,     -- live R2 object key
+  upload_key      text,     -- in-flight upload object key
+  upload_id       text,     -- in-flight multipart upload id
+  video_url       text,     -- public playback URL (R2 public base + key)
+  hls_url         text,     -- adaptive stream URL (when processing is configured)
+  thumbnail_key   text,
+  thumbnail_url   text,
+  source_size     bigint not null default 0,
+  content_type    text,
+  renditions      jsonb not null default '[]'::jsonb,
+
+  -- curation flags
+  featured        bool not null default false,
+  trending        bool not null default false,
+  editors_pick    bool not null default false,
+
+  published_at    timestamptz,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
 );
 
--- ---------- view events (real analytics) ----------
-create table if not exists public.view_events (
+create index if not exists videos_status_idx      on public.videos (status);
+create index if not exists videos_published_idx   on public.videos (published_at desc);
+create index if not exists videos_views_idx       on public.videos (views desc);
+create index if not exists videos_category_idx    on public.videos (category_id);
+create index if not exists videos_tags_gin        on public.videos using gin (tags);
+
+-- ── Analytics (view events, deduped per viewer/day) ──
+create table if not exists public.analytics_events (
   id          bigint generated always as identity primary key,
-  video_id    uuid references public.videos(id) on delete cascade,
-  ts          timestamptz not null default now(),
-  seconds     int default 0,
-  session_id  text not null,        -- anonymous random id
-  visitor_id  text,                 -- anonymous random id (no PII)
-  ua_hash     text                  -- hashed UA for basic abuse heuristics
+  video_id    uuid not null references public.videos(id) on delete cascade,
+  viewer_hash text not null,
+  created_day date not null default current_date,
+  unique (video_id, viewer_hash, created_day)
 );
-create index if not exists view_events_video_idx on public.view_events (video_id, ts desc);
-create index if not exists view_events_ts_idx    on public.view_events (ts desc);
+create index if not exists analytics_day_idx on public.analytics_events (created_day);
 
--- ---------- processing jobs ----------
-create table if not exists public.processing_jobs (
-  id          uuid primary key default gen_random_uuid(),
-  video_id    uuid references public.videos(id) on delete cascade,
-  provider    text not null,          -- 'ffmpeg-worker' | 'cloudflare-stream' | ...
-  status      text not null default 'QUEUED', -- QUEUED RUNNING DONE FAILED CANCELLED
-  progress    int default 0,
-  outputs     jsonb default '{}',     -- { "360p": key, "720p": key, master: key }
-  error       text,
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+-- ── Site settings ──
+create table if not exists public.settings (
+  key        text primary key,
+  value      jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
 );
 
--- ---------- site settings ----------
-create table if not exists public.site_settings (
-  key   text primary key,
-  value jsonb not null
-);
-
--- ---------- activity log ----------
-create table if not exists public.activity_logs (
+-- ── Activity / audit log ──
+create table if not exists public.activity_log (
   id         bigint generated always as identity primary key,
-  actor      text not null default 'admin',
+  actor      text not null,
   action     text not null,
   entity     text not null,
   entity_id  text,
-  detail     text,
-  ts         timestamptz not null default now()
+  meta       jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
 );
-create index if not exists activity_ts_idx on public.activity_logs (ts desc);
+create index if not exists activity_created_idx on public.activity_log (created_at desc);
 
--- ---------- updated_at trigger ----------
-create or replace function public.touch_updated_at()
-returns trigger language plpgsql as $$
+-- ── Atomic view tracking (insert-or-ignore event, then bump counter) ──
+create or replace function public.track_view(v uuid, h text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
 begin
-  new.updated_at = now();
-  return new;
-end $$;
+  insert into public.analytics_events (video_id, viewer_hash, created_day)
+  values (v, h, current_date)
+  on conflict do nothing;
+  if found then
+    update public.videos set views = views + 1 where id = v;
+  end if;
+end;
+$$;
 
-drop trigger if exists videos_touch on public.videos;
-create trigger videos_touch before update on public.videos
-  for each row execute function public.touch_updated_at();
+-- ══ Row Level Security ══
+alter table public.videos           enable row level security;
+alter table public.categories       enable row level security;
+alter table public.analytics_events enable row level security;
+alter table public.settings         enable row level security;
+alter table public.activity_log     enable row level security;
 
--- ============================================================
--- Row Level Security
---  • anon/public may ONLY read PUBLISHED videos + categories
---  • writes + all admin data flow through the service-role key
---    (server-side only — never shipped to the browser)
--- ============================================================
-alter table public.videos          enable row level security;
-alter table public.categories      enable row level security;
-alter table public.tags            enable row level security;
-alter table public.video_tags      enable row level security;
-alter table public.view_events     enable row level security;
-alter table public.processing_jobs enable row level security;
-alter table public.site_settings   enable row level security;
-alter table public.activity_logs   enable row level security;
-
-drop policy if exists "public read published videos" on public.videos;
-create policy "public read published videos"
+-- Anonymous visitors may read ONLY published videos and categories.
+-- All admin operations run through the service role in the serverless
+-- functions (service role bypasses RLS), so no other policies are needed.
+drop policy if exists "public_read_published_videos" on public.videos;
+create policy "public_read_published_videos"
   on public.videos for select
-  using (status = 'PUBLISHED');
+  using (status = 'published');
 
-drop policy if exists "public read categories" on public.categories;
-create policy "public read categories"
-  on public.categories for select using (true);
+drop policy if exists "public_read_categories" on public.categories;
+create policy "public_read_categories"
+  on public.categories for select
+  using (true);
 
-drop policy if exists "public read tags" on public.tags;
-create policy "public read tags"
-  on public.tags for select using (true);
+grant select on public.videos, public.categories to anon;
+grant execute on function public.track_view(uuid, text) to anon;
 
-drop policy if exists "public read video_tags" on public.video_tags;
-create policy "public read video_tags"
-  on public.video_tags for select using (true);
-
--- view_events: public insert of anonymous events allowed; no public read
-drop policy if exists "public insert view events" on public.view_events;
-create policy "public insert view events"
-  on public.view_events for insert with check (true);
-
--- site_settings: public read (non-secret display config only)
-drop policy if exists "public read settings" on public.site_settings;
-create policy "public read settings"
-  on public.site_settings for select using (true);
-
--- processing_jobs + activity_logs: no anon policies = service-role only
-
--- ---------- seed categories ----------
-insert into public.categories (slug, name, blurb, sort_order) values
-  ('studio','Studio','High-production scenes, cinematic lighting.',0),
-  ('couples','Couples','Intimate duets and real chemistry.',1),
-  ('solo','Solo','One performer. Full focus.',2),
-  ('amateur','Amateur','Unpolished, authentic, self-shot.',3),
-  ('premium','Premium','Flagship productions, exclusive cuts.',4),
-  ('compilation','Compilation','Curated edits and best-of mixes.',5),
-  ('cinematic','Cinematic','Story-driven, artfully shot films.',6),
-  ('boudoir','Boudoir','Soft light, silk and slow tension.',7),
-  ('noir','Noir','Dark rooms, neon and shadow play.',8),
-  ('luxury','Luxury','Penthouse views, champagne moods.',9)
+-- ── Seed: categories matching the built-in demo slugs ──
+insert into public.categories (slug, name, blurb, gradient, sort) values
+  ('studio',      'Studio',      'Polished productions with a cinematic finish.',        'from-zinc-500/70 via-zinc-800/40',     10),
+  ('premium',     'Premium',     'The flagship collection — slow, deliberate, gorgeous.','from-purple-600/80 via-purple-900/40', 20),
+  ('couples',     'Couples',     'Shared moments, chemistry first.',                     'from-pink-600/80 via-pink-900/40',     30),
+  ('solo',        'Solo',        'Intimate, understated, atmospheric.',                  'from-red-600/80 via-red-900/40',       40),
+  ('amateur',     'Amateur',     'Candid, unscripted energy.',                           'from-amber-600/80 via-amber-900/40',   50),
+  ('compilation', 'Compilation', 'Curated highlights and best-of cuts.',                 'from-indigo-600/80 via-indigo-900/40', 60)
 on conflict (slug) do nothing;
 
-insert into public.site_settings (key, value) values
-  ('site', '{"siteName":"EroBabe","siteTagline":"Premium adult video streaming"}'),
-  ('age_gate', '{"enabled":true,"message":"You must be 18 years or older to enter EroBabe."}'),
-  ('analytics', '{"viewsEnabled":true,"viewThresholdSec":10}')
+insert into public.settings (key, value) values
+  ('site', '{"site_title":"EroBabe","hero_enabled":true,"featured_video_id":null,"announcement":null,"age_text":null}'::jsonb)
 on conflict (key) do nothing;
-
--- ---------- trending helper view ----------
-create or replace view public.trending_videos as
-select v.*,
-       coalesce(recent.n, 0) as recent_views,
-       coalesce(recent.n, 0)::float / power(greatest(extract(epoch from (now() - v.published_at))/86400, 0.4), 1.35) as trend_score
-from public.videos v
-left join lateral (
-  select count(*) as n from public.view_events e
-  where e.video_id = v.id and e.ts > now() - interval '7 days'
-) recent on true
-where v.status = 'PUBLISHED'
-order by trend_score desc;
-
--- ---------- atomic view increment (used by POST /api/views) ----------
-create or replace function public.increment_views(vid uuid)
-returns void language sql security definer as $$
-  update public.videos set views = views + 1 where id = vid;
-$$;

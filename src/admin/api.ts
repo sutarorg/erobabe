@@ -84,6 +84,8 @@ export interface AdminCategory {
   blurb: string | null;
   gradient: string;
   image_url: string | null;
+  /** Icon key from the shared category-icon registry. */
+  icon: string | null;
   sort: number;
   count: number;
   created_at: string;
@@ -202,7 +204,7 @@ export const api = {
     req<{ ok: boolean; url: string; key: string }>("/media", { body }),
 
   categories: () => req<{ categories: AdminCategory[] }>("/categories"),
-  createCategory: (body: { name: string; slug?: string; blurb?: string; gradient?: string }) =>
+  createCategory: (body: { name: string; slug?: string; blurb?: string; gradient?: string; icon?: string }) =>
     req<{ category: AdminCategory }>("/categories", { body }),
   patchCategory: (id: string, patch: Record<string, unknown>) =>
     req<{ category: AdminCategory }>(`/categories/${id}`, { method: "PATCH", body: patch }),

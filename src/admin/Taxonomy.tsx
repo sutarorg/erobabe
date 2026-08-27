@@ -4,6 +4,7 @@ import { api, type AdminCategory } from "./api";
 import {
   Btn, Confirm, EmptyBlock, Field, Input, Modal, PageHeader, Select, Spinner, Tabs, useFetch,
 } from "./ui";
+import { CATEGORY_ICONS, ICON_OPTIONS, resolveCategoryIcon } from "@/lib/categoryIcons";
 import { toast } from "@/components/Feedback";
 import { cn } from "@/lib/format";
 
@@ -21,11 +22,59 @@ const GRADIENTS = [
 
 const slugify = (s: string) => s.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 
+/**
+ * Icon picker — nine options, each visually representing the kind of
+ * category it is meant for. Keys come from the shared registry, so the
+ * public site renders exactly the same glyph the admin selects.
+ */
+function IconPicker({
+  value, slug, onChange,
+}: { value: string; slug?: string; onChange: (key: string) => void }) {
+  const inOptions = ICON_OPTIONS.some((o) => o.key === value);
+  const CurrentIcon = resolveCategoryIcon(slug, value);
+  return (
+    <div>
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+        {ICON_OPTIONS.map((opt) => {
+          const Icon = CATEGORY_ICONS[opt.key] ?? resolveCategoryIcon(null, opt.key);
+          const active = value === opt.key;
+          return (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => onChange(opt.key)}
+              title={`${opt.label} — ${opt.represents}`}
+              aria-pressed={active}
+              aria-label={`${opt.label}, represents ${opt.represents}`}
+              className={cn(
+                "flex flex-col items-center gap-1 rounded-xl border px-2 py-2.5 transition active:scale-95",
+                active
+                  ? "border-brand-500/50 bg-brand-500/12 text-brand-200"
+                  : "border-white/8 bg-ink-850 text-fog-400 hover:border-white/20 hover:text-white"
+              )}
+            >
+              <Icon className="size-5" aria-hidden />
+              <span className="w-full truncate text-center text-[10px] font-medium">{opt.represents}</span>
+            </button>
+          );
+        })}
+      </div>
+      {value && !inOptions && (
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-fog-500">
+          <CurrentIcon className="size-3.5 text-brand-400" aria-hidden />
+          Currently using the built-in “{value}” icon — pick one above to change it.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CategoriesTab() {
   const { data, loading, reload } = useFetch(() => api.categories(), []);
   const categories = data?.categories ?? [];
   const [name, setName] = useState("");
   const [blurb, setBlurb] = useState("");
+  const [icon, setIcon] = useState(ICON_OPTIONS[0].key);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AdminCategory | null>(null);
   const [deleting, setDeleting] = useState<AdminCategory | null>(null);
@@ -35,10 +84,11 @@ function CategoriesTab() {
     if (!name.trim()) return;
     setCreating(true);
     try {
-      await api.createCategory({ name: name.trim(), blurb: blurb.trim() || undefined });
+      await api.createCategory({ name: name.trim(), blurb: blurb.trim() || undefined, icon });
       toast("Category created");
       setName("");
       setBlurb("");
+      setIcon(ICON_OPTIONS[0].key);
       reload();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Create failed", "info");
@@ -54,11 +104,16 @@ function CategoriesTab() {
           e.preventDefault();
           create();
         }}
-        className="grid gap-3 rounded-2xl border border-white/6 bg-ink-900/60 p-4 sm:grid-cols-[1fr_1.4fr_auto]"
+        className="space-y-4 rounded-2xl border border-white/6 bg-ink-900/60 p-4"
       >
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New category name" maxLength={60} aria-label="Category name" />
-        <Input value={blurb} onChange={(e) => setBlurb(e.target.value)} placeholder="Short blurb (optional)" maxLength={160} aria-label="Category blurb" />
-        <Btn variant="primary" icon={Plus} busy={creating} type="submit">Add category</Btn>
+        <div className="grid gap-3 sm:grid-cols-[1fr_1.4fr_auto]">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="New category name" maxLength={60} aria-label="Category name" />
+          <Input value={blurb} onChange={(e) => setBlurb(e.target.value)} placeholder="Short blurb (optional)" maxLength={160} aria-label="Category blurb" />
+          <Btn variant="primary" icon={Plus} busy={creating} type="submit">Add category</Btn>
+        </div>
+        <Field label="Icon" hint="Shown on the Explore page, category pages and the sidebar.">
+          <IconPicker value={icon} onChange={setIcon} />
+        </Field>
       </form>
 
       {loading ? (
@@ -71,7 +126,13 @@ function CategoriesTab() {
             <div key={c.id} className="group relative overflow-hidden rounded-2xl border border-white/6 bg-ink-900/60 p-4 transition hover:border-white/12">
               <div className={cn("absolute inset-x-0 top-0 h-1 bg-gradient-to-r", c.gradient)} aria-hidden />
               <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
+                <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-white/8 bg-ink-850 text-brand-300">
+                  {(() => {
+                    const Icon = resolveCategoryIcon(c.slug, c.icon);
+                    return <Icon className="size-4.5" aria-hidden />;
+                  })()}
+                </span>
+                <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-white">{c.name}</p>
                   <p className="mt-0.5 text-xs text-fog-600">/{c.slug} · {c.count} videos</p>
                   {c.blurb && <p className="mt-1.5 line-clamp-2 text-xs text-fog-500">{c.blurb}</p>}
@@ -138,6 +199,7 @@ function CategoryModal({
       blurb: category.blurb ?? "",
       gradient: category.gradient,
       imageUrl: category.image_url ?? "",
+      icon: category.icon ?? "",
       sort: category.sort,
     });
   }
@@ -152,6 +214,7 @@ function CategoryModal({
         blurb: String(form.blurb),
         gradient: String(form.gradient),
         imageUrl: String(form.imageUrl),
+        icon: String(form.icon ?? ""),
         sort: Number(form.sort) || 0,
       });
       toast("Category updated");
@@ -179,6 +242,13 @@ function CategoryModal({
         </div>
         <Field label="Blurb">
           <Input value={String(form.blurb ?? "")} onChange={(e) => setForm((f) => ({ ...f, blurb: e.target.value }))} maxLength={160} />
+        </Field>
+        <Field label="Icon" hint="Shown on the Explore page, category pages and the sidebar.">
+          <IconPicker
+            value={String(form.icon ?? "")}
+            slug={category?.slug}
+            onChange={(key) => setForm((f) => ({ ...f, icon: key }))}
+          />
         </Field>
         <Field label="Card gradient">
           <Select value={String(form.gradient ?? "")} onChange={(e) => setForm((f) => ({ ...f, gradient: e.target.value }))}>

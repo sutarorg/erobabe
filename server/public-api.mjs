@@ -121,7 +121,7 @@ export async function handlePublic(req, url, path) {
       categories: cats.map((c) => ({
         id: c.id, slug: c.slug, name: c.name, blurb: c.blurb ?? "",
         gradient: c.gradient ?? "from-zinc-500/70 via-zinc-800/40",
-        imageUrl: c.image_url ?? null, sort: c.sort ?? 0,
+        imageUrl: c.image_url ?? null, icon: c.icon ?? null, sort: c.sort ?? 0,
         count: counts.get(c.id) ?? 0,
       })),
     });

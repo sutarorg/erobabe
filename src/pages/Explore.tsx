@@ -47,14 +47,10 @@ export default function Explore() {
       </header>
 
       <section aria-label="Browse categories">
-        <div className="no-scrollbar -mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-1 sm:gap-4 md:mx-0 md:px-0">
+        <SectionHeader eyebrow="All categories" title="Browse Categories" href="/categories" />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
           {CATEGORIES.map((c) => (
-            <CategoryCard
-              key={c.slug}
-              category={c}
-              count={c.href ? undefined : categoryCount(c.slug)}
-              className="w-[210px] shrink-0 snap-start"
-            />
+            <CategoryCard key={c.slug} category={c} count={c.href ? undefined : categoryCount(c.slug)} />
           ))}
         </div>
       </section>

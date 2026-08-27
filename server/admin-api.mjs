@@ -1,4 +1,4 @@
-import { dbApi, objectKey, hasSlugColumn } from "./db.mjs";
+import { dbApi, objectKey, hasSlugColumn, hasColumn } from "./db.mjs";
 import {
   createMultipartUpload, presignPart, presignSinglePut, completeMultipartUpload,
   abortMultipartUpload, putObject, deleteObject, publicUrlFor, r2ConfigMissing,
@@ -570,13 +570,17 @@ async function createCategory(req) {
   const name = cleanText(body.name, 60);
   if (!name) throw badRequest("Name is required");
   const slug = cleanText(body.slug, 64) || slugifyName(name);
-  const row = await dbApi.insert("categories", {
+  const insert = {
     name, slug,
     blurb: cleanText(body.blurb, 160) || null,
     gradient: cleanText(body.gradient, 120) || "from-zinc-500/70 via-zinc-800/40",
     image_url: cleanText(body.imageUrl, 300) || null,
     sort: Number(body.sort) || 0,
-  });
+  };
+  // `icon` arrives with migration 0004 — skip it gracefully until then.
+  const icon = cleanText(body.icon, 40);
+  if (icon && (await hasColumn("categories", "icon"))) insert.icon = icon;
+  const row = await dbApi.insert("categories", insert);
   invalidateCategoryCache();
   await logActivity(admin.sub, "category.create", "category", row.id ?? slug, { name });
   return json({ category: row });
@@ -594,6 +598,9 @@ async function patchCategory(req, id) {
   if ("gradient" in body) patch.gradient = cleanText(body.gradient, 120);
   if ("imageUrl" in body) patch.image_url = cleanText(body.imageUrl, 300) || null;
   if ("sort" in body) patch.sort = Number(body.sort) || 0;
+  if ("icon" in body && (await hasColumn("categories", "icon"))) {
+    patch.icon = cleanText(body.icon, 40) || null;
+  }
   const updated = await dbApi.update("categories", `id=eq.${id}`, patch);
   invalidateCategoryCache();
   await logActivity(admin.sub, "category.update", "category", id, { name: patch.name });
