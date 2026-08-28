@@ -178,7 +178,7 @@ the **title** and **thumbnail**; everything else is automated:
 Every video uploads as a **draft**, then publishes **one per hour** — first an hour after the batch
 finishes. Three independent triggers run the schedule, so it holds on any plan:
 
-1. **Platform cron** — `/api/cron/publish` (Vercel Crons hourly, Netlify Scheduled Functions).
+1. **Platform cron** — `/api/cron/publish` (daily safety sweep on Vercel Hobby; hourly on Netlify). Vercel Hobby rejects schedules that run more than once per day, so `vercel.json` uses `0 0 * * *`.
 2. **Lazy sweep** — public API reads check for due videos at most once a minute. Works with no cron
    at all, which matters on Vercel Hobby where cron frequency is limited.
 3. **Manual** — `POST /api/admin/publish-due` from the CMS.

@@ -9,8 +9,8 @@ import { json, slugify } from "./util.mjs";
  * hour apart. Three independent triggers flip them live, so the
  * schedule holds regardless of hosting plan:
  *
- *   1. Platform cron  — /api/cron/publish (Vercel Crons, Netlify
- *      Scheduled Functions).
+ *   1. Platform cron  — /api/cron/publish (daily safety sweep on
+ *      Vercel Hobby; hourly on Netlify / paid Vercel plans).
  *   2. Lazy sweep     — public API reads check for due videos at most
  *      once a minute per instance. Works even without cron.
  *   3. Manual         — the CMS calls the same endpoint on demand.
@@ -95,7 +95,13 @@ export function sweepDueVideos() {
   void publishDueVideos().catch(() => {});
 }
 
-/** GET|POST /api/cron/publish — platform cron entry point. */
+/**
+ * GET|POST /api/cron/publish — platform cron entry point.
+ *
+ * Vercel Hobby only permits one cron invocation per day. The daily job is
+ * therefore a recovery sweep; the public-catalog sweep above still releases
+ * due videos at one-minute resolution whenever the site receives traffic.
+ */
 export async function handleCronPublish() {
   const result = await publishDueVideos();
   return json({ ok: true, ...result, at: new Date().toISOString() });
