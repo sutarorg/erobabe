@@ -1,4 +1,7 @@
-import { Film, HardDrive, Hourglass, UploadCloud, Users, Eye, BarChart3, Clock, CheckCircle2 } from "lucide-react";
+import {
+  Film, HardDrive, Hourglass, UploadCloud, Users, Eye, BarChart3, Clock,
+  CheckCircle2, ShieldAlert,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "./api";
 import { BtnLink, EmptyBlock, PageHeader, Spinner, StatCard, useFetch, fmtViews } from "./ui";
@@ -8,6 +11,7 @@ import { Btn } from "./ui";
 
 export default function Dashboard() {
   const { data, loading, error, reload } = useFetch(() => api.overview(), []);
+  const twoFactor = useFetch(() => api.twoFactorStatus(), []);
 
   if (loading) return <Spinner label="Loading overview…" />;
   if (error || !data) {
@@ -32,6 +36,22 @@ export default function Dashboard() {
         sub="Content, storage and audience at a glance."
         actions={<BtnLink to="/admin/upload" variant="primary" icon={UploadCloud}>Upload video</BtnLink>}
       />
+
+      {/* Nudge toward 2FA while the panel is password-only. */}
+      {twoFactor.data && !twoFactor.data.enabled && (
+        <Link
+          to="/admin/security"
+          className="mb-5 flex items-start gap-3 rounded-2xl border border-amber-500/25 bg-amber-500/8 p-4 transition hover:border-amber-500/40"
+        >
+          <ShieldAlert className="mt-0.5 size-5 shrink-0 text-amber-400" aria-hidden />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-amber-100">Two-factor authentication is off</p>
+            <p className="mt-0.5 text-xs text-amber-200/80">
+              The CMS is protected by a password alone. Add an authenticator app →
+            </p>
+          </div>
+        </Link>
+      )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <StatCard icon={Film} label="Videos" value={String(t.videos)} sub={`${t.objects} objects`} accent />

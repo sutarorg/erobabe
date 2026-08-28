@@ -169,9 +169,37 @@ const qs = (params: Record<string, string | number | undefined | null>) =>
 
 export const api = {
   login: (username: string, password: string) =>
-    req<{ ok: boolean; user: { username: string } }>("/auth/login", { body: { username, password } }),
+    req<{ ok: boolean; twoFactorRequired: boolean; user: { username: string } | null }>(
+      "/auth/login",
+      { body: { username, password } }
+    ),
+  verify2FA: (code: string) =>
+    req<{ ok: boolean; user: { username: string }; usedRecovery: boolean }>("/auth/2fa/verify", {
+      body: { code },
+    }),
   logout: () => req<{ ok: boolean }>("/auth/logout", { body: {} }),
-  me: () => req<{ user: { username: string } }>("/auth/me"),
+  me: () =>
+    req<{
+      user: { username: string } | null;
+      twoFactorRequired?: boolean;
+      twoFactorEnabled?: boolean;
+      pending?: string;
+    }>("/auth/me"),
+
+  twoFactorStatus: () =>
+    req<{ enabled: boolean; enrolledAt: string | null; recoveryRemaining: number; account: string }>(
+      "/auth/2fa/status"
+    ),
+  twoFactorSetup: () =>
+    req<{ secret: string; otpauth: string; account: string; issuer: string }>("/auth/2fa/setup", {
+      body: {},
+    }),
+  twoFactorEnable: (code: string) =>
+    req<{ ok: boolean; recoveryCodes: string[] }>("/auth/2fa/enable", { body: { code } }),
+  twoFactorDisable: (password: string, code: string) =>
+    req<{ ok: boolean }>("/auth/2fa/disable", { body: { password, code } }),
+  twoFactorRecoveryCodes: (code: string) =>
+    req<{ ok: boolean; recoveryCodes: string[] }>("/auth/2fa/recovery-codes", { body: { code } }),
 
   overview: () => req<Overview>("/overview"),
   analytics: (days: number) =>

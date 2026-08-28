@@ -82,9 +82,12 @@ export function serializeCookie(name, value, { maxAgeSec = 0, secure = true, htt
 
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
-export function createSessionToken(username, secret, ttlSec = 60 * 60 * 12) {
+export function createSessionToken(username, secret, ttlSec = 60 * 60 * 12, scope = "admin") {
   const payload = {
     sub: username,
+    // "pending" = password accepted, still awaiting the second factor.
+    // Only "admin" may reach protected endpoints.
+    scp: scope,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + ttlSec,
     jti: crypto.randomBytes(8).toString("hex"),
@@ -102,6 +105,8 @@ export function verifySessionToken(token, secret) {
   try {
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
     if (!payload.exp || payload.exp < Date.now() / 1000) return null;
+    // Tokens minted before scopes existed are treated as full sessions.
+    if (!payload.scp) payload.scp = "admin";
     return payload;
   } catch {
     return null;

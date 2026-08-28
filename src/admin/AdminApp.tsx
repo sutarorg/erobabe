@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
 import {
   BarChart3, Film, Flame, LayoutGrid, LogOut, Menu, Settings as SettingsIcon,
-  UploadCloud, X, LayoutDashboard, type LucideIcon,
+  ShieldCheck, UploadCloud, X, LayoutDashboard, type LucideIcon,
 } from "lucide-react";
 import { api } from "./api";
 import { Logo } from "@/components/Brand";
@@ -12,7 +12,11 @@ import { cn } from "@/lib/format";
 /* ── auth context ── */
 interface AuthState {
   user: { username: string } | null;
+  /** Password accepted, awaiting the TOTP code. */
+  pending: boolean;
+  twoFactorEnabled: boolean;
   checked: boolean;
+  setPending: (v: boolean) => void;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -21,14 +25,21 @@ export const useAuth = () => useContext(AuthCtx)!;
 
 function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<{ username: string } | null>(null);
+  const [pending, setPending] = useState(false);
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [checked, setChecked] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const { user } = await api.me();
-      setUser(user);
+      const res = await api.me();
+      setUser(res.user);
+      // A half-authenticated session survives refreshes, so the UI can
+      // resume at the code step rather than asking for the password again.
+      setPending(Boolean(res.twoFactorRequired) && !res.user);
+      setTwoFactorEnabled(Boolean(res.twoFactorEnabled));
     } catch {
       setUser(null);
+      setPending(false);
     } finally {
       setChecked(true);
     }
@@ -41,6 +52,7 @@ function AuthProvider({ children }: { children: ReactNode }) {
       /* cookie expires anyway */
     }
     setUser(null);
+    setPending(false);
   }, []);
 
   useEffect(() => {
@@ -53,16 +65,23 @@ function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("eb-admin-unauthorized", force);
   }, []);
 
-  return <AuthCtx.Provider value={{ user, checked, refresh, logout }}>{children}</AuthCtx.Provider>;
+  return (
+    <AuthCtx.Provider
+      value={{ user, pending, twoFactorEnabled, checked, setPending, refresh, logout }}
+    >
+      {children}
+    </AuthCtx.Provider>
+  );
 }
 
 /* ── login ── */
 function Login() {
-  const { user, checked, refresh } = useAuth();
+  const { user, checked, refresh, pending, setPending } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,19 +89,104 @@ function Login() {
     return <Navigate to={(location.state as { from?: string } | null)?.from ?? "/admin"} replace />;
   }
 
+  const done = () =>
+    navigate((location.state as { from?: string } | null)?.from ?? "/admin", { replace: true });
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await api.login(username.trim(), password);
+      const res = await api.login(username.trim(), password);
+      setPassword("");
+      if (res.twoFactorRequired) {
+        // Stop here — the session cannot reach the CMS until 2FA passes.
+        setPending(true);
+        setBusy(false);
+        return;
+      }
       await refresh();
-      navigate((location.state as { from?: string } | null)?.from ?? "/admin", { replace: true });
+      done();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign-in failed");
       setBusy(false);
     }
   };
+
+  const submitCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.verify2FA(code.trim());
+      await refresh();
+      done();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Verification failed");
+      setCode("");
+      setBusy(false);
+    }
+  };
+
+  /* ── Step 2: authenticator code ── */
+  if (pending) {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink-950 p-4">
+        <div className="absolute inset-0 bg-[radial-gradient(60%_50%_at_50%_20%,rgba(244,63,127,0.12),transparent_70%)]" aria-hidden />
+        <form
+          onSubmit={submitCode}
+          className="relative w-full max-w-sm rounded-3xl border border-white/10 bg-ink-900/80 p-8 shadow-2xl backdrop-blur-xl animate-scale-in"
+        >
+          <Logo />
+          <div className="mt-6 flex items-center gap-2">
+            <ShieldCheck className="size-4 text-brand-400" aria-hidden />
+            <h1 className="text-lg font-semibold tracking-tight text-white">Two-factor verification</h1>
+          </div>
+          <p className="mt-1 text-xs text-fog-500">
+            Enter the 6-digit code from your authenticator app, or one of your recovery codes.
+          </p>
+
+          <input
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            autoFocus
+            autoComplete="one-time-code"
+            inputMode="text"
+            maxLength={20}
+            placeholder="000000"
+            aria-label="Verification code"
+            className="mt-6 h-12 w-full rounded-xl border border-white/10 bg-ink-850 px-3.5 text-center text-lg font-semibold tracking-[0.3em] text-white outline-none transition focus:border-brand-500/50 focus:ring-2 focus:ring-brand-500/20"
+          />
+
+          {error && (
+            <p className="mt-4 rounded-xl border border-red-500/25 bg-red-500/8 px-3.5 py-2.5 text-xs font-medium text-red-300" role="alert">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy || code.trim().length < 6}
+            className="mt-6 inline-flex h-11 w-full items-center justify-center rounded-xl bg-gradient-to-r from-brand-500 to-violet-600 text-sm font-semibold text-white transition hover:brightness-110 active:scale-[0.98] disabled:opacity-60"
+          >
+            {busy ? "Verifying…" : "Verify & sign in"}
+          </button>
+
+          <button
+            type="button"
+            onClick={async () => {
+              await api.logout().catch(() => {});
+              setPending(false);
+              setError(null);
+            }}
+            className="mt-3 block w-full text-center text-[11px] font-medium text-fog-500 transition hover:text-white"
+          >
+            ← Start over
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink-950 p-4">
@@ -153,6 +257,7 @@ const NAV: { to: string; icon: LucideIcon; label: string; end?: boolean }[] = [
   { to: "/admin/upload", icon: UploadCloud, label: "Upload" },
   { to: "/admin/categories", icon: LayoutGrid, label: "Categories & Tags" },
   { to: "/admin/analytics", icon: BarChart3, label: "Analytics" },
+  { to: "/admin/security", icon: ShieldCheck, label: "Security" },
   { to: "/admin/settings", icon: SettingsIcon, label: "Settings" },
 ];
 
@@ -310,6 +415,7 @@ export default function AdminApp() {
             <Route path="upload" element={<Lazy name="upload" />} />
             <Route path="categories" element={<Lazy name="taxonomy" />} />
             <Route path="analytics" element={<Lazy name="analytics" />} />
+            <Route path="security" element={<Lazy name="security" />} />
             <Route path="settings" element={<Lazy name="settings" />} />
             <Route path="*" element={<Navigate to="/admin" replace />} />
           </Route>
@@ -329,9 +435,10 @@ const Taxonomy = lazy(() => import("./Taxonomy"));
 const Analytics = lazy(() => import("./Analytics"));
 const Settings = lazy(() => import("./Settings"));
 const VideoAnalytics = lazy(() => import("./VideoAnalytics"));
+const Security = lazy(() => import("./Security"));
 
-function Lazy({ name }: { name: "dashboard" | "videos" | "edit" | "upload" | "taxonomy" | "analytics" | "settings" | "videoAnalytics" }) {
-  const map = { dashboard: Dashboard, videos: VideosList, edit: VideoEdit, upload: UploadWizard, taxonomy: Taxonomy, analytics: Analytics, settings: Settings, videoAnalytics: VideoAnalytics };
+function Lazy({ name }: { name: "dashboard" | "videos" | "edit" | "upload" | "taxonomy" | "analytics" | "settings" | "videoAnalytics" | "security" }) {
+  const map = { dashboard: Dashboard, videos: VideosList, edit: VideoEdit, upload: UploadWizard, taxonomy: Taxonomy, analytics: Analytics, settings: Settings, videoAnalytics: VideoAnalytics, security: Security };
   const C = map[name];
   return (
     <Suspense fallback={<div className="flex items-center gap-3 py-20 text-fog-500"><span className="size-5 animate-spin rounded-full border-2 border-fog-600 border-t-brand-400" /><span className="text-sm">Loading…</span></div>}>

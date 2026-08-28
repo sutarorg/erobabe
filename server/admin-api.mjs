@@ -10,6 +10,10 @@ import {
   parseCookies, serializeCookie, createSessionToken, verifySessionToken,
   verifyPassword, hashPassword, rateLimit, clientIp, timingSafeStr, assertCsrf, ENV, slugify,
 } from "./util.mjs";
+import {
+  generateSecret, verifyTOTP, otpauthUri, encryptSecret, decryptSecret,
+  generateRecoveryCodes, hashRecoveryCode, verifyRecoveryCode,
+} from "./totp.mjs";
 
 /* ──────────────────────────────────────────────────────────────
  * Admin API — every route below requires a valid session cookie
@@ -18,6 +22,9 @@ import {
 
 const COOKIE = "eb_admin_session";
 const SESSION_TTL = 60 * 60 * 12; // 12h
+/** A password-only session is short-lived and can do nothing but verify 2FA. */
+const PENDING_TTL = 5 * 60;
+const TWOFA_KEY = "admin_2fa";
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 const MULTIPART_THRESHOLD = 64 * 1024 * 1024; // 64 MB
 const CHUNK = 16 * 1024 * 1024; // 16 MB parts
@@ -31,12 +38,39 @@ function requireConfig() {
   if (missing.length) throw new HttpError(503, `Admin backend not configured. Missing: ${missing.join(", ")}`, "config");
 }
 
+function readSession(req) {
+  const cookies = parseCookies(req.headers.get("cookie") ?? "");
+  return verifySessionToken(cookies[COOKIE], ENV("SESSION_SECRET"));
+}
+
 function requireAdmin(req) {
   requireConfig();
-  const cookies = parseCookies(req.headers.get("cookie") ?? "");
-  const payload = verifySessionToken(cookies[COOKIE], ENV("SESSION_SECRET"));
+  const payload = readSession(req);
   if (!payload) throw unauthorized("Session expired — please sign in again");
+  // A pending (password-only) session must never reach admin endpoints.
+  if (payload.scp !== "admin") throw unauthorized("Two-factor verification required");
   return payload;
+}
+
+/* ── Two-factor state (stored in `settings`, secret encrypted at rest) ── */
+
+async function read2FA() {
+  const row = await dbApi.one("settings", `key=eq.${TWOFA_KEY}&limit=1`).catch(() => null);
+  return row?.value ?? null;
+}
+
+async function write2FA(value) {
+  const existing = await dbApi.one("settings", `key=eq.${TWOFA_KEY}&limit=1`).catch(() => null);
+  if (existing) await dbApi.update("settings", `key=eq.${TWOFA_KEY}`, { value, updated_at: nowIso() });
+  else await dbApi.insert("settings", { key: TWOFA_KEY, value });
+}
+
+const twoFactorActive = (state) => Boolean(state?.enabled && state?.secret);
+
+function issueSession(req, username, scope) {
+  const ttl = scope === "admin" ? SESSION_TTL : PENDING_TTL;
+  const token = createSessionToken(username, ENV("SESSION_SECRET"), ttl, scope);
+  return serializeCookie(COOKIE, token, { maxAgeSec: ttl, secure: isHttps(req) });
 }
 
 const isHttps = (req) => new URL(req.url).protocol === "https:";
@@ -124,16 +158,194 @@ async function login(req) {
     throw unauthorized("Invalid username or password");
   }
 
-  const token = createSessionToken(username, ENV("SESSION_SECRET"), SESSION_TTL);
-  await logActivity(username, "auth.login", "session", ip, {});
+  // Password accepted. When 2FA is enrolled, hand back a short-lived
+  // pending session that can do nothing except verify the second factor.
+  const state = await read2FA().catch(() => null);
+  if (twoFactorActive(state)) {
+    await logActivity(username, "auth.password_ok", "session", ip, { twoFactor: true });
+    return json(
+      { ok: true, twoFactorRequired: true, user: null },
+      { headers: { "set-cookie": issueSession(req, username, "pending") } }
+    );
+  }
+
+  await logActivity(username, "auth.login", "session", ip, { twoFactor: false });
   return json(
-    { ok: true, user: { username } },
-    {
-      headers: {
-        "set-cookie": serializeCookie(COOKIE, token, { maxAgeSec: SESSION_TTL, secure: isHttps(req) }),
-      },
-    }
+    { ok: true, twoFactorRequired: false, user: { username } },
+    { headers: { "set-cookie": issueSession(req, username, "admin") } }
   );
+}
+
+/* ── POST /auth/2fa/verify — exchange a pending session for a full one ── */
+
+async function verifyTwoFactor(req) {
+  requireConfig();
+  const ip = clientIp(req.headers);
+  // Deliberately tight: brute-forcing 6 digits must be infeasible.
+  const rl = rateLimit(`2fa:${ip}`, 5, 5 * 60_000);
+  if (!rl.ok) {
+    const e = new HttpError(429, "Too many verification attempts — try again shortly", "rate_limited");
+    e.retryAfterSec = rl.retryAfterSec;
+    throw e;
+  }
+
+  const session = readSession(req);
+  if (!session) throw unauthorized("Sign-in session expired — please start again");
+  // Already verified: nothing to do.
+  if (session.scp === "admin") return json({ ok: true, user: { username: session.sub } });
+
+  const state = await read2FA();
+  if (!twoFactorActive(state)) throw badRequest("Two-factor authentication is not enabled");
+
+  const secret = decryptSecret(state.secret);
+  if (!secret) throw new HttpError(500, "Two-factor secret could not be read", "totp_secret");
+
+  const body = await readJson(req);
+  const code = cleanText(body.code, 20);
+  let accepted = false;
+  let usedRecovery = false;
+
+  const counter = verifyTOTP(secret, code, { lastCounter: state.lastCounter ?? 0 });
+  if (counter) {
+    accepted = true;
+    // Record the counter so the same code cannot be replayed.
+    await write2FA({ ...state, lastCounter: counter });
+  } else {
+    // Fall back to a single-use recovery code.
+    const codes = Array.isArray(state.recovery) ? state.recovery : [];
+    const idx = codes.findIndex((hash) => verifyRecoveryCode(code, hash));
+    if (idx >= 0) {
+      accepted = true;
+      usedRecovery = true;
+      const remaining = codes.filter((_, i) => i !== idx);
+      await write2FA({ ...state, recovery: remaining });
+    }
+  }
+
+  if (!accepted) {
+    await logActivity(session.sub, "auth.2fa_failed", "session", ip, {});
+    throw unauthorized("Invalid verification code");
+  }
+
+  await logActivity(session.sub, "auth.login", "session", ip, { twoFactor: true, usedRecovery });
+  return json(
+    { ok: true, user: { username: session.sub }, usedRecovery },
+    { headers: { "set-cookie": issueSession(req, session.sub, "admin") } }
+  );
+}
+
+/* ── Enrollment (requires a fully authenticated session) ── */
+
+async function twoFactorStatus(req) {
+  const admin = requireAdmin(req);
+  const state = await read2FA().catch(() => null);
+  return json({
+    enabled: twoFactorActive(state),
+    enrolledAt: state?.enrolledAt ?? null,
+    recoveryRemaining: Array.isArray(state?.recovery) ? state.recovery.length : 0,
+    account: admin.sub,
+  });
+}
+
+/** Creates a pending secret; it only becomes active once a code is confirmed. */
+async function twoFactorSetup(req) {
+  const admin = requireAdmin(req);
+  const state = await read2FA().catch(() => null);
+  if (twoFactorActive(state)) throw badRequest("Two-factor authentication is already enabled");
+
+  const secret = generateSecret();
+  await write2FA({
+    enabled: false,
+    pendingSecret: encryptSecret(secret),
+    createdAt: nowIso(),
+  });
+  await logActivity(admin.sub, "auth.2fa_setup_started", "session", clientIp(req.headers), {});
+
+  return json({
+    secret,
+    otpauth: otpauthUri(secret, admin.sub, "EroBabe"),
+    account: admin.sub,
+    issuer: "EroBabe",
+  });
+}
+
+/** Confirms the pending secret and returns the one-time recovery codes. */
+async function twoFactorEnable(req) {
+  const admin = requireAdmin(req);
+  const ip = clientIp(req.headers);
+  const rl = rateLimit(`2fa-enable:${ip}`, 10, 5 * 60_000);
+  if (!rl.ok) throw new HttpError(429, "Too many attempts — try again shortly", "rate_limited");
+
+  const state = await read2FA();
+  if (twoFactorActive(state)) throw badRequest("Two-factor authentication is already enabled");
+  if (!state?.pendingSecret) throw badRequest("Start setup before enabling");
+
+  const secret = decryptSecret(state.pendingSecret);
+  if (!secret) throw new HttpError(500, "Setup secret could not be read", "totp_secret");
+
+  const body = await readJson(req);
+  const counter = verifyTOTP(secret, cleanText(body.code, 20));
+  if (!counter) throw badRequest("That code doesn't match — check your authenticator and try again");
+
+  const recovery = generateRecoveryCodes();
+  await write2FA({
+    enabled: true,
+    secret: state.pendingSecret,
+    recovery: recovery.map(hashRecoveryCode),
+    lastCounter: counter,
+    enrolledAt: nowIso(),
+  });
+  await logActivity(admin.sub, "auth.2fa_enabled", "session", ip, {});
+
+  // Plaintext codes are returned exactly once and never stored.
+  return json({ ok: true, recoveryCodes: recovery });
+}
+
+/** Disabling requires the account password plus a current code. */
+async function twoFactorDisable(req) {
+  const admin = requireAdmin(req);
+  const ip = clientIp(req.headers);
+  const rl = rateLimit(`2fa-disable:${ip}`, 5, 5 * 60_000);
+  if (!rl.ok) throw new HttpError(429, "Too many attempts — try again shortly", "rate_limited");
+
+  const state = await read2FA();
+  if (!twoFactorActive(state)) throw badRequest("Two-factor authentication is not enabled");
+
+  const body = await readJson(req);
+  if (!verifyPassword(String(body.password ?? ""), ENV("ADMIN_PASSWORD_SCRYPT"))) {
+    await logActivity(admin.sub, "auth.2fa_disable_failed", "session", ip, {});
+    throw unauthorized("Incorrect password");
+  }
+
+  const secret = decryptSecret(state.secret);
+  const code = cleanText(body.code, 20);
+  const okCode = secret && verifyTOTP(secret, code, { lastCounter: 0 });
+  const okRecovery = (Array.isArray(state.recovery) ? state.recovery : []).some((h) =>
+    verifyRecoveryCode(code, h)
+  );
+  if (!okCode && !okRecovery) throw unauthorized("Invalid verification code");
+
+  await write2FA({ enabled: false, disabledAt: nowIso() });
+  await logActivity(admin.sub, "auth.2fa_disabled", "session", ip, {});
+  return json({ ok: true });
+}
+
+/** Replaces the recovery set; the previous codes stop working immediately. */
+async function twoFactorRegenerateCodes(req) {
+  const admin = requireAdmin(req);
+  const state = await read2FA();
+  if (!twoFactorActive(state)) throw badRequest("Two-factor authentication is not enabled");
+
+  const body = await readJson(req);
+  const secret = decryptSecret(state.secret);
+  if (!secret || !verifyTOTP(secret, cleanText(body.code, 20), { lastCounter: 0 })) {
+    throw unauthorized("Invalid verification code");
+  }
+
+  const recovery = generateRecoveryCodes();
+  await write2FA({ ...state, recovery: recovery.map(hashRecoveryCode) });
+  await logActivity(admin.sub, "auth.2fa_codes_regenerated", "session", clientIp(req.headers), {});
+  return json({ ok: true, recoveryCodes: recovery });
 }
 
 async function logout(req) {
@@ -146,8 +358,20 @@ async function logout(req) {
 }
 
 async function me(req) {
-  const admin = requireAdmin(req);
-  return json({ user: { username: admin.sub } });
+  requireConfig();
+  const session = readSession(req);
+  if (!session) throw unauthorized("Session expired — please sign in again");
+  // Surfaces the half-authenticated state so the UI can show the 2FA step
+  // after a refresh instead of bouncing back to the password form.
+  if (session.scp !== "admin") {
+    return json({ user: null, twoFactorRequired: true, pending: session.sub });
+  }
+  const state = await read2FA().catch(() => null);
+  return json({
+    user: { username: session.sub },
+    twoFactorRequired: false,
+    twoFactorEnabled: twoFactorActive(state),
+  });
 }
 
 /* ── Overview / analytics ── */
@@ -979,6 +1203,13 @@ export async function handleAdmin(req, url, path) {
   // Unauthenticated routes
   if (first === "auth" && second === "login" && m === "POST") return login(req);
   if (first === "process" && second === "callback" && m === "POST") return processCallback(req);
+  // Uses the pending session rather than a full one, so it sits above the guard.
+  if (first === "auth" && second === "2fa" && third === "verify" && m === "POST") {
+    assertCsrf(req);
+    return verifyTwoFactor(req);
+  }
+  // Reports pending-vs-verified state, so it must accept both.
+  if (first === "auth" && second === "me" && m === "GET") return me(req);
 
   // Everything below requires a session.
   const ip = clientIp(req.headers);
@@ -990,7 +1221,13 @@ export async function handleAdmin(req, url, path) {
   assertCsrf(req);
 
   if (first === "auth" && second === "logout" && m === "POST") return logout(req);
-  if (first === "auth" && second === "me" && m === "GET") return me(req);
+  if (first === "auth" && second === "2fa") {
+    if (third === "status" && m === "GET") return twoFactorStatus(req);
+    if (third === "setup" && m === "POST") return twoFactorSetup(req);
+    if (third === "enable" && m === "POST") return twoFactorEnable(req);
+    if (third === "disable" && m === "POST") return twoFactorDisable(req);
+    if (third === "recovery-codes" && m === "POST") return twoFactorRegenerateCodes(req);
+  }
   if (first === "overview" && m === "GET") return overview();
   if (first === "analytics" && !second && m === "GET") return analytics(req, url);
   if (first === "analytics" && second === "traffic" && m === "GET") return traffic(req, url);

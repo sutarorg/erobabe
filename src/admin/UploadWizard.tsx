@@ -28,34 +28,14 @@ type Phase =
   | { step: "finishing" }
   | { step: "details" };
 
-/** Single vs. bulk upload switch. */
-function ModeSwitch({ mode, onChange }: { mode: "single" | "bulk"; onChange: (m: "single" | "bulk") => void }) {
-  return (
-    <div className="flex rounded-lg border border-white/8 bg-ink-900/60 p-1">
-      {(["single", "bulk"] as const).map((m) => (
-        <button
-          key={m}
-          type="button"
-          onClick={() => onChange(m)}
-          aria-pressed={mode === m}
-          className={cn(
-            "rounded-md px-3 py-1.5 text-xs font-semibold transition",
-            mode === m
-              ? "bg-gradient-to-r from-brand-500 to-violet-600 text-white"
-              : "text-fog-400 hover:text-white"
-          )}
-        >
-          {m === "single" ? "Single" : "Bulk (up to 20)"}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 export default function UploadWizard() {
   const navigate = useNavigate();
+  /**
+   * Inferred from the selection rather than a manual toggle: one file runs
+   * the single-video workflow, several switch to the bulk pipeline.
+   */
   const [mode, setMode] = useState<"single" | "bulk">("single");
-  /** Files passed straight to bulk mode when several are chosen at once. */
+  /** Files handed straight to bulk mode when several are chosen at once. */
   const [handoff, setHandoff] = useState<File[] | null>(null);
   const [phase, setPhase] = useState<Phase>({ step: "select" });
   const [file, setFile] = useState<File | null>(null);
@@ -379,8 +359,12 @@ export default function UploadWizard() {
       <div className="mx-auto max-w-3xl">
         <PageHeader
           title="Upload videos"
-          sub="Bulk upload up to 20 videos. Metadata is generated automatically and videos publish one per hour."
-          actions={<ModeSwitch mode={mode} onChange={(m) => { setMode(m); setHandoff(null); }} />}
+          sub="Bulk upload detected. Metadata is generated automatically and videos publish one per hour."
+          actions={
+            <Btn variant="ghost" icon={ArrowLeft} onClick={() => { setMode("single"); setHandoff(null); }}>
+              Single upload
+            </Btn>
+          }
         />
         <BulkUpload initialFiles={handoff} />
       </div>
@@ -392,7 +376,6 @@ export default function UploadWizard() {
       <PageHeader
         title="Upload video"
         sub="Upload → Process → Draft → Preview → Publish. Nothing goes live until you publish it."
-        actions={phase.step === "select" ? <ModeSwitch mode={mode} onChange={setMode} /> : undefined}
       />
 
       {/* Stepper */}
@@ -453,7 +436,7 @@ export default function UploadWizard() {
             <p className="mt-5 text-base font-semibold text-white">Drag &amp; drop your video</p>
             <p className="mt-1 text-sm text-fog-500">or click to browse — MP4, MOV, WEBM up to 2 GB</p>
             <p className="mt-3 text-[11px] text-fog-600">
-              Select several files at once to switch to bulk upload (up to 20).
+              Selecting more than one file automatically starts a bulk upload (up to 20).
             </p>
           </label>
 

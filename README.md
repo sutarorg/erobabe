@@ -223,6 +223,42 @@ options. To add a glyph, import it in the registry and add an entry to `CATEGORY
 - **Analytics** — 7/14/30-day series, lifetime totals, storage monitoring, top-performers, full audit log
 - **Settings** — site title, announcement, homepage hero toggle, pinned featured video, age-gate copy, infrastructure status
 
+## Two-factor authentication (TOTP)
+
+Admins can protect `/admin` with an authenticator app (Google Authenticator, 1Password, Authy,
+Bitwarden — anything TOTP). Enroll at **Admin → Security**: scan the QR code, confirm one code, then
+save the 10 single-use recovery codes shown once.
+
+**How the login flow changes**
+
+1. Username + password → if 2FA is enrolled, the server issues a **5-minute "pending" session** whose
+   scope is `pending`.
+2. That pending session can reach exactly one endpoint: `/auth/2fa/verify`. Every other admin route
+   rejects it, so a stolen password alone grants nothing.
+3. A correct TOTP or recovery code exchanges it for a normal 12-hour `admin` session.
+
+**Security properties**
+
+- **Encrypted at rest** — the shared secret is sealed with AES-256-GCM using a key derived from
+  `SESSION_SECRET`, so a database leak alone doesn't yield a working second factor.
+- **Replay-proof** — each accepted time counter is recorded; the same code cannot be reused inside
+  its own 30-second window.
+- **Tight drift window** — ±1 step (30s) only.
+- **Rate limited** — 5 verification attempts per 5 minutes per IP, on top of the existing 5/min
+  login limit.
+- **Constant-time comparison** for both codes and recovery codes.
+- **Recovery codes are scrypt-hashed**, single-use, and removed the moment they're spent.
+- Disabling 2FA requires the password *and* a current code.
+
+**If you lose your device and your recovery codes**, clear the enrollment row directly in Supabase:
+
+```sql
+delete from public.settings where key = 'admin_2fa';
+```
+
+No new migration is required — 2FA state lives in the existing `settings` table, which anonymous
+users cannot read under RLS.
+
 ## Security model
 
 - Server-side verification of an **HttpOnly, Secure, SameSite=Lax** cookie containing an HMAC-signed token (12 h)
