@@ -120,13 +120,18 @@ export default function UploadWizard() {
    * straight to bulk mode instead of silently ignoring the extras.
    */
   const acceptFiles = (list: FileList | null) => {
-    const videos = [...(list ?? [])].filter((f) => f.type.startsWith("video/"));
+    const videos = Array.from(list ?? []).filter(
+      (f) =>
+        f.type.startsWith("video/") ||
+        /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ogv)$/i.test(f.name)
+    );
     if (videos.length > 1) {
       setHandoff(videos.slice(0, 20));
       setMode("bulk");
       return;
     }
-    pick(videos[0] ?? list?.[0] ?? null);
+    if (videos.length === 1) pick(videos[0]);
+    else if (list?.length) setError("Only video files can be uploaded.");
   };
 
   const pick = (f: File | null) => {
@@ -434,7 +439,7 @@ export default function UploadWizard() {
           >
             <input
               type="file"
-              accept="video/*"
+              accept="video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.mpeg,.mpg,.ogv"
               multiple
               className="sr-only"
               onChange={(e) => {

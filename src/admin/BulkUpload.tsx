@@ -81,6 +81,8 @@ export default function BulkUpload({
   initialFiles?: File[] | null;
 }) {
   const [items, setItems] = useState<BulkItem[]>([]);
+  const itemsRef = useRef<BulkItem[]>([]);
+  itemsRef.current = items;
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
   const [optimizeEnabled, setOptimizeEnabled] = useState(true);
@@ -106,29 +108,25 @@ export default function BulkUpload({
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  // Ingest files handed over from the single-upload screen, once.
-  const handedOff = useRef(false);
-  useEffect(() => {
-    if (handedOff.current || !initialFiles?.length) return;
-    handedOff.current = true;
-    const dt = new DataTransfer();
-    for (const f of initialFiles) dt.items.add(f);
-    void addFiles(dt.files);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialFiles]);
-
   const patch = useCallback((key: string, changes: Partial<BulkItem>) => {
     setItems((prev) => prev.map((i) => (i.key === key ? { ...i, ...changes } : i)));
   }, []);
 
   /* ── Selection ── */
-  const addFiles = async (fileList: FileList | null) => {
-    if (!fileList?.length || running) return;
+  const addFiles = useCallback(async (source: FileList | File[] | null) => {
+    if (!source || source.length === 0 || running) return;
     setError(null);
-    const incoming = [...fileList].filter((f) => f.type.startsWith("video/"));
+    // Some Safari/mobile file pickers return an empty MIME type. Accept
+    // known video extensions as well as a proper `video/*` MIME value.
+    const incoming = Array.from(source).filter(
+      (f) =>
+        f.type.startsWith("video/") ||
+        /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ogv)$/i.test(f.name)
+    );
     if (!incoming.length) return setError("Only video files can be uploaded.");
 
-    const room = MAX_FILES - items.length;
+    const existing = itemsRef.current;
+    const room = MAX_FILES - existing.length;
     if (room <= 0) return setError(`Bulk upload is limited to ${MAX_FILES} videos per batch.`);
     const accepted = incoming.slice(0, room);
     if (incoming.length > room) {
@@ -141,7 +139,7 @@ export default function BulkUpload({
     const next: BulkItem[] = accepted
       .filter((f) => f.size <= MAX_BYTES)
       .map((file, i) => ({
-        key: `${file.name}-${file.size}-${file.lastModified}-${items.length + i}`,
+        key: `${file.name}-${file.size}-${file.lastModified}-${existing.length + i}-${crypto.randomUUID?.() ?? Date.now()}`,
         file,
         title: titleFromFileName(file.name),
         poster: null,
@@ -157,7 +155,7 @@ export default function BulkUpload({
         publishAt: null,
       }));
 
-    setItems((prev) => [...prev, ...next]);
+    setItems((prev) => [...prev, ...next].slice(0, MAX_FILES));
 
     // Poster frame, duration and fingerprint, resolved in the background.
     for (const item of next) {
@@ -182,7 +180,17 @@ export default function BulkUpload({
         });
       })();
     }
-  };
+  }, [patch, running]);
+
+  // Ingest files handed over from the single-upload screen, once. Passing
+  // File[] directly avoids `new DataTransfer()`, which fails on Safari and
+  // several embedded/mobile browsers.
+  const handedOff = useRef(false);
+  useEffect(() => {
+    if (handedOff.current || !initialFiles?.length) return;
+    handedOff.current = true;
+    void addFiles(initialFiles);
+  }, [initialFiles, addFiles]);
 
   const removeItem = (key: string) => setItems((prev) => prev.filter((i) => i.key !== key));
 
@@ -316,10 +324,6 @@ export default function BulkUpload({
     onDone?.();
   };
 
-  // Latest rows for the runner, without restarting it on every keystroke.
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
-
   const pending = items.filter((i) => !(i.duplicate && !i.allowDuplicate));
   const completed = items.filter((i) => i.stage === "done");
   const duplicates = items.filter((i) => i.duplicate && !i.allowDuplicate);
@@ -339,7 +343,7 @@ export default function BulkUpload({
         >
           <input
             type="file"
-            accept="video/*"
+            accept="video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.mpeg,.mpg,.ogv"
             multiple
             className="sr-only"
             onChange={(e) => { void addFiles(e.target.files); e.target.value = ""; }}
