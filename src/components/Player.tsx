@@ -309,26 +309,35 @@ export function Player({
   }, []);
 
   /**
-   * Single tap toggles the HUD. Double-tap on the left/right third seeks
-   * ∓10s; a double-click in the middle (mouse) toggles fullscreen.
+   * Desktop: a single click toggles playback; double-click seeks ∓10s on
+   * the outer thirds and toggles fullscreen in the middle.
+   * Touch: a single tap toggles the HUD; a double tap on the outer thirds
+   * seeks ∓10s.
    */
   const onSurfaceClick = (e: React.MouseEvent<HTMLVideoElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const zone = (e.clientX - rect.left) / rect.width;
+    const isTouch = lastPointerType.current === "touch";
 
     if (clickTimer.current) {
       window.clearTimeout(clickTimer.current);
       clickTimer.current = null;
       if (zone < 0.35) skipBy(-1);
       else if (zone > 0.65) skipBy(1);
-      else if (lastPointerType.current === "touch") toggleHud();
+      else if (isTouch) toggleHud();
       else toggleFullscreen();
       return;
     }
-    clickTimer.current = window.setTimeout(() => {
-      clickTimer.current = null;
-      toggleHud();
-    }, 260);
+    clickTimer.current = window.setTimeout(
+      () => {
+        clickTimer.current = null;
+        // Touch keeps tap-to-toggle-controls; mouse plays/pauses.
+        if (isTouch) toggleHud();
+        else togglePlay();
+      },
+      // The delay only exists to disambiguate a double click.
+      isTouch ? 260 : 220
+    );
   };
 
   /* ── Seek bar ── */
@@ -673,8 +682,30 @@ export function Player({
 
         {/* Control row */}
         <div className="relative flex h-12 items-center gap-1 px-2 sm:gap-1.5 sm:px-3">
+          {/* Rewind 10s — desktop only (mobile has double-tap seeking) */}
+          <button
+            type="button"
+            aria-label="Rewind 10 seconds"
+            title="Rewind 10 seconds"
+            onClick={() => { skipBy(-1); poke(); }}
+            className={cn(ctrlBtn, "hidden sm:grid")}
+          >
+            <Rewind className="size-5 fill-white" aria-hidden />
+          </button>
+
           <button type="button" aria-label={playing ? "Pause" : "Play"} onClick={() => { togglePlay(); poke(); }} className={ctrlBtn}>
             {playing ? <Pause className="size-5 fill-white" aria-hidden /> : <Play className="ml-0.5 size-5 fill-white" aria-hidden />}
+          </button>
+
+          {/* Forward 10s — desktop only */}
+          <button
+            type="button"
+            aria-label="Forward 10 seconds"
+            title="Forward 10 seconds"
+            onClick={() => { skipBy(1); poke(); }}
+            className={cn(ctrlBtn, "hidden sm:grid")}
+          >
+            <FastForward className="size-5 fill-white" aria-hidden />
           </button>
 
           <button type="button" aria-label={muted ? "Unmute" : "Mute"} onClick={toggleMute} className={ctrlBtn}>

@@ -97,8 +97,7 @@ const UP_NEXT_LEAD_SECONDS = 5;
 const RELATED_COUNT = 4;
 /** Recommended: one page of 20 (4 × 5 desktop / 2 × 10 mobile). */
 const RECOMMENDED_STEP = 20;
-/** How many Up Next entries View More expands to. */
-const UP_NEXT_EXPANDED = 12;
+
 
 /** Shared View More / Show Less control for the expandable rails. */
 function ViewMoreButton({
@@ -223,7 +222,6 @@ export default function Watch() {
   /* ── Personalized recommendations ── */
   const recs = useRecommendations(video, { relatedCount: RELATED_COUNT, recommendedCount: 40 });
   const [recommendedExpanded, setRecommendedExpanded] = useState(false);
-  const [upNextExpanded, setUpNextExpanded] = useState(false);
 
   /* ── Mobile Up Next overlay: appears shortly before the video ends ── */
   const [showUpNext, setShowUpNext] = useState(false);
@@ -269,7 +267,6 @@ export default function Watch() {
     upNextDismissed.current = false;
     setShowUpNext(false);
     setRecommendedExpanded(false);
-    setUpNextExpanded(false);
   }, [video?.id]);
 
   useEffect(() => {
@@ -327,9 +324,8 @@ export default function Watch() {
 
   /* ── Expandable rails ── */
   const upNextPool = [...recs.related, ...recs.recommended];
-  const upNextItems = upNextExpanded
-    ? upNextPool.slice(0, UP_NEXT_EXPANDED)
-    : upNextPool.slice(0, UP_NEXT_COUNT);
+  // Desktop Up Next is a fixed list of four — no expansion.
+  const upNextItems = upNextPool.slice(0, UP_NEXT_COUNT);
   const recommendedVisible = recommendedExpanded
     ? recs.recommended
     : recs.recommended.slice(0, RECOMMENDED_STEP);
@@ -528,13 +524,6 @@ export default function Watch() {
               <RecoRow key={v.id} video={v} />
             ))}
           </div>
-          {upNextPool.length > UP_NEXT_COUNT && (
-            <ViewMoreButton
-              expanded={upNextExpanded}
-              onToggle={() => setUpNextExpanded((e) => !e)}
-              moreCount={Math.min(upNextPool.length, UP_NEXT_EXPANDED) - UP_NEXT_COUNT}
-            />
-          )}
         </aside>
       </div>
 
