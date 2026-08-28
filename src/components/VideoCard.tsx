@@ -4,6 +4,7 @@ import { Film, Play } from "lucide-react";
 import type { Video } from "@/data/videos";
 import { categoryName } from "@/data/videos";
 import { trackClick, trackImpression } from "@/data/dynamic";
+import { recordOutcome } from "@/lib/learning";
 import { cn } from "@/lib/format";
 
 /**
@@ -66,7 +67,11 @@ export function VideoCard({ video, priority = false, className }: { video: Video
       onMouseLeave={stopPreview}
       onFocus={startPreview}
       onBlur={stopPreview}
-      onClick={() => trackClick(video.uuid ?? video.id)}
+      onClick={() => {
+        trackClick(video.uuid ?? video.id);
+        // Teaches the ranker which recommendations actually earn a click.
+        recordOutcome(video.id, "click");
+      }}
     >
       <figure className="relative aspect-video overflow-hidden rounded-xl bg-ink-800 ring-1 ring-white/8 transition duration-300 group-hover:ring-white/20 group-focus-visible:ring-2 group-focus-visible:ring-brand-500/60">
         {imgError ? (

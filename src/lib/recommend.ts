@@ -1,6 +1,10 @@
 import { useMemo, useRef } from "react";
 import { VIDEOS, type Video } from "@/data/videos";
 import { useHistory, useLikes, useSaved } from "@/hooks/store";
+import {
+  facetBoost, facetsFor, loadModel, recordImpression, weightFor,
+  type RankModel, type SignalKey,
+} from "./learning";
 
 /* ──────────────────────────────────────────────────────────────
  * EroBabe recommendation engine.
@@ -231,6 +235,8 @@ interface Scored {
   video: Video;
   score: number;
   similarity: number;
+  /** Normalized feature vector, replayed to the learner on feedback. */
+  signals?: Partial<Record<SignalKey, number>>;
 }
 
 interface QualitySignals {
@@ -309,23 +315,42 @@ export function computeRecommendations(
   const s = qualitySignals(pool);
   const simN = percentile(pool.map((v) => contentSimilarity(seed, v)));
   const tasteN = percentile(pool.map((v) => tasteAffinity(profile, v)));
+  // Learned weights + bandit posteriors for this browser.
+  const model: RankModel = loadModel();
 
   // Watched titles are demoted rather than removed, and the penalty
   // grows as the profile matures (established viewers want novelty).
   const seenPenalty = (v: Video) =>
     profile.watched.has(v.id) && !profile.engaged.has(v.id) ? 0.45 + 0.35 * profile.strength : 0;
 
-  /* ── Related: similarity first ── */
+  /* ── Related: similarity first, adjusted by what this viewer engages with ── */
   const relatedScored: Scored[] = pool.map((video) => {
     const similarity = simN(contentSimilarity(seed, video));
+    const affinity = tasteN(tasteAffinity(profile, video));
+    const signals = {
+      similarity,
+      affinity,
+      quality: s.quality(video),
+      popularity: s.popularity(video),
+      momentum: s.momentum(video),
+      recency: s.recency(video),
+    };
+    const w = (k: SignalKey) => weightFor(model, k);
     const score =
-      similarity * 0.52 +
-      tasteN(tasteAffinity(profile, video)) * 0.14 * profile.strength +
-      s.quality(video) * 0.13 +
-      s.popularity(video) * 0.09 +
-      s.momentum(video) * 0.07 +
-      s.recency(video) * 0.05;
-    return { video, similarity, score: score * (1 - seenPenalty(video)) };
+      similarity * 0.52 * w("similarity") +
+      affinity * 0.14 * profile.strength * w("affinity") +
+      signals.quality * 0.13 * w("quality") +
+      signals.popularity * 0.09 * w("popularity") +
+      signals.momentum * 0.07 * w("momentum") +
+      signals.recency * 0.05 * w("recency");
+    // Bandit term: keeps promising-but-unproven facets in rotation.
+    const explore = facetBoost(model, facetsFor(video));
+    return {
+      video,
+      similarity,
+      signals,
+      score: score * explore * (1 - seenPenalty(video)),
+    };
   });
   const related = diversify(relatedScored, relatedCount);
 
@@ -339,18 +364,46 @@ export function computeRecommendations(
     .filter((v) => !usedIds.has(v.id))
     .map((video) => {
       const affinity = tasteN(tasteAffinity(profile, video));
+      const similarity = simN(contentSimilarity(seed, video));
+      const signals = {
+        affinity,
+        similarity,
+        quality: s.quality(video),
+        popularity: s.popularity(video),
+        momentum: s.momentum(video),
+        recency: s.recency(video),
+      };
+      const w = (k: SignalKey) => weightFor(model, k);
       const discovery =
-        s.momentum(video) * 0.4 + s.popularity(video) * 0.34 + s.recency(video) * 0.26;
+        signals.momentum * 0.4 * w("momentum") +
+        signals.popularity * 0.34 * w("popularity") +
+        signals.recency * 0.26 * w("recency");
       const score =
-        affinity * tasteWeight +
+        affinity * tasteWeight * w("affinity") +
         discovery * discoveryWeight +
-        s.quality(video) * 0.22 +
+        signals.quality * 0.22 * w("quality") +
         // A gentle nudge toward the current context keeps the page coherent.
-        simN(contentSimilarity(seed, video)) * 0.16;
-      return { video, similarity: affinity, score: score * (1 - seenPenalty(video)) };
+        similarity * 0.16 * w("similarity");
+      const explore = facetBoost(model, facetsFor(video));
+      return {
+        video,
+        similarity: affinity,
+        signals,
+        score: score * explore * (1 - seenPenalty(video)),
+      };
     });
 
   const recommended = diversify(recommendedScored, recommendedCount);
+
+  // Log the signal vector behind each pick so the learner can attribute
+  // the eventual click / watch / skip back to the right features.
+  const byId = new Map<string, Scored>();
+  for (const entry of [...relatedScored, ...recommendedScored]) byId.set(entry.video.id, entry);
+  for (const video of [...related, ...recommended]) {
+    const entry = byId.get(video.id);
+    if (entry?.signals) recordImpression(video.id, entry.signals, facetsFor(video));
+  }
+
   return { related, recommended };
 }
 

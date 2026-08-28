@@ -223,6 +223,44 @@ options. To add a glyph, import it in the registry and add an entry to `CATEGORY
 - **Analytics** — 7/14/30-day series, lifetime totals, storage monitoring, top-performers, full audit log
 - **Settings** — site title, announcement, homepage hero toggle, pinned featured video, age-gate copy, infrastructure status
 
+## Self-learning recommendations
+
+Every rail — homepage discovery, Related, Recommended, Up Next — is ranked by one adaptive model
+that learns from what each viewer actually does.
+
+**Layer 1 — content & taste** (`src/lib/recommend.ts`). A weighted taste profile is built from watch
+history, likes and saves, with exponential recency decay (14-day half-life) and interaction weights
+(`watch 1 · like 2.5 · save 3`). Candidates are scored on content similarity (category, Jaccard tag
+overlap, title tokens, performer, duration fit) plus quality, popularity, momentum and recency —
+every feature percentile-normalized so one viral video can't flatten the scale.
+
+**Layer 2 — online learning** (`src/lib/learning.ts`). Each recommendation records the normalized
+feature vector that produced it. When the outcome lands, a perceptron-style update nudges the
+weights along the error gradient:
+
+| Outcome | Reward | Detected from |
+| --- | --- | --- |
+| Completion (≥85%) | +1.0 | playback progress |
+| Like / Save | +1.0 | explicit action |
+| Watch (≥30s) | +0.7 | playback progress |
+| Click | +0.45 | card navigation |
+| Skip (<8s then leave) | −0.35 | unmount with low watch time |
+
+Weights are clamped to `0.2–2.6`, so the model can emphasise what predicts engagement for *this*
+viewer without any single signal running away.
+
+**Layer 3 — contextual bandit.** Each content facet (category, tag, duration bucket, time-of-day)
+keeps a Beta(α, β) posterior sampled Thompson-style. Unseen facets start at an optimistic prior, so
+genuinely new content keeps surfacing instead of the model collapsing onto one narrow taste.
+Exploration is wide early and tightens as evidence accumulates (`min(1, events/40)`), and posteriors
+decay at `0.995` per update so stale tastes fade.
+
+**Retention loop.** Up Next draws from the same ranking, autoplay continues the chain, and each
+completed video feeds the model — so the `watch → next → watch` loop measurably sharpens with use.
+
+Everything is per-browser `localStorage`, bounded (300 facets / 120 pending impressions), needs no
+account or server round-trip, and degrades cleanly to the static model for first-time visitors.
+
 ## Two-factor authentication (TOTP)
 
 Admins can protect `/admin` with an authenticator app (Google Authenticator, 1Password, Authy,

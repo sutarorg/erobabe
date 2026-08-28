@@ -1,4 +1,5 @@
 import type { Video } from "@/data/videos";
+import { facetBoost, facetsFor, loadModel, weightFor } from "./learning";
 
 /**
  * Client-side mirror of the server ranking engine.
@@ -103,11 +104,16 @@ function takeTop(
   limit: number,
   transform?: (base: number, item: Scored) => number
 ): Video[] {
+  // Discovery rails share the viewer's learned weights and bandit
+  // posteriors, so the whole site adapts — not just the watch page.
+  const model = loadModel();
   const scored = items.map((item) => {
     let base = 0;
     for (const [signal, weight] of Object.entries(weights)) {
-      base += (item.norm[signal as SignalKey] ?? 0) * (weight ?? 0);
+      const key = signal as SignalKey;
+      base += (item.norm[key] ?? 0) * (weight ?? 0) * weightFor(model, key);
     }
+    base *= facetBoost(model, facetsFor(item.video));
     return { item, score: transform ? transform(base, item) : base };
   });
   scored.sort((a, b) => b.score - a.score || b.item.norm.recency - a.item.norm.recency);

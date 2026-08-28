@@ -30,11 +30,33 @@ const safeJson = (value) => JSON.stringify(value).replace(/</g, "\\u003c");
 const absolute = (value, origin = CANONICAL_ORIGIN) => {
   if (!value) return null;
   try {
-    return new URL(value, origin).toString();
+    const url = new URL(String(value).trim(), origin);
+    // Link-preview crawlers reject non-HTTPS images, and many refuse
+    // localhost/private hosts outright.
+    if (url.protocol === "http:" && !/^localhost|^127\./.test(url.hostname)) {
+      url.protocol = "https:";
+    }
+    return url.toString();
   } catch {
     return null;
   }
 };
+
+/**
+ * Best available preview image for a video.
+ *
+ * Order: the video's own thumbnail → its poster/first-frame if stored →
+ * the site hero as a last resort. Always returns an absolute HTTPS URL,
+ * because WhatsApp and Facebook silently drop relative or insecure ones.
+ */
+function previewImage(video) {
+  const candidates = [video.thumbnail_url, video.poster_url, video.preview_url];
+  for (const candidate of candidates) {
+    const url = absolute(candidate);
+    if (url) return url;
+  }
+  return `${CANONICAL_ORIGIN}/assets/hero.jpg`;
+}
 
 const isoDuration = (seconds) => {
   const s = Math.max(0, Math.round(Number(seconds) || 0));
@@ -125,7 +147,7 @@ function metadata({ video, category, canonical }) {
   // Share cards show the actual video title, thumbnail and description.
   const title = String(video.title || "EroBabe Video").trim().slice(0, 180);
   const description = String(video.description || DEFAULT_DESCRIPTION).replace(/\s+/g, " ").trim().slice(0, 300);
-  const image = absolute(video.thumbnail_url) || `${CANONICAL_ORIGIN}/assets/hero.jpg`;
+  const image = previewImage(video);
   const media = absolute(video.hls_url || video.video_url);
   const mime = video.hls_url ? "application/vnd.apple.mpegurl" : "video/mp4";
   const tags = Array.isArray(video.tags) ? video.tags.filter(Boolean).slice(0, 20) : [];
@@ -307,7 +329,7 @@ export async function handleOEmbed(request) {
   }
   const slug = video.slug || video.id;
   const canonical = `${canonicalOrigin()}/video/${encodeURIComponent(slug)}`;
-  const thumbnail = absolute(video.thumbnail_url) || `${CANONICAL_ORIGIN}/assets/hero.jpg`;
+  const thumbnail = previewImage(video);
   const description = String(video.description || DEFAULT_DESCRIPTION).replace(/\s+/g, " ").trim().slice(0, 300);
   return new Response(
     JSON.stringify({

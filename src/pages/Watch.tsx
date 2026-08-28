@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { categoryName, getVideoById, type Video } from "@/data/videos";
 import { useRecommendations } from "@/lib/recommend";
+import { recordOutcome } from "@/lib/learning";
 import { trackLike, trackProgress, trackView } from "@/data/dynamic";
 import { useHistory, useLikes, useSaved } from "@/hooks/store";
 import { absUrl, isoDuration, siteOrigin, useSEO, SITE_DESCRIPTION } from "@/lib/seo";
@@ -18,21 +19,39 @@ import { cn, formatPercent, fullDate } from "@/lib/format";
 
 function ActionButton({
   icon: Icon, label, active, onClick,
-}: { icon: LucideIcon; label: string; active?: boolean; onClick: () => void }) {
+  activeLabel,
+}: {
+  icon: LucideIcon;
+  label: string;
+  active?: boolean;
+  onClick: () => void;
+  /** Text shown while active, e.g. "Saved". Width is reserved for both. */
+  activeLabel?: string;
+}) {
+  const alt = activeLabel ?? label;
+  const widest = label.length >= alt.length ? label : alt;
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-pressed={active}
+      aria-pressed={activeLabel ? active : undefined}
       className={cn(
-        "inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-xs font-semibold transition active:scale-95",
+        // No transform/scale on toggle — only colours change, so the
+        // control keeps identical dimensions in either state.
+        "inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-4 text-xs font-semibold transition-colors",
         active
           ? "border-transparent bg-gradient-to-r from-brand-500 to-violet-600 text-white shadow-[0_8px_24px_-8px_rgba(244,63,127,0.6)]"
           : "border-white/10 bg-ink-800/80 text-fog-300 hover:border-white/20 hover:text-white"
       )}
     >
-      <Icon className={cn("size-4", active && "fill-white")} aria-hidden />
-      {label}
+      <Icon className={cn("size-4 shrink-0", active && "fill-current")} aria-hidden />
+      {/* Both labels share one grid cell; the invisible copy pins the width. */}
+      <span className="grid">
+        <span className="col-start-1 row-start-1 whitespace-nowrap">{active ? alt : label}</span>
+        <span className="invisible col-start-1 row-start-1 whitespace-nowrap" aria-hidden>
+          {widest}
+        </span>
+      </span>
     </button>
   );
 }
@@ -183,7 +202,13 @@ export default function Watch() {
   }, [video?.id]);
 
   /* ── Watch-time + completion signals for the ranking engine ── */
-  const watchRef = useRef({ watched: 0, completion: 0, sent: 0 });
+  const watchRef = useRef({
+    watched: 0,
+    completion: 0,
+    sent: 0,
+    taughtWatch: false,
+    taughtDone: false,
+  });
   const trackRef = useRef<string | null>(null);
   trackRef.current = video ? video.uuid ?? video.id : null;
 
@@ -210,6 +235,19 @@ export default function Watch() {
       const s = watchRef.current;
       s.watched = Math.max(s.watched, currentTime);
       if (dur > 0) s.completion = Math.min(100, (currentTime / dur) * 100);
+
+      // Teach the ranker from real behaviour, once per milestone.
+      const id = trackRef.current;
+      if (id) {
+        if (!s.taughtWatch && s.watched >= 30) {
+          s.taughtWatch = true;
+          recordOutcome(id, "watch");
+        }
+        if (!s.taughtDone && s.completion >= 85) {
+          s.taughtDone = true;
+          recordOutcome(id, "complete");
+        }
+      }
       if (
         dur > 0 &&
         !upNextArmed.current &&
@@ -226,7 +264,7 @@ export default function Watch() {
   );
 
   useEffect(() => {
-    watchRef.current = { watched: 0, completion: 0, sent: 0 };
+    watchRef.current = { watched: 0, completion: 0, sent: 0, taughtWatch: false, taughtDone: false };
     upNextArmed.current = false;
     upNextDismissed.current = false;
     setShowUpNext(false);
@@ -242,6 +280,11 @@ export default function Watch() {
       window.removeEventListener("pagehide", onHide);
       document.removeEventListener("visibilitychange", onHide);
       flushProgress();
+      // Leaving within a few seconds is a genuine negative signal — the
+      // recommendation looked appealing but the content didn't deliver.
+      const s = watchRef.current;
+      const id = trackRef.current;
+      if (id && s.watched > 0 && s.watched < 8) recordOutcome(id, "skip");
     };
   }, [flushProgress]);
 
@@ -412,11 +455,13 @@ export default function Watch() {
           <div className="no-scrollbar -mx-4 mt-4 flex gap-2 overflow-x-auto px-4 pb-1 md:mx-0 md:px-0">
             <ActionButton
               icon={ThumbsUp}
-              label={liked ? "Liked" : "Like"}
+              label="Like"
+              activeLabel="Liked"
               active={liked}
               onClick={() => {
                 likes.toggle(video.id);
                 trackLike(video.uuid ?? video.id, !liked);
+                if (!liked) recordOutcome(video.id, "like");
                 toast(
                   liked ? "Removed from Liked videos" : "Added to your Liked videos",
                   liked ? "info" : "like"
@@ -425,10 +470,12 @@ export default function Watch() {
             />
             <ActionButton
               icon={Bookmark}
-              label={isSaved ? "Saved" : "Save"}
+              label="Save"
+              activeLabel="Saved"
               active={isSaved}
               onClick={() => {
                 saved.toggle(video.id);
+                if (!isSaved) recordOutcome(video.id, "save");
                 toast(
                   isSaved ? "Removed from Watch Later" : "Saved to Watch Later",
                   isSaved ? "info" : "save"
