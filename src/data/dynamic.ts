@@ -218,6 +218,15 @@ function flushImpressions() {
   }
 }
 
+// The 1.5s debounce means a fast navigation would otherwise drop the
+// batch, so flush on unload too.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushImpressions);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushImpressions();
+  });
+}
+
 export function trackImpression(videoId: string) {
   if (!dynamic || !videoId) return;
   if (seenImpressions.has(videoId)) return;

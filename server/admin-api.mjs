@@ -429,10 +429,18 @@ async function overview() {
 
 async function analytics(req, url) {
   const days = [7, 14, 30].includes(Number(url.searchParams.get("days"))) ? Number(url.searchParams.get("days")) : 14;
+  // Impressions/clicks exist only once migration 0006 has run, so they are
+  // appended conditionally — without them the totals silently read as 0.
+  const ctrCols =
+    `${(await hasColumn("videos", "impressions")) ? ",impressions" : ""}` +
+    `${(await hasColumn("videos", "clicks")) ? ",clicks" : ""}`;
   const [events, top, all] = await Promise.all([
     dbApi.select("analytics_events", `created_day=gte.${today(days - 1)}&select=created_day,video_id&limit=400000`),
-    dbApi.select("videos", "order=views.desc&limit=10&select=id,title,views,thumbnail_url,status,duration_s"),
-    dbApi.select("videos", "select=source_size,views,status&limit=5000"),
+    dbApi.select(
+      "videos",
+      `order=views.desc&limit=10&select=id,title,views,thumbnail_url,status,duration_s${ctrCols}`
+    ),
+    dbApi.select("videos", `select=source_size,views,status${ctrCols}&limit=5000`),
   ]);
   const seriesMap = new Map();
   for (let i = days - 1; i >= 0; i--) seriesMap.set(today(i), 0);

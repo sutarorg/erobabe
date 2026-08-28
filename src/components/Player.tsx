@@ -1,9 +1,49 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlertTriangle, Captions, FastForward, Gauge, Loader2, Maximize, Minimize,
-  Pause, PictureInPicture2, Play, Rewind, Volume2, VolumeX,
+  AlertTriangle, Captions, Gauge, Loader2, Maximize, Minimize,
+  Pause, PictureInPicture2, Play, Volume2, VolumeX,
 } from "lucide-react";
 import { clamp, cn, formatDuration } from "@/lib/format";
+
+/**
+ * Circular-arrow skip icon with the skip amount rendered inside the arc,
+ * so the control reads unambiguously as "jump 10 seconds".
+ * `dir` of 1 is a clockwise (forward) arrow, -1 counter-clockwise.
+ */
+function SkipIcon({ dir, className }: { dir: -1 | 1; className?: string }) {
+  const forward = dir > 0;
+  // Circle centred at (12, 12.5) with r = 8; the 300° arc leaves a gap at
+  // the top and the arrowhead sits at its end.
+  const ARC_START = "8 5.57";
+  const ARC_END = "16 5.57";
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+      <path
+        d={forward ? `M${ARC_END} A8 8 0 1 1 ${ARC_START}` : `M${ARC_START} A8 8 0 1 0 ${ARC_END}`}
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+      />
+      {/* Arrowhead, rotated to point along the direction of travel. */}
+      <polygon
+        points="0,-3.1 6.2,0 0,3.1"
+        fill="currentColor"
+        transform={forward ? "translate(8 5.57) rotate(-30)" : "translate(16 5.57) rotate(-150)"}
+      />
+      <text
+        x="12"
+        y="15.4"
+        textAnchor="middle"
+        fontSize="8.4"
+        fontWeight="700"
+        fill="currentColor"
+        style={{ fontFamily: "inherit" }}
+      >
+        10
+      </text>
+    </svg>
+  );
+}
 
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const pipSupported = typeof document !== "undefined" && "pictureInPictureEnabled" in document;
@@ -58,6 +98,8 @@ export function Player({
   const [buffered, setBuffered] = useState(0);
   const [volume, setVolume] = useState(0.9);
   const [muted, setMuted] = useState(startMuted);
+  /** True when autoplay was only permitted without sound. */
+  const [autoplayMuted, setAutoplayMuted] = useState(false);
   const [rate, setRate] = useState(1);
   const [rateOpen, setRateOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -177,6 +219,44 @@ export function Player({
     if (v.paused) v.play().catch(() => {});
     else v.pause();
   }, []);
+
+  /**
+   * Videos start playing on open. Browsers block unmuted autoplay until the
+   * viewer has interacted with the domain, so try sound first and silently
+   * fall back to muted playback (surfacing an unmute control) — the same
+   * approach every major video platform takes.
+   */
+  const attemptAutoplay = useCallback(async () => {
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      await v.play();
+      return;
+    } catch {
+      /* Unmuted autoplay was refused — retry silent. */
+    }
+    try {
+      v.muted = true;
+      setMuted(true);
+      setAutoplayMuted(true);
+      await v.play();
+    } catch {
+      setAutoplayMuted(false);
+      /* Neither worked; the viewer presses play. */
+    }
+  }, []);
+
+  const dismissAutoplayMute = useCallback(() => {
+    const v = videoRef.current;
+    if (v) {
+      v.muted = false;
+      v.volume = volume || 0.9;
+      setMuted(false);
+      setVolume(v.volume);
+    }
+    setAutoplayMuted(false);
+    poke();
+  }, [volume, poke]);
 
   const toggleMute = useCallback(() => {
     const v = video();
@@ -471,6 +551,7 @@ export function Player({
             e.currentTarget.muted = true;
             setMuted(true);
           }
+          void attemptAutoplay();
         }}
         onTimeUpdate={(e) => {
           if (!scrubbing) setTime(e.currentTarget.currentTime);
@@ -509,6 +590,18 @@ export function Player({
         </div>
       )}
 
+      {/* Shown only when autoplay was permitted without sound. */}
+      {autoplayMuted && !error && (
+        <button
+          type="button"
+          onClick={dismissAutoplayMute}
+          className="absolute left-3 top-3 z-20 inline-flex h-9 items-center gap-2 rounded-full border border-white/20 bg-black/60 px-3.5 text-xs font-semibold text-white backdrop-blur transition hover:bg-black/80 active:scale-95 animate-fade-in"
+        >
+          <VolumeX className="size-4" aria-hidden />
+          Tap for sound
+        </button>
+      )}
+
       {/* Double-tap ±10s indicator */}
       {skipHint && (
         <div
@@ -521,12 +614,8 @@ export function Player({
         >
           {/* Clean, minimal — no dark circle behind the control. */}
           <div className="flex flex-col items-center gap-1 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
-            {skipHint.dir < 0 ? (
-              <Rewind className="size-8 fill-white text-white" />
-            ) : (
-              <FastForward className="size-8 fill-white text-white" />
-            )}
-            <span className="text-xs font-semibold text-white">10s</span>
+            <SkipIcon dir={skipHint.dir} className="size-10 text-white" />
+            <span className="text-xs font-semibold text-white">sec</span>
           </div>
         </div>
       )}
@@ -690,7 +779,7 @@ export function Player({
             onClick={() => { skipBy(-1); poke(); }}
             className={cn(ctrlBtn, "hidden sm:grid")}
           >
-            <Rewind className="size-5 fill-white" aria-hidden />
+            <SkipIcon dir={-1} className="size-5" />
           </button>
 
           <button type="button" aria-label={playing ? "Pause" : "Play"} onClick={() => { togglePlay(); poke(); }} className={ctrlBtn}>
@@ -705,7 +794,7 @@ export function Player({
             onClick={() => { skipBy(1); poke(); }}
             className={cn(ctrlBtn, "hidden sm:grid")}
           >
-            <FastForward className="size-5 fill-white" aria-hidden />
+            <SkipIcon dir={1} className="size-5" />
           </button>
 
           <button type="button" aria-label={muted ? "Unmute" : "Mute"} onClick={toggleMute} className={ctrlBtn}>
