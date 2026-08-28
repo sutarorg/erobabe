@@ -2,15 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, CloudUpload, CopyCheck, FileVideo,
-  ImagePlus, Loader2, RefreshCw, Sparkles, Wand2, XCircle,
+  ImagePlus, Loader2, RefreshCw, Sparkles, XCircle,
 } from "lucide-react";
 import { api, type UploadPlan, type MultiPlan } from "./api";
 import { fmtBytes, fmtDuration, probeVideoFile, uploadMissingParts, uploadToStorage, UploadCancelled } from "./uploader";
-import {
-  analyzeComplexity, analyzeVideo, compressionSupported, compressVideoAggressive, planEncode,
-  CompressionCancelled, type EncodePlan, type VideoAnalysis,
-} from "./compress";
-import { Btn, Field, FieldGroup, Input, PageHeader, Select, TagEditor, Textarea, Toggle, useFetch } from "./ui";
+import { analyzeVideo, type VideoAnalysis } from "./compress";
+import { Btn, Field, FieldGroup, Input, PageHeader, Select, TagEditor, Textarea, useFetch } from "./ui";
 import { buildTrendingTags, generateTags } from "./autoTags";
 import { fingerprintFile } from "./fingerprint";
 import type { DuplicateMatch } from "./api";
@@ -23,7 +20,6 @@ const MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 type Phase =
   | { step: "select" }
-  | { step: "optimizing" }
   | { step: "uploading" }
   | { step: "finishing" }
   | { step: "details" };
@@ -45,11 +41,7 @@ export default function UploadWizard() {
   const [error, setError] = useState<string | null>(null);
 
   const [analysis, setAnalysis] = useState<VideoAnalysis | null>(null);
-  const [encodePlan, setEncodePlan] = useState<EncodePlan | null>(null);
-  const [optimizePct, setOptimizePct] = useState(0);
-  const [optimized, setOptimized] = useState<File | null>(null);
-  /** Automatic optimization is opt-in — the admin switches it on per upload. */
-  const [optimizeEnabled, setOptimizeEnabled] = useState(false);
+
   /** Fingerprint of the source file + any matching prior upload. */
   const [contentHash, setContentHash] = useState<string | null>(null);
   const [duplicate, setDuplicate] = useState<DuplicateMatch | null>(null);
@@ -119,9 +111,6 @@ export default function UploadWizard() {
     setProbe(null);
     setThumbOverride(null);
     setAnalysis(null);
-    setEncodePlan(null);
-    setOptimized(null);
-    setOptimizePct(0);
     setContentHash(null);
     setDuplicate(null);
     setDupAcknowledged(false);
@@ -131,16 +120,11 @@ export default function UploadWizard() {
     setFile(f);
     setTitle(f.name.replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " "));
     setProbing(true);
-    // Analyze the source, measure its complexity, then compute the optimal
-    // encode settings from both.
+    // Poster frame, duration and dimensions for the summary card.
     Promise.all([probeVideoFile(f), analyzeVideo(f)])
-      .then(async ([p, a]) => {
+      .then(([p, a]) => {
         setProbe(p);
         setAnalysis(a);
-        if (a && compressionSupported()) {
-          const complexity = await analyzeComplexity(f);
-          setEncodePlan(planEncode(a, complexity ? complexity.overall : null));
-        }
         setProbing(false);
       })
       .catch(() => setProbing(false));
@@ -171,31 +155,9 @@ export default function UploadWizard() {
     abortRef.current = ac;
 
     try {
-      // ── Step A: automatic optimization ──
-      let payload = optimized ?? file;
-      if (!optimized && optimizeEnabled && encodePlan?.compress) {
-        setPhase({ step: "optimizing" });
-        setOptimizePct(0);
-        try {
-          const result = await compressVideoAggressive(file, encodePlan, {
-            signal: ac.signal,
-            onProgress: (r) => setOptimizePct(Math.round(r * 100)),
-          });
-          payload = result.file;
-          setOptimized(payload);
-          // Reflect any leaner retry settings back into the summary.
-          if (result.plan !== encodePlan) setEncodePlan(result.plan);
-        } catch (e) {
-          if (e instanceof CompressionCancelled) {
-            setPhase({ step: "select" });
-            return;
-          }
-          // Optimization is best-effort — fall back to the original file.
-          payload = file;
-        }
-      }
+      // The original file is uploaded exactly as selected.
+      const payload = file;
 
-      // ── Step B: direct-to-R2 upload ──
       setPhase({ step: "uploading" });
       startAtRef.current = Date.now();
       const p = await api.createUpload({
@@ -380,7 +342,7 @@ export default function UploadWizard() {
 
       {/* Stepper */}
       <ol className="mb-8 flex items-center gap-2 text-xs font-semibold">
-        {["1 · File", optimizeEnabled ? "2 · Optimize & upload" : "2 · Upload", "3 · Details"].map((label, i) => {
+        {["1 · File", "2 · Upload", "3 · Details"].map((label, i) => {
           const current = phase.step === "select" ? 0 : phase.step === "details" ? 2 : 1;
           return (
             <li key={label} className="flex items-center gap-2">
@@ -510,55 +472,6 @@ export default function UploadWizard() {
                 </div>
               )}
 
-              {/* Automatic optimization — only offered when it would help. */}
-              {!probing && encodePlan?.compress && (
-                <div className="mt-4 rounded-xl border border-white/6 bg-ink-850 p-3.5">
-                  <div className="flex items-start gap-2.5">
-                    <Wand2
-                      className={cn(
-                        "mt-0.5 size-4 shrink-0",
-                        optimizeEnabled ? "text-brand-400" : "text-fog-600"
-                      )}
-                      aria-hidden
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-white">Automatic optimization</p>
-                      <p className="mt-0.5 text-[11px] leading-relaxed text-fog-500">
-                        {!optimizeEnabled
-                          ? "Off — the original file will be uploaded unchanged."
-                          : encodePlan.reason}
-                      </p>
-                      {optimizeEnabled && encodePlan?.compress && (
-                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fog-400">
-                          <span>
-                            {analysis?.height}p → <span className="text-brand-300">{encodePlan.targetHeight}p</span>
-                          </span>
-                          <span>{Math.round(encodePlan.videoBitrate / 1000)} kbps</span>
-                          <span className="uppercase">{encodePlan.container}</span>
-                          <span>
-                            ≈ {fmtBytes(encodePlan.estimatedSize)}{" "}
-                            <span className="text-emerald-400">
-                              (−{Math.max(0, Math.round((1 - encodePlan.estimatedSize / file.size) * 100))}%)
-                            </span>
-                          </span>
-                        </div>
-                      )}
-                      {!optimizeEnabled && (
-                        <p className="mt-2 text-[11px] text-amber-300/90">
-                          Uploading {fmtBytes(file.size)} — turning this on could save about{" "}
-                          {Math.max(0, Math.round((1 - encodePlan.estimatedSize / file.size) * 100))}%.
-                        </p>
-                      )}
-                    </div>
-                    <Toggle
-                      checked={optimizeEnabled}
-                      onChange={setOptimizeEnabled}
-                      label="Toggle automatic optimization"
-                    />
-                  </div>
-                </div>
-              )}
-
               <div className="mt-4 flex justify-end gap-2">
                 <Btn variant="ghost" onClick={() => pick(null)}>Choose different file</Btn>
                 <Btn
@@ -567,42 +480,12 @@ export default function UploadWizard() {
                   onClick={startUpload}
                   disabled={probing || (Boolean(duplicate) && !dupAcknowledged)}
                 >
-                  {optimizeEnabled && encodePlan?.compress ? "Optimize & upload" : "Start upload"}
+                  Start upload
                 </Btn>
               </div>
             </div>
           )}
         </>
-      )}
-
-      {/* ── Step 2a: optimizing ── */}
-      {phase.step === "optimizing" && (
-        <div className="rounded-3xl border border-white/8 bg-ink-900/60 p-6 md:p-8">
-          <div className="flex items-center justify-between">
-            <p className="flex items-center gap-2 text-sm font-medium text-white">
-              <Wand2 className="size-4 text-brand-400" aria-hidden />
-              Optimizing video…
-            </p>
-            <span className="text-xs font-semibold tabular-nums text-brand-300">{optimizePct}%</span>
-          </div>
-          <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-white/8" role="progressbar" aria-valuenow={optimizePct} aria-valuemin={0} aria-valuemax={100}>
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-brand-500 to-violet-500 transition-[width] duration-300"
-              style={{ width: `${optimizePct}%` }}
-            />
-          </div>
-          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-fog-500">
-            <span>{encodePlan?.targetHeight}p · {Math.round((encodePlan?.videoBitrate ?? 0) / 1000)} kbps</span>
-            <span>Target ≈ {fmtBytes(encodePlan?.estimatedSize ?? 0)}</span>
-          </div>
-          <div className="mt-6 flex justify-end">
-            <Btn variant="ghost" onClick={cancelUpload}>Cancel</Btn>
-          </div>
-          <p className="mt-5 rounded-xl border border-white/6 bg-ink-850 p-3 text-[11px] leading-relaxed text-fog-600">
-            The video is re-encoded locally in your browser before upload, so only the optimized file is
-            transferred to storage. Keep this tab open until it completes.
-          </p>
-        </div>
       )}
 
       {/* ── Step 2: uploading ── */}

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { BarChart3, Film, SquarePen, Trash2, UploadCloud, Globe, EyeOff } from "lucide-react";
 import { api, type AdminVideo, type BulkAction } from "./api";
 import {
-  Btn, BtnLink, Confirm, EmptyBlock, Field, PageHeader, Pagination, SearchInput,
+  Btn, BtnLink, Confirm, EmptyBlock, PageHeader, Pagination, SearchInput,
   Select, Spinner, StatusBadge, useDebounced, useFetch, fmtDur, fmtDateTime, fmtViews,
 } from "./ui";
 import { fmtBytes } from "./uploader";
@@ -121,18 +121,18 @@ export default function VideosList() {
       />
 
       {/* Filters */}
-      <div className="mb-4 grid min-w-0 grid-cols-2 gap-2 md:grid-cols-[minmax(0,1fr)_170px_180px_165px]">
+      <div className="mb-4 grid min-w-0 grid-cols-2 items-center gap-2 md:grid-cols-[minmax(0,1fr)_170px_180px_165px]">
         <SearchInput value={q} onChange={(v) => { setQ(v); setPage(1); }} placeholder="Search title or description…" className="col-span-2 md:col-span-1" />
-        <Field label="">
-          <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} aria-label="Filter by status">
-            <option value="">All statuses</option>
-            <option value="published">Published</option>
-            <option value="drafts">Drafts (draft + ready)</option>
-            <option value="processing">Processing</option>
-            <option value="uploading">Uploading</option>
-            <option value="unpublished">Unpublished</option>
-          </Select>
-        </Field>
+        {/* No Field wrapper — its empty label added a row of height and
+            pushed this control out of line with the sibling filters. */}
+        <Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} aria-label="Filter by status">
+          <option value="">All statuses</option>
+          <option value="published">Published</option>
+          <option value="drafts">Drafts (draft + ready)</option>
+          <option value="processing">Processing</option>
+          <option value="uploading">Uploading</option>
+          <option value="unpublished">Unpublished</option>
+        </Select>
         <Select value={category} onChange={(e) => { setCategory(e.target.value); setPage(1); }} aria-label="Filter by category">
           <option value="">All categories</option>
           {categories.map((c) => (

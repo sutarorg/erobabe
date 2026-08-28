@@ -2,15 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle, CalendarClock, CheckCircle2, CloudUpload, CopyCheck, ImagePlus,
-  Loader2, Trash2, Wand2, XCircle,
+  LayoutGrid, Loader2, Trash2, XCircle,
 } from "lucide-react";
 import { api, type DuplicateMatch } from "./api";
-import { Btn, Toggle, useFetch } from "./ui";
+import { Btn, Select, useFetch } from "./ui";
 import { fmtBytes, probeVideoFile, uploadToStorage, UploadCancelled } from "./uploader";
-import {
-  analyzeComplexity, analyzeVideo, compressionSupported, compressVideoAggressive,
-  planEncode, CompressionCancelled,
-} from "./compress";
+
 import { fingerprintFile } from "./fingerprint";
 import { buildTrendingTags, generateTags } from "./autoTags";
 import {
@@ -24,7 +21,7 @@ const MAX_FILES = 20;
 const MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 type ItemStage =
-  | "queued" | "checking" | "duplicate" | "optimizing"
+  | "queued" | "checking" | "duplicate"
   | "uploading" | "finishing" | "done" | "error" | "skipped";
 
 interface BulkItem {
@@ -49,7 +46,7 @@ const STAGE_LABEL: Record<ItemStage, string> = {
   queued: "Queued",
   checking: "Checking…",
   duplicate: "Duplicate found",
-  optimizing: "Optimizing…",
+
   uploading: "Uploading…",
   finishing: "Finalizing…",
   done: "Scheduled",
@@ -61,7 +58,7 @@ const STAGE_STYLE: Record<ItemStage, string> = {
   queued: "bg-white/6 text-fog-400",
   checking: "bg-sky-500/12 text-sky-300",
   duplicate: "bg-amber-500/12 text-amber-300",
-  optimizing: "bg-violet-500/12 text-violet-300",
+
   uploading: "bg-brand-500/12 text-brand-300",
   finishing: "bg-brand-500/12 text-brand-300",
   done: "bg-emerald-500/12 text-emerald-300",
@@ -85,7 +82,8 @@ export default function BulkUpload({
   itemsRef.current = items;
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
-  const [optimizeEnabled, setOptimizeEnabled] = useState(true);
+  /** Category assigned to every video in the batch ("" = infer from title). */
+  const [categoryId, setCategoryId] = useState("");
   const [drag, setDrag] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -204,7 +202,25 @@ export default function BulkUpload({
     abortRef.current = ac;
 
     const batchId = `bulk-${Date.now().toString(36)}`;
-    const base = Date.now();
+
+    /*
+     * Queue behind anything already scheduled. Without this, a second
+     * batch started while an earlier one is still releasing would reuse
+     * the same hourly slots and publish two videos at once.
+     */
+    let base = Date.now();
+    try {
+      const { available, scheduled } = await api.scheduled();
+      if (available && scheduled.length) {
+        const latest = scheduled.reduce(
+          (max, s) => Math.max(max, Date.parse(s.scheduled_publish_at) || 0),
+          0
+        );
+        if (latest > base) base = latest;
+      }
+    } catch {
+      /* Scheduling table unavailable — fall back to "from now". */
+    }
     // Snapshot so admin edits mid-run don't shift the schedule.
     const queue = items.filter((i) => !(i.duplicate && !i.allowDuplicate));
     let position = 0;
@@ -216,29 +232,8 @@ export default function BulkUpload({
       const item = current();
 
       try {
-        let payload = item.file;
-
-        /* Optimize */
-        if (optimizeEnabled && compressionSupported()) {
-          const analysis = await analyzeVideo(item.file);
-          if (analysis) {
-            const complexity = await analyzeComplexity(item.file);
-            const plan = planEncode(analysis, complexity ? complexity.overall : null);
-            if (plan.compress) {
-              patch(item.key, { stage: "optimizing", progress: 0 });
-              try {
-                const res = await compressVideoAggressive(item.file, plan, {
-                  signal: ac.signal,
-                  onProgress: (r) => patch(item.key, { progress: Math.round(r * 100) }),
-                });
-                payload = res.file;
-              } catch (e) {
-                if (e instanceof CompressionCancelled) throw e;
-                payload = item.file; // best-effort
-              }
-            }
-          }
-        }
+        // Files upload exactly as selected.
+        const payload = item.file;
 
         /* Upload */
         patch(item.key, { stage: "uploading", progress: 0 });
@@ -275,16 +270,19 @@ export default function BulkUpload({
         /* Automated metadata */
         const title = fresh.title.trim() || titleFromFileName(item.file.name);
         const description = descriptionForIndex(position);
-        const categoryName =
-          catsFetch.data?.categories.find((c) =>
-            title.toLowerCase().includes(c.name.toLowerCase())
-          )?.name ?? null;
-        const tags = generateTags(title, description, trending, categoryName, 5);
+        // The admin's choice wins; otherwise infer from the title.
+        const chosen = catsFetch.data?.categories.find((c) => c.id === categoryId);
+        const inferred = catsFetch.data?.categories.find((c) =>
+          title.toLowerCase().includes(c.name.toLowerCase())
+        );
+        const category = chosen ?? inferred ?? null;
+        const tags = generateTags(title, description, trending, category?.name ?? null, 5);
 
         await api.patchVideo(plan.videoId, {
           title,
           description,
           tags,
+          ...(category ? { categoryId: category.id } : {}),
           seoTitle: generateSeoTitle(title),
           seoDescription: generateSeoDescription(description),
         });
@@ -308,7 +306,7 @@ export default function BulkUpload({
         });
         position += 1;
       } catch (e) {
-        if (e instanceof UploadCancelled || e instanceof CompressionCancelled) {
+        if (e instanceof UploadCancelled) {
           patch(item.key, { stage: "skipped", error: "Cancelled" });
           break;
         }
@@ -321,8 +319,21 @@ export default function BulkUpload({
 
     setRunning(false);
     setFinished(true);
+    // Refresh so a follow-up batch queues behind what was just scheduled.
+    scheduledFetch.reload();
     onDone?.();
   };
+
+  /* Preview the real start time — after anything already queued. */
+  const scheduledFetch = useFetch(() => api.scheduled(), []);
+  const alreadyScheduled = scheduledFetch.data?.available
+    ? (scheduledFetch.data.scheduled ?? [])
+    : [];
+  const pendingScheduled = alreadyScheduled.length;
+  const queueBase = alreadyScheduled.reduce(
+    (max, s) => Math.max(max, Date.parse(s.scheduled_publish_at) || 0),
+    Date.now()
+  );
 
   const pending = items.filter((i) => !(i.duplicate && !i.allowDuplicate));
   const completed = items.filter((i) => i.stage === "done");
@@ -373,17 +384,30 @@ export default function BulkUpload({
         <>
           {/* Batch settings */}
           <div className="rounded-2xl border border-white/6 bg-ink-900/60 p-4">
+            {/* Category applies to every video in the batch. */}
             <div className="flex items-start gap-3">
-              <Wand2 className={cn("mt-0.5 size-4 shrink-0", optimizeEnabled ? "text-brand-400" : "text-fog-600")} aria-hidden />
+              <LayoutGrid className="mt-0.5 size-4 shrink-0 text-brand-400" aria-hidden />
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold text-white">Automatic optimization</p>
+                <label htmlFor="bulk-category" className="text-xs font-semibold text-white">
+                  Category
+                </label>
                 <p className="mt-0.5 text-[11px] leading-relaxed text-fog-500">
-                  {optimizeEnabled
-                    ? "Each video is re-encoded to the smallest size that preserves its visual quality."
-                    : "Off — original files are uploaded unchanged."}
+                  Applied to all {pending.length} video{pending.length === 1 ? "" : "s"} in this batch.
                 </p>
               </div>
-              <Toggle checked={optimizeEnabled} onChange={setOptimizeEnabled} label="Toggle automatic optimization" disabled={running} />
+              <Select
+                id="bulk-category"
+                value={categoryId}
+                onChange={(e) => setCategoryId(e.target.value)}
+                disabled={running || catsFetch.loading}
+                aria-label="Category for this batch"
+                className="w-44 shrink-0"
+              >
+                <option value="">Auto-detect from title</option>
+                {(catsFetch.data?.categories ?? []).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </Select>
             </div>
 
             <div className="mt-3 flex items-start gap-3 border-t border-white/6 pt-3">
@@ -391,10 +415,13 @@ export default function BulkUpload({
               <p className="text-[11px] leading-relaxed text-fog-500">
                 All {pending.length} video{pending.length === 1 ? "" : "s"} upload as <span className="text-fog-300">drafts</span>,
                 then publish automatically <span className="text-fog-300">one per hour</span> — first at{" "}
-                <span className="text-brand-300">{fmtTime(scheduleForIndex(0))}</span>, last around{" "}
+                <span className="text-brand-300">{fmtTime(scheduleForIndex(0, queueBase))}</span>, last around{" "}
                 <span className="text-brand-300">
-                  {fmtTime(new Date(Date.now() + pending.length * PUBLISH_INTERVAL_MS))}
+                  {fmtTime(new Date(queueBase + pending.length * PUBLISH_INTERVAL_MS))}
                 </span>.
+                {queueBase > Date.now() + 60_000 && (
+                  <> Queued after {pendingScheduled} already-scheduled video{pendingScheduled === 1 ? "" : "s"}.</>
+                )}{" "}
                 Titles, tags, descriptions and SEO metadata are generated automatically.
               </p>
             </div>
@@ -470,7 +497,7 @@ export default function BulkUpload({
                       </div>
                     )}
 
-                    {(item.stage === "optimizing" || item.stage === "uploading") && (
+                    {item.stage === "uploading" && (
                       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/8">
                         <div
                           className="h-full rounded-full bg-gradient-to-r from-brand-500 to-violet-500 transition-[width]"
