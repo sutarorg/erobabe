@@ -5,7 +5,7 @@ import {
   BadgeCheck, Bookmark, CalendarDays, ChevronDown, Eye, Flame, Link2, Play,
   Share2, Sparkles, ThumbsUp, VideoOff, X, type LucideIcon,
 } from "lucide-react";
-import { CAPTIONS_URL, categoryName, getVideoById, type Video } from "@/data/videos";
+import { categoryName, getVideoById, type Video } from "@/data/videos";
 import { useRecommendations } from "@/lib/recommend";
 import { trackLike, trackProgress, trackView } from "@/data/dynamic";
 import { useHistory, useLikes, useSaved } from "@/hooks/store";
@@ -311,7 +311,7 @@ export default function Watch() {
               src={video.videoUrl}
               poster={video.thumbnail}
               title={video.title}
-              captionsUrl={CAPTIONS_URL}
+              captionsUrl={video.captionsUrl ?? undefined}
               onProgress={handleProgress}
               startMuted={prefs.muteOnStart}
               onEnded={playNext}
@@ -417,7 +417,10 @@ export default function Watch() {
               onClick={() => {
                 likes.toggle(video.id);
                 trackLike(video.uuid ?? video.id, !liked);
-                toast(liked ? "Removed like" : "Added to liked videos");
+                toast(
+                  liked ? "Removed from Liked videos" : "Added to your Liked videos",
+                  liked ? "info" : "like"
+                );
               }}
             />
             <ActionButton
@@ -426,7 +429,10 @@ export default function Watch() {
               active={isSaved}
               onClick={() => {
                 saved.toggle(video.id);
-                toast(isSaved ? "Removed from saved" : "Saved for later");
+                toast(
+                  isSaved ? "Removed from Watch Later" : "Saved to Watch Later",
+                  isSaved ? "info" : "save"
+                );
               }}
             />
             <ActionButton icon={Share2} label="Share" onClick={() => setShareOpen(true)} />

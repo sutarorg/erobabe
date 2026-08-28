@@ -17,6 +17,7 @@ async function videoCols() {
   const extras = [];
   if (await hasColumn("videos", "slug")) extras.push("slug");
   if (await hasColumn("videos", "likes")) extras.push("likes");
+  if (await hasColumn("videos", "captions_url")) extras.push("captions_url");
   return extras.length ? `${VIDEO_COLS_BASE},${extras.join(",")}` : VIDEO_COLS_BASE;
 }
 
@@ -62,6 +63,7 @@ export function shapeVideo(row, cats) {
     thumbnailUrl: row.thumbnail_url ?? null,
     videoUrl: row.video_url ?? null,
     hlsUrl: row.hls_url ?? null,
+    captionsUrl: row.captions_url ?? null,
     featured: !!row.featured,
     trending: !!row.trending,
     editorsPick: !!row.editors_pick,

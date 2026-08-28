@@ -27,6 +27,7 @@ export interface RemoteVideo {
   thumbnailUrl: string | null;
   videoUrl: string | null;
   hlsUrl: string | null;
+  captionsUrl?: string | null;
   featured: boolean;
   trending: boolean;
   editorsPick: boolean;
@@ -79,6 +80,7 @@ function mapRemote(rv: RemoteVideo, index: number): Video {
       rv.likes != null && rv.views > 0 ? Math.min(100, (rv.likes / rv.views) * 100) : (rv.likeRatio ?? 0),
     thumbnail: rv.thumbnailUrl ?? FALLBACK_THUMBS[index % FALLBACK_THUMBS.length],
     videoUrl: rv.hlsUrl ?? rv.videoUrl ?? "",
+    captionsUrl: rv.captionsUrl ?? null,
     tags: rv.tags?.length ? rv.tags : [rv.categoryName ?? "Featured"],
     performer: "Erobabe Studio",
     description: rv.description || "A studio feature from the EroBabe catalog.",

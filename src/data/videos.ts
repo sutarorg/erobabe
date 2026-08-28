@@ -37,6 +37,8 @@ export interface Video {
   likeRatio: number; // 0–100
   thumbnail: string;
   videoUrl: string;
+  /** Subtitle track for this specific video, when one exists. */
+  captionsUrl?: string | null;
   tags: string[];
   performer: string;
   description: string;
@@ -106,6 +108,11 @@ export const DEMO_SOURCES = [
   `${G}/ForBiggerMeltdowns.mp4`,
 ];
 
+/**
+ * Sample subtitle track used by the built-in demo catalog only.
+ * Real videos supply their own `captionsUrl`, so a generic track is
+ * never shown against footage it doesn't match.
+ */
 export const CAPTIONS_URL = "/assets/captions-demo.vtt";
 
 /* ──────────────────────────────────────────────────────────────

@@ -216,6 +216,10 @@ function metadata({ video, category, canonical }) {
     <meta property="og:image" content="${html(image)}">
     <meta property="og:image:secure_url" content="${html(image)}">
     <meta property="og:image:type" content="${imageMime(image)}">
+    <!-- WhatsApp and Facebook need explicit dimensions to render a large
+         card; without them the preview often falls back to a tiny icon. -->
+    <meta property="og:image:width" content="1280">
+    <meta property="og:image:height" content="720">
     <meta property="og:image:alt" content="${html(`${title} video thumbnail`)}">
     ${media ? `<meta property="og:video" content="${html(media)}"><meta property="og:video:secure_url" content="${html(media)}"><meta property="og:video:type" content="${mime}">` : ""}
     ${video.duration_s ? `<meta property="og:video:duration" content="${Math.round(video.duration_s)}">` : ""}

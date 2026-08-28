@@ -1,16 +1,18 @@
 import { useEffect, useState } from "react";
-import { CheckCircle2, Info } from "lucide-react";
+import { Bookmark, CheckCircle2, Heart, Info } from "lucide-react";
+
+type ToastKind = "check" | "info" | "like" | "save";
 
 interface ToastItem {
   id: number;
   message: string;
-  kind: "check" | "info";
+  kind: ToastKind;
 }
 
 let seq = 0;
 
 /** Fire-and-forget toast: `toast("Link copied")` from anywhere. */
-export function toast(message: string, kind: "check" | "info" = "check") {
+export function toast(message: string, kind: ToastKind = "check") {
   window.dispatchEvent(new CustomEvent<ToastItem>("eb:toast", { detail: { id: ++seq, message, kind } }));
 }
 
@@ -37,7 +39,15 @@ export function Toaster() {
           key={t.id}
           className="glass pointer-events-auto flex items-center gap-2.5 rounded-full border border-white/10 py-2.5 pl-3.5 pr-5 text-sm font-medium text-white shadow-2xl animate-fade-up"
         >
-          {t.kind === "check" ? (
+          {t.kind === "like" ? (
+            <span className="grid size-5 place-items-center rounded-full bg-brand-500/20">
+              <Heart className="size-3 fill-brand-400 text-brand-400 animate-scale-in" aria-hidden />
+            </span>
+          ) : t.kind === "save" ? (
+            <span className="grid size-5 place-items-center rounded-full bg-violet-500/20">
+              <Bookmark className="size-3 fill-violet-300 text-violet-300 animate-scale-in" aria-hidden />
+            </span>
+          ) : t.kind === "check" ? (
             <CheckCircle2 className="size-4.5 text-brand-400" aria-hidden />
           ) : (
             <Info className="size-4.5 text-violet-400" aria-hidden />

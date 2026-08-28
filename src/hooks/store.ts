@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Tiny localStorage-backed store with cross-component sync:
@@ -28,26 +28,44 @@ export function writeStore<T>(key: string, value: T): void {
 export function useLocalStorage<T>(key: string, fallback: T) {
   const [value, setValue] = useState<T>(() => readStore(key, fallback));
 
+  // Keep the latest value in a ref so `set` can compute the next state
+  // without putting a side effect inside a React state updater.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const fallbackRef = useRef(fallback);
+  fallbackRef.current = fallback;
+
   useEffect(() => {
     const onChange = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail;
-      if (!detail || detail === key) setValue(readStore(key, fallback));
+      if (!detail || detail === key) setValue(readStore(key, fallbackRef.current));
     };
     window.addEventListener(EVENT, onChange);
     window.addEventListener("storage", onChange);
+    // Re-read on mount so a value written by another tab is picked up.
+    setValue(readStore(key, fallbackRef.current));
     return () => {
       window.removeEventListener(EVENT, onChange);
       window.removeEventListener("storage", onChange);
     };
-  }, [key, fallback]);
+    // `fallback` is intentionally excluded — object literals would make
+    // this resubscribe on every render.
+  }, [key]);
 
+  /**
+   * Persist and broadcast outside the updater. Doing this inside
+   * setState breaks under StrictMode, which double-invokes updaters —
+   * a toggle would apply twice and silently cancel itself out.
+   */
   const set = useCallback(
     (v: T | ((prev: T) => T)) => {
-      setValue((prev) => {
-        const next = typeof v === "function" ? (v as (p: T) => T)(prev) : v;
-        writeStore(key, next);
-        return next;
-      });
+      const next =
+        typeof v === "function"
+          ? (v as (p: T) => T)(readStore(key, valueRef.current))
+          : v;
+      valueRef.current = next;
+      setValue(next);
+      writeStore(key, next);
     },
     [key]
   );

@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { NavLink, useLocation, Link } from "react-router-dom";
-import { Clock, Compass, Flame, History, Home, LayoutGrid, MoreHorizontal, TrendingUp, X } from "lucide-react";
+import {
+  Bookmark, Clock, Compass, Flame, Heart, History, Home, LayoutGrid,
+  MoreHorizontal, TrendingUp, X,
+} from "lucide-react";
 import { Logo } from "./Brand";
 import { Toggle } from "./Sections";
 import { useUi } from "@/context/ui";
@@ -31,9 +34,12 @@ function MoreSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   if (!open) return null;
 
   const links = [
+    { to: "/liked", icon: Heart, label: "Liked" },
+    { to: "/watch-later", icon: Bookmark, label: "Watch Later" },
+    { to: "/history", icon: History, label: "History" },
     { to: "/popular", icon: TrendingUp, label: "Popular" },
     { to: "/new", icon: Clock, label: "New" },
-    { to: "/history", icon: History, label: "History" },
+    { to: "/explore", icon: Compass, label: "Explore" },
   ];
   const legal = [
     { to: "/legal/privacy", label: "Privacy" },

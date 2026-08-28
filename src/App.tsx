@@ -22,6 +22,7 @@ const CategoryPage = lazy(() => import("@/pages/CategoryPage"));
 const Watch = lazy(() => import("@/pages/Watch"));
 const SearchPage = lazy(() => import("@/pages/SearchPage"));
 const History = lazy(() => import("@/pages/History"));
+const Library = lazy(() => import("@/pages/Library"));
 const Legal = lazy(() => import("@/pages/Legal"));
 const ListPage = lazy(() => import("@/pages/ListPage"));
 const NotFound = lazy(() => import("@/pages/NotFound"));
@@ -87,6 +88,8 @@ function Shell() {
               <Route path="/watch/:id" element={<Watch />} />
               <Route path="/search" element={<SearchPage />} />
               <Route path="/history" element={<History />} />
+              <Route path="/liked" element={<Library initial="liked" />} />
+              <Route path="/watch-later" element={<Library initial="later" />} />
               <Route path="/legal/:topic" element={<Legal />} />
               <Route path="*" element={<NotFound />} />
             </Routes>

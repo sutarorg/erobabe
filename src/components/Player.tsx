@@ -62,6 +62,8 @@ export function Player({
   const [rateOpen, setRateOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [ccOn, setCcOn] = useState(false);
+  const [hasCaptions, setHasCaptions] = useState(false);
+  const trackRef = useRef<HTMLTrackElement>(null);
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState(false);
   const [visible, setVisible] = useState(true);
@@ -97,9 +99,30 @@ export function Player({
         if (destroyed) return;
         const Hls = mod.default;
         if (Hls.isSupported()) {
-          hls = new Hls({ maxBufferLength: 30, enableWorker: true });
+          hls = new Hls({
+            enableWorker: true,
+            // Buffer generously ahead so brief network dips never stall
+            // playback, while capping memory on long videos.
+            maxBufferLength: 60,
+            maxMaxBufferLength: 120,
+            backBufferLength: 30,
+            maxBufferSize: 80 * 1000 * 1000,
+            // Start conservatively, then let ABR climb — avoids the
+            // "buffering on the first few seconds" problem.
+            startLevel: -1,
+            abrEwmaDefaultEstimate: 1_000_000,
+            lowLatencyMode: false,
+            // Retry transient network errors instead of failing outright.
+            fragLoadingMaxRetry: 6,
+            manifestLoadingMaxRetry: 4,
+            levelLoadingMaxRetry: 4,
+          });
           hls.on(Hls.Events.ERROR, (_e, data) => {
-            if (data.fatal) setError(true);
+            if (!data.fatal) return;
+            // Recover from network/media faults before surfacing an error.
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls?.startLoad();
+            else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls?.recoverMediaError();
+            else setError(true);
           });
           hls.loadSource(src);
           hls.attachMedia(v);
@@ -190,9 +213,48 @@ export function Player({
     if (!v || !v.textTracks.length) return;
     const track = v.textTracks[0];
     const show = track.mode !== "showing";
-    track.mode = show ? "showing" : "hidden";
+    // Every other track must be disabled or browsers may render two at once.
+    for (let i = 0; i < v.textTracks.length; i++) {
+      v.textTracks[i].mode = i === 0 && show ? "showing" : "disabled";
+    }
     setCcOn(show);
+    try {
+      localStorage.setItem("eb:captions", show ? "1" : "0");
+    } catch {
+      /* storage unavailable */
+    }
   }, []);
+
+  /**
+   * Cue rendering is unreliable if the track is touched before its mode is
+   * set, and Safari drops cues when the src changes. Re-apply the viewer's
+   * preference whenever the source or captions URL changes.
+   */
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !captionsUrl) return;
+    let remembered = false;
+    try {
+      remembered = localStorage.getItem("eb:captions") === "1";
+    } catch {
+      remembered = false;
+    }
+    const apply = () => {
+      if (!v.textTracks.length) return;
+      for (let i = 0; i < v.textTracks.length; i++) {
+        v.textTracks[i].mode = i === 0 && remembered ? "showing" : "disabled";
+      }
+      setCcOn(remembered);
+      setHasCaptions(true);
+    };
+    // textTracks populate asynchronously after the element mounts.
+    const id = window.setTimeout(apply, 120);
+    v.textTracks.addEventListener?.("addtrack", apply);
+    return () => {
+      window.clearTimeout(id);
+      v.textTracks.removeEventListener?.("addtrack", apply);
+    };
+  }, [src, captionsUrl]);
 
   /* Preview card is 128px on small screens, 160px from `sm` upwards. */
   useEffect(() => {
@@ -386,7 +448,9 @@ export function Player({
         src={hlsManaged ? undefined : src}
         poster={poster}
         playsInline
-        preload="metadata"
+        // "auto" lets the browser build a healthy buffer up front. Progressive
+        // MP4 only fetches what it needs, so this costs little bandwidth.
+        preload={isHls(src) ? "metadata" : "auto"}
         crossOrigin="anonymous"
         aria-label={title}
         className="h-full w-full object-contain"
@@ -411,10 +475,23 @@ export function Player({
         onPause={() => { setPlaying(false); if (!scrubbing) { hudLocked.current = false; setVisible(true); } }}
         onWaiting={() => setWaiting(true)}
         onPlaying={() => setWaiting(false)}
+        onCanPlay={() => setWaiting(false)}
+        onStalled={() => setWaiting(true)}
+        onSeeking={() => setWaiting(true)}
+        onSeeked={() => setWaiting(false)}
         onError={() => setError(true)}
         onEnded={() => { hudLocked.current = false; setVisible(true); onEnded?.(); }}
       >
-        {captionsUrl && <track kind="captions" src={captionsUrl} srcLang="en" label="English" />}
+        {captionsUrl && (
+          <track
+            ref={trackRef}
+            kind="subtitles"
+            src={captionsUrl}
+            srcLang="en"
+            label="English"
+            default={ccOn}
+          />
+        )}
       </video>
 
       {waiting && !error && (
@@ -433,11 +510,12 @@ export function Player({
             skipHint.dir < 0 ? "left-0" : "right-0"
           )}
         >
-          <div className="flex flex-col items-center gap-1 rounded-full bg-black/55 px-5 py-4 backdrop-blur">
+          {/* Clean, minimal — no dark circle behind the control. */}
+          <div className="flex flex-col items-center gap-1 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
             {skipHint.dir < 0 ? (
-              <Rewind className="size-7 fill-white text-white" />
+              <Rewind className="size-8 fill-white text-white" />
             ) : (
-              <FastForward className="size-7 fill-white text-white" />
+              <FastForward className="size-8 fill-white text-white" />
             )}
             <span className="text-xs font-semibold text-white">10s</span>
           </div>
@@ -658,10 +736,10 @@ export function Player({
             )}
           </div>
 
-          {captionsUrl && (
+          {captionsUrl && hasCaptions && (
             <button
               type="button"
-              aria-label={ccOn ? "Hide captions" : "Show captions"}
+              aria-label={ccOn ? "Hide subtitles" : "Show subtitles"}
               aria-pressed={ccOn}
               onClick={toggleCc}
               className={cn(ctrlBtn, ccOn && "bg-white/15 text-brand-300")}

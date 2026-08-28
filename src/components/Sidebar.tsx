@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
-  Clock, Compass, FileWarning, Flame, History, Home, Info,
+  Bookmark, Clock, Compass, FileWarning, Flame, Heart, History, Home, Info,
   ShieldAlert, ShieldCheck, ScrollText, TrendingUp, X, type LucideIcon,
 } from "lucide-react";
 import { Logo, AgeBadge } from "./Brand";
@@ -24,6 +24,8 @@ const MAIN: Item[] = [
   { to: "/popular", icon: TrendingUp, label: "Popular" },
   { to: "/new", icon: Clock, label: "New Releases" },
   { to: "/history", icon: History, label: "History" },
+  { to: "/liked", icon: Heart, label: "Liked" },
+  { to: "/watch-later", icon: Bookmark, label: "Watch Later" },
 ];
 
 const INFO: Item[] = [

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { CalendarDays, Clock, Compass, Eye, Flame, LayoutGrid, TrendingUp } from "lucide-react";
-import { CATEGORIES, VIDEOS, trendingVideos, risingVideos, popularVideos, newVideos, editorsPicks, categoryCount } from "@/data/videos";
+import { CATEGORIES, VIDEOS, trendingVideos, risingVideos, newVideos, editorsPicks, categoryCount } from "@/data/videos";
 import { CategoryCard, FilterChips, RankList, SectionHeader, VideoGrid, type ChipOption } from "@/components/Sections";
 import { useSEO } from "@/lib/seo";
 
@@ -25,8 +25,10 @@ export default function Explore() {
     switch (filter) {
       case "trending": return trendingVideos;
       case "new": return VIDEOS.filter((v) => v.isNew);
-      case "popular": return popularVideos.slice(0, 20);
-      case "mostviewed": return [...VIDEOS].sort((a, b) => b.views - a.views).slice(0, 20);
+      // Popular blends quality and reach; Most Viewed is raw lifetime views,
+      // so the two chips return genuinely different line-ups.
+      case "popular": return [...VIDEOS].sort((a, b) => b.score - a.score);
+      case "mostviewed": return [...VIDEOS].sort((a, b) => b.views - a.views);
       case "recent": return newVideos.slice(0, 20);
       default: return [...VIDEOS].sort((a, b) => b.score - a.score).slice(0, 20);
     }
