@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft, BarChart3, Clock, Eye, Gauge, Globe, Heart, MonitorSmartphone,
-  MousePointerClick, Repeat, Search, Share2, ThumbsUp, Users,
+  Repeat, Search, Share2, ThumbsUp, Users,
 } from "lucide-react";
 import { api, type Share } from "./api";
 import {
@@ -171,13 +171,11 @@ export default function VideoAnalytics() {
       />
 
       {/* ── Performance ── */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard icon={Eye} label={`Views (${days}d)`} value={fmtViews(perf.rangeViews)} sub={`${fmtViews(perf.lifetimeViews)} lifetime`} accent />
         <StatCard icon={Users} label="Unique viewers" value={fmtViews(perf.uniqueViewers)} sub={`${pct(perf.repeatRate)} repeat`} />
         <StatCard icon={Clock} label="Avg watch time" value={fmtDur(Math.round(perf.avgWatchSeconds))} sub={`${fmtDur(Math.round(perf.totalWatchSeconds))} total`} />
         <StatCard icon={Gauge} label="Avg completion" value={`${Math.round(perf.avgCompletion)}%`} sub={`${perf.trackedSessions} tracked`} />
-        <StatCard icon={MonitorSmartphone} label="Impressions" value={perf.impressions == null ? "—" : fmtViews(perf.impressions)} sub="times shown" />
-        <StatCard icon={MousePointerClick} label="CTR" value={`${perf.ctr.toFixed(2)}%`} sub={`${fmtViews(perf.clicks ?? 0)} clicks`} />
       </div>
 
       <div className="mt-6 space-y-6">
@@ -186,20 +184,10 @@ export default function VideoAnalytics() {
         {/* ── Retention ── */}
         <Panel title="Audience retention" icon={BarChart3}>
           <RetentionCurve points={retention} duration={video.duration_s} />
-          <div className="mt-3 grid grid-cols-2 gap-3 border-t border-white/6 pt-3 text-xs sm:grid-cols-3 lg:grid-cols-5">
+          <div className="mt-3 grid grid-cols-2 gap-3 border-t border-white/6 pt-3 text-xs sm:grid-cols-3">
             <div>
               <p className="text-fog-600">Reached halfway</p>
               <p className="mt-0.5 text-sm font-semibold text-white">{pct(halfway)}</p>
-            </div>
-            <div>
-              <p className="text-fog-600">Impressions</p>
-              <p className="mt-0.5 text-sm font-semibold text-white">
-                {perf.impressions == null ? "—" : fmtViews(perf.impressions)}
-              </p>
-            </div>
-            <div>
-              <p className="text-fog-600">Click-through rate</p>
-              <p className="mt-0.5 text-sm font-semibold text-white">{perf.ctr.toFixed(2)}%</p>
             </div>
             <div>
               <p className="text-fog-600">Watched to end</p>

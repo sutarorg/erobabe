@@ -1,10 +1,9 @@
 import { useState } from "react";
 import {
-  BarChart3, Eye, Film, Globe, HardDrive, MonitorSmartphone, MousePointerClick, Repeat,
+  BarChart3, Eye, Film, Globe, HardDrive, MonitorSmartphone, Repeat,
   Search, Share2, Users, Clock, Trophy,
 } from "lucide-react";
 import { ShareBars } from "./VideoAnalytics";
-import { cn } from "@/lib/format";
 import { Link } from "react-router-dom";
 import { api } from "./api";
 import { EmptyBlock, PageHeader, Select, Spinner, StatCard, Tabs, useFetch, fmtViews, fmtDur, fmtDateTime } from "./ui";
@@ -23,11 +22,9 @@ function OverviewTab({ days }: { days: number }) {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard icon={Eye} label={`Views (${days}d)`} value={fmtViews(data.rangeViews)} accent />
         <StatCard icon={BarChart3} label="Lifetime views" value={fmtViews(data.storage.lifetimeViews)} />
-        <StatCard icon={MonitorSmartphone} label="Impressions" value={fmtViews(data.traffic.impressions)} sub="cards shown" />
-        <StatCard icon={MousePointerClick} label="CTR" value={`${data.traffic.ctr.toFixed(2)}%`} sub={`${fmtViews(data.traffic.clicks)} clicks`} />
         <StatCard icon={HardDrive} label="Storage used" value={fmtBytes(data.storage.bytes)} sub={`${data.storage.objects} objects`} />
         <StatCard icon={Film} label="Avg / video" value={fmtViews(avgPerVideo)} sub="lifetime" />
       </div>
@@ -75,8 +72,6 @@ function OverviewTab({ days }: { days: number }) {
                   <th className="py-2.5 pr-3 font-semibold">Video</th>
                   <th className="py-2.5 pr-3 font-semibold">Range</th>
                   <th className="py-2.5 pr-3 font-semibold">Lifetime</th>
-                  <th className="py-2.5 pr-3 font-semibold">Impr.</th>
-                  <th className="py-2.5 pr-3 font-semibold">CTR</th>
                   <th className="py-2.5 font-semibold">Duration</th>
                 </tr>
               </thead>
@@ -94,27 +89,6 @@ function OverviewTab({ days }: { days: number }) {
                     </td>
                     <td className="py-2.5 pr-3 tabular-nums text-fog-300">{fmtViews(rangeTopMap.get(v.id) ?? 0)}</td>
                     <td className="py-2.5 pr-3 tabular-nums text-fog-400">{fmtViews(v.views)}</td>
-                    <td className="py-2.5 pr-3 tabular-nums text-fog-400">
-                      {v.impressions == null ? "—" : fmtViews(v.impressions)}
-                    </td>
-                    <td className="py-2.5 pr-3 tabular-nums text-fog-400">
-                      {v.impressions != null && v.impressions > 0 && v.clicks != null ? (
-                        <span
-                          className={cn(
-                            "rounded-md px-1.5 py-0.5 text-[11px] font-semibold",
-                            v.clicks / v.impressions >= 0.05
-                              ? "bg-emerald-500/10 text-emerald-300"
-                              : v.clicks / v.impressions >= 0.02
-                                ? "bg-amber-500/10 text-amber-300"
-                                : "bg-white/6 text-fog-400"
-                          )}
-                        >
-                          {((v.clicks / v.impressions) * 100).toFixed(2)}%
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
                     <td className="py-2.5 text-fog-500">{fmtDur(v.duration_s)}</td>
                   </tr>
                 ))}

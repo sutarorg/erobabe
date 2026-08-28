@@ -6,18 +6,16 @@ import { EmptyState, VideoGrid, categoryIcon } from "@/components/Sections";
 import { siteOrigin, useSEO } from "@/lib/seo";
 import { cn } from "@/lib/format";
 
-type Sort = "popular" | "newest" | "views";
+type Sort = "popular" | "newest";
 
 const SORTS: { key: Sort; label: string }[] = [
   { key: "popular", label: "Popular" },
   { key: "newest", label: "Newest" },
-  { key: "views", label: "Most Viewed" },
 ];
 
 function sortVideos(videos: Video[], sort: Sort): Video[] {
   const arr = [...videos];
   if (sort === "newest") return arr.sort((a, b) => a.daysAgo - b.daysAgo);
-  if (sort === "views") return arr.sort((a, b) => b.views - a.views);
   return arr.sort((a, b) => b.score - a.score);
 }
 
