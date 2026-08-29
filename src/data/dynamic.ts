@@ -39,6 +39,20 @@ export interface RemoteVideo {
 let dynamic = false;
 export const isDynamic = () => dynamic;
 
+/** One page's admin-configured SEO override. Null = use the smart default. */
+export interface SeoOverride {
+  seoTitle: string | null;
+  metaDescription: string | null;
+  keywords: string | null;
+  canonicalUrl: string | null;
+  robots: string | null;
+  ogTitle: string | null;
+  ogDescription: string | null;
+  ogImage: string | null;
+  jsonLd: string | null;
+  inSitemap: boolean;
+}
+
 /** Site settings pulled from the backend (hero toggle, announcement…). */
 export const publicSettings: {
   siteTitle: string | null;
@@ -46,12 +60,15 @@ export const publicSettings: {
   heroEnabled: boolean;
   featuredVideoId: string | null;
   ageText: string | null;
+  /** Admin SEO overrides, keyed by public path ("/", "/category/x", …). */
+  seo: Record<string, SeoOverride>;
 } = {
   siteTitle: null,
   announcement: null,
   heroEnabled: true,
   featuredVideoId: null,
   ageText: null,
+  seo: {},
 };
 
 const FALLBACK_THUMBS = Object.values(THUMBS);
@@ -141,13 +158,20 @@ export async function bootstrapCatalog(): Promise<void> {
     }
 
     if (sRes.ok) {
-      const s = (await sRes.json()) as Partial<typeof publicSettings>;
+      const s = (await sRes.json()) as {
+        siteTitle?: string | null;
+        announcement?: string | null;
+        heroEnabled?: boolean;
+        featuredVideoId?: string | null;
+        ageText?: string | null;
+        seo?: Record<string, SeoOverride>;
+      };
       publicSettings.siteTitle = s.siteTitle ?? null;
       publicSettings.announcement = s.announcement ?? null;
       publicSettings.heroEnabled = s.heroEnabled !== false;
       publicSettings.featuredVideoId = s.featuredVideoId ?? null;
       publicSettings.ageText = s.ageText ?? null;
-      if (s.siteTitle) document.title = document.title.replace("EroBabe", s.siteTitle);
+      publicSettings.seo = s.seo ?? {};
     }
   } catch {
     /* Backend unreachable — the demo catalog stays active. */

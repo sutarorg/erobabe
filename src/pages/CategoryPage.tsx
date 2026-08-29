@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, FolderSearch } from "lucide-react";
 import { BROWSE_CATEGORIES, byCategory, categoryBySlug, type Video } from "@/data/videos";
 import { EmptyState, VideoGrid, categoryIcon } from "@/components/Sections";
-import { siteOrigin, useSEO } from "@/lib/seo";
+import { breadcrumbSchema, collectionSchema, schemaGraph, siteOrigin, useSEO, withOverride } from "@/lib/seo";
 import { cn } from "@/lib/format";
 
 type Sort = "popular" | "newest";
@@ -31,13 +31,34 @@ export default function CategoryPage() {
     [isReal, category?.slug, sort]
   );
 
+  const origin = siteOrigin();
+  const path = `/category/${category?.slug ?? ""}`;
+
   useSEO(
     isReal && category
-      ? {
-          title: `${category.name} Videos (18+) — EroBabe`,
-          description: `${category.blurb} Watch ${videos.length} ${category.name.toLowerCase()} videos online on EroBabe.`,
-          canonical: `${siteOrigin()}/category/${category.slug}`,
-        }
+      ? withOverride(path, {
+          title: `Free ${category.name} Videos in HD — Watch ${videos.length} 18+ Clips | EroBabe`,
+          description: `Watch ${videos.length} free ${category.name.toLowerCase()} videos in HD on EroBabe. ${
+            category.blurb
+          } New ${category.name.toLowerCase()} clips added daily — no sign-up needed.`,
+          keywords: [`${category.name.toLowerCase()} videos`, `free ${category.name.toLowerCase()}`, `${category.name.toLowerCase()} 18+`, "EroBabe"],
+          canonical: `${origin}${path}`,
+          schema: schemaGraph(
+            origin,
+            collectionSchema(
+              origin,
+              path,
+              `${category.name} Videos — EroBabe`,
+              category.blurb,
+              videos.slice(0, 12).map((v) => ({ name: v.title, url: `${origin}/video/${v.id}` }))
+            ),
+            breadcrumbSchema(origin, [
+              { name: "Home", path: "/" },
+              { name: "Categories", path: "/categories" },
+              { name: category.name, path },
+            ])
+          ),
+        })
       : { title: "Category not found — EroBabe", robots: "noindex" }
   );
 

@@ -10,7 +10,10 @@ import { useRecommendations } from "@/lib/recommend";
 import { recordOutcome } from "@/lib/learning";
 import { trackLike, trackProgress, trackView } from "@/data/dynamic";
 import { useHistory, useLikes, useSaved } from "@/hooks/store";
-import { absUrl, isoDuration, siteOrigin, useSEO, SITE_DESCRIPTION } from "@/lib/seo";
+import {
+  absUrl, breadcrumbSchema, isoDuration, schemaGraph, siteOrigin, useSEO,
+  withOverride, SITE_DESCRIPTION,
+} from "@/lib/seo";
 import { Player } from "@/components/Player";
 import { ShareModal } from "@/components/ShareModal";
 import { EmptyState, Tag, VideoGrid } from "@/components/Sections";
@@ -62,7 +65,7 @@ function RecoRow({ video }: { video: Video }) {
       <div className="relative aspect-video w-40 shrink-0 overflow-hidden rounded-lg bg-ink-800 ring-1 ring-white/8 sm:w-44">
         <img
           src={video.thumbnail}
-          alt={`${video.title} thumbnail`}
+          alt={`${video.title} — free 18+ video`}
           loading="lazy"
           decoding="async"
           className="absolute inset-0 h-full w-full object-cover transition duration-500 group-hover:scale-105"
@@ -148,10 +151,16 @@ export default function Watch() {
 
   useSEO(
     video
-      ? {
-          title: watchTitle,
+      ? withOverride(`/video/${video.id}`, {
+          title: `${video.title} - Free 18+ Video | EroBabe`,
           description: watchDescription,
-          keywords: [...(video.tags ?? []), categoryName(video.category), "EroBabe", "18+ video"].filter(Boolean),
+          keywords: [
+            ...(video.tags ?? []),
+            categoryName(video.category),
+            "free 18+ video",
+            "watch online",
+            "EroBabe",
+          ].filter(Boolean),
           canonical,
           type: "video.other",
           image: video.thumbnail,
@@ -160,34 +169,49 @@ export default function Watch() {
             durationS: video.duration,
             publishedAt: uploadDate,
           },
-          schema: {
-            "@context": "https://schema.org",
-            "@type": "VideoObject",
-            name: video.title,
-            description: (video.description || watchDescription || "").slice(0, 500),
-            thumbnailUrl: [absUrl(video.thumbnail)],
-            uploadDate,
-            datePublished: uploadDate,
-            duration: isoDuration(video.duration),
-            contentUrl: absUrl(video.videoUrl),
-            embedUrl: canonical,
-            url: canonical,
-            genre: categoryName(video.category),
-            keywords: (video.tags ?? []).join(", "),
-            isFamilyFriendly: false,
-            inLanguage: "en",
-            publisher: {
-              "@type": "Organization",
-              name: "EroBabe",
-              url: `${siteOrigin()}/`,
+          schema: schemaGraph(
+            siteOrigin(),
+            {
+              "@type": "VideoObject",
+              "@id": `${canonical}#video`,
+              name: video.title,
+              description: (video.description || watchDescription || "").slice(0, 500),
+              thumbnailUrl: [absUrl(video.thumbnail)],
+              uploadDate,
+              datePublished: uploadDate,
+              dateModified: uploadDate,
+              duration: isoDuration(video.duration),
+              contentUrl: absUrl(video.videoUrl),
+              embedUrl: canonical,
+              url: canonical,
+              genre: categoryName(video.category),
+              keywords: (video.tags ?? []).join(", "),
+              isFamilyFriendly: false,
+              inLanguage: "en",
+              publisher: { "@id": `${siteOrigin()}/#organization` },
+              interactionStatistic: {
+                "@type": "InteractionCounter",
+                interactionType: { "@type": "WatchAction" },
+                userInteractionCount: video.views,
+              },
             },
-            interactionStatistic: {
-              "@type": "InteractionCounter",
-              interactionType: { "@type": "WatchAction" },
-              userInteractionCount: video.views,
+            {
+              "@type": "WebPage",
+              "@id": `${canonical}#webpage`,
+              url: canonical,
+              name: video.title,
+              description: watchDescription,
+              primaryImageOfPage: { "@type": "ImageObject", url: absUrl(video.thumbnail) },
+              mainEntity: { "@id": `${canonical}#video` },
+              isPartOf: { "@id": `${siteOrigin()}/#website` },
             },
-          },
-        }
+            breadcrumbSchema(siteOrigin(), [
+              { name: "Home", path: "/" },
+              { name: categoryName(video.category), path: `/category/${video.category}` },
+              { name: video.title, path: `/video/${video.id}` },
+            ])
+          ),
+        })
       : { title: watchTitle, robots: "noindex" }
   );
 

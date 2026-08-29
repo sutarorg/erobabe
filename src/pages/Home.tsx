@@ -8,7 +8,7 @@ import {
 import { Carousel, CategoryCard, RankList, SectionHeader, VideoGrid, Tag } from "@/components/Sections";
 import { AgeBadge } from "@/components/Brand";
 import { publicSettings } from "@/data/dynamic";
-import { siteOrigin, useSEO, websiteSchema } from "@/lib/seo";
+import { collectionSchema, schemaGraph, siteOrigin, useSEO, withOverride } from "@/lib/seo";
 import { cn, formatPercent } from "@/lib/format";
 
 const HERO_INTERVAL = 3000;
@@ -128,12 +128,23 @@ export default function Home() {
   // the newest video so the homepage is never empty.
   const heroVideos = featuredVideos.length ? featuredVideos : featuredVideo ? [featuredVideo] : [];
 
-  useSEO({
+  useSEO(withOverride("/", {
+    title: "EroBabe — Watch Free 18+ Adult Videos in HD | Trending Porn Clips",
     description:
-      "EroBabe — watch premium 18+ adult videos online. Trending videos, popular categories, new releases and editor's picks streamed in a fast, cinematic player. Adults only.",
+      "Stream free 18+ adult videos in HD on EroBabe. Daily updates across trending, popular and new releases — fast, mobile-friendly playback with no sign-up required.",
+    keywords: ["adult videos", "18+ videos", "free porn", "HD adult clips", "trending videos", "EroBabe"],
     canonical: `${siteOrigin()}/`,
-    schema: websiteSchema(siteOrigin()),
-  });
+    schema: schemaGraph(
+      siteOrigin(),
+      collectionSchema(
+        siteOrigin(),
+        "/",
+        "EroBabe — Free 18+ Adult Videos",
+        "Trending, popular and newly released adult videos streamed in HD.",
+        trendingVideos.slice(0, 10).map((v) => ({ name: v.title, url: `${siteOrigin()}/video/${v.id}` }))
+      )
+    ),
+  }));
   return (
     <div className="mx-auto max-w-[1600px] space-y-10 px-4 pt-4 md:space-y-14 md:px-8 md:pt-6">
       {publicSettings.heroEnabled && heroVideos.length > 0 && <Hero videos={heroVideos} />}

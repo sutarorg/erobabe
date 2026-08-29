@@ -20,9 +20,11 @@ export default function Library({ initial = "liked" }: { initial?: Tab }) {
   const saved = useSaved();
   const [tab, setTab] = useState<Tab>(initial);
 
+  // Personal, viewer-specific pages — never indexed.
   useSEO({
     title: tab === "liked" ? "Liked Videos — EroBabe" : "Watch Later — EroBabe",
-    robots: "noindex, follow",
+    description: "Your personal video library on EroBabe — private to this browser.",
+    robots: "noindex, nofollow",
   });
 
   // Newest additions first — the store appends, so reverse for recency.

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { CalendarDays, Clock, Compass, Eye, Flame, LayoutGrid, TrendingUp } from "lucide-react";
 import { CATEGORIES, VIDEOS, trendingVideos, risingVideos, newVideos, editorsPicks, categoryCount } from "@/data/videos";
 import { CategoryCard, FilterChips, RankList, SectionHeader, VideoGrid, type ChipOption } from "@/components/Sections";
-import { useSEO } from "@/lib/seo";
+import { breadcrumbSchema, collectionSchema, schemaGraph, siteOrigin, useSEO, withOverride } from "@/lib/seo";
 
 const CHIPS: ChipOption[] = [
   { key: "all", label: "All", icon: LayoutGrid },
@@ -14,11 +14,26 @@ const CHIPS: ChipOption[] = [
 ];
 
 export default function Explore() {
-  useSEO({
-    title: "Explore 18+ Adult Videos — EroBabe",
+  useSEO(withOverride("/explore", {
+    title: "Explore Free Adult Videos — Browse All 18+ Categories | EroBabe",
     description:
-      "Browse the full EroBabe catalog — filter trending videos, new releases, popular categories, most-viewed content and editor's picks in one place.",
-  });
+      "Browse the full EroBabe catalog: trending 18+ videos, fresh releases, popular categories and editor's picks — all free to stream in HD with no sign-up.",
+    keywords: ["browse adult videos", "explore 18+ clips", "free adult catalog", "EroBabe"],
+    canonical: `${siteOrigin()}/explore`,
+    schema: schemaGraph(
+      siteOrigin(),
+      collectionSchema(
+        siteOrigin(),
+        "/explore",
+        "Explore Adult Videos — EroBabe",
+        "Browse the full EroBabe video catalog by trend, popularity and recency."
+      ),
+      breadcrumbSchema(siteOrigin(), [
+        { name: "Home", path: "/" },
+        { name: "Explore", path: "/explore" },
+      ])
+    ),
+  }));
   const [filter, setFilter] = useState("all");
 
   const videos = useMemo(() => {

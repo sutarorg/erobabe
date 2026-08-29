@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Clock, Eye, Flame, Play, TrendingUp } from "lucide-react";
 import { trendingVideos, risingVideos, BROWSE_CATEGORIES, categoryCount, type Video } from "@/data/videos";
 import { CategoryCard, RankList, SectionHeader, VideoGrid } from "@/components/Sections";
-import { useSEO } from "@/lib/seo";
+import { breadcrumbSchema, collectionSchema, schemaGraph, siteOrigin, useSEO, withOverride } from "@/lib/seo";
 import { cn } from "@/lib/format";
 
 function RankCard({ video, rank, size = "md" }: { video: Video; rank: number; size?: "lg" | "md" }) {
@@ -57,11 +57,27 @@ function RankCard({ video, rank, size = "md" }: { video: Video; rank: number; si
 }
 
 export default function Trending() {
-  useSEO({
-    title: "Trending 18+ Videos — EroBabe",
+  useSEO(withOverride("/trending", {
+    title: "Trending Adult Videos — Today's Hottest 18+ Clips | EroBabe",
     description:
-      "The hottest trending adult videos on EroBabe this week — the #1 chart, rising videos and popular categories, updated daily.",
-  });
+      "See what's trending on EroBabe right now — the #1 hottest 18+ videos, the weekly leaderboard and the fastest-rising clips, updated daily.",
+    keywords: ["trending adult videos", "hot 18+ clips", "most watched", "EroBabe trending"],
+    canonical: `${siteOrigin()}/trending`,
+    schema: schemaGraph(
+      siteOrigin(),
+      collectionSchema(
+        siteOrigin(),
+        "/trending",
+        "Trending Adult Videos — EroBabe",
+        "The most-watched adult videos on EroBabe this week.",
+        trendingVideos.slice(0, 8).map((v) => ({ name: v.title, url: `${siteOrigin()}/video/${v.id}` }))
+      ),
+      breadcrumbSchema(siteOrigin(), [
+        { name: "Home", path: "/" },
+        { name: "Trending", path: "/trending" },
+      ])
+    ),
+  }));
   const list = trendingVideos;
   const top = list.slice(0, 3);
 

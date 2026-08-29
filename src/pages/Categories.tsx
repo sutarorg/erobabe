@@ -1,14 +1,30 @@
 import { LayoutGrid } from "lucide-react";
 import { CATEGORIES, categoryCount, TOTAL_VIDEOS } from "@/data/videos";
 import { CategoryCard } from "@/components/Sections";
-import { useSEO } from "@/lib/seo";
+import { breadcrumbSchema, collectionSchema, schemaGraph, siteOrigin, useSEO, withOverride } from "@/lib/seo";
 
 export default function Categories() {
-  useSEO({
-    title: "Adult Video Categories — EroBabe",
+  useSEO(withOverride("/categories", {
+    title: "All Adult Video Categories — Browse 18+ Genres | EroBabe",
     description:
-      "Browse every 18+ video category on EroBabe — studio productions, premium, couples, solo, amateur, compilations and curated collections.",
-  });
+      "Browse every adult video category on EroBabe: hardcore, lesbian, threesome, massage, creampie and more. Free HD 18+ clips in every genre, updated daily.",
+    keywords: ["adult video categories", "18+ genres", "porn categories", "EroBabe categories"],
+    canonical: `${siteOrigin()}/categories`,
+    schema: schemaGraph(
+      siteOrigin(),
+      collectionSchema(
+        siteOrigin(),
+        "/categories",
+        "Adult Video Categories — EroBabe",
+        "Every adult video category available on EroBabe.",
+        CATEGORIES.map((c) => ({ name: c.name, url: `${siteOrigin()}/category/${c.slug}` }))
+      ),
+      breadcrumbSchema(siteOrigin(), [
+        { name: "Home", path: "/" },
+        { name: "Categories", path: "/categories" },
+      ])
+    ),
+  }));
   return (
     <div className="mx-auto max-w-[1600px] px-4 pt-4 md:px-8 md:pt-6">
       <header className="mb-6 animate-fade-up md:mb-8">

@@ -5,6 +5,7 @@ import {
 } from "./r2.mjs";
 import { categoryIndex, invalidateCategoryCache, shapeVideo } from "./public-api.mjs";
 import { publishDueVideos } from "./scheduler.mjs";
+import { invalidateSitemapCache } from "./sitemap.mjs";
 import {
   json, readJson, HttpError, badRequest, unauthorized, notFound,
   parseCookies, serializeCookie, createSessionToken, verifySessionToken,
@@ -1156,7 +1157,125 @@ async function getSettings() {
   return json({ settings: data?.[0]?.value ?? {} });
 }
 
-async function patchSettings(req) {
+/* ── Per-page SEO overrides ── */
+
+const SEO_FIELDS = [
+  ["seo_title", 200],
+  ["meta_description", 400],
+  ["keywords", 400],
+  ["canonical_url", 400],
+  ["robots", 40],
+  ["og_title", 200],
+  ["og_description", 400],
+  ["og_image", 400],
+  ["json_ld", 20000],
+];
+
+/** GET /settings/seo — every override, plus the pages that exist. */
+async function listSeoPages() {
+  const { data } = await dbApi
+    .select("seo_pages", "order=updated_at.desc&limit=1000")
+    .catch(() => ({ data: [] }));
+
+  // Offer the built-in pages so they can be edited before any override exists.
+  const { data: cats } = await dbApi.select("categories", "order=sort.asc&select=slug,name").catch(() => ({ data: [] }));
+  const { data: vids } = await dbApi
+    .select("videos", "status=eq.published&select=id,slug,title&order=published_at.desc&limit=500")
+    .catch(() => ({ data: [] }));
+
+  const overrides = new Map((data ?? []).map((r) => [r.path_key, r]));
+
+  const pages = [
+    {
+      path_key: "home",
+      label: "Homepage",
+      path: "/",
+      overridden: overrides.has("home"),
+      ...(overrides.get("home") ?? {}),
+    },
+    ...["trending", "popular", "new", "explore", "categories"].map((p) => ({
+      path_key: `page:${p}`,
+      label: p.charAt(0).toUpperCase() + p.slice(1),
+      path: `/${p}`,
+      overridden: overrides.has(`page:${p}`),
+      ...(overrides.get(`page:${p}`) ?? {}),
+    })),
+    ...(cats ?? []).map((c) => ({
+      path_key: `category:${c.slug}`,
+      label: `Category — ${c.name}`,
+      path: `/category/${c.slug}`,
+      overridden: overrides.has(`category:${c.slug}`),
+      ...(overrides.get(`category:${c.slug}`) ?? {}),
+    })),
+    ...(vids ?? []).map((v) => ({
+      path_key: `video:${v.slug || v.id}`,
+      label: `Video — ${v.title}`,
+      path: `/video/${v.slug || v.id}`,
+      overridden: overrides.has(`video:${v.slug || v.id}`),
+      ...(overrides.get(`video:${v.slug || v.id}`) ?? {}),
+    })),
+  ];
+
+  return json({
+    pages,
+    available: true,
+    // Videos without an override still resolve by uuid, so report both keys.
+    videoAliases: (vids ?? []).map((v) => ({ slug: v.slug, id: v.id })),
+  });
+}
+
+/** PATCH /settings/seo — upsert one page's override. */
+async function saveSeoPage(req) {
+  const admin = requireAdmin(req);
+  const body = await readJson(req);
+
+  const pathKey = cleanText(body.path_key, 200);
+  if (!pathKey) throw badRequest("path_key is required");
+
+  const row = { path_key: pathKey, updated_at: nowIso() };
+  if ("label" in body) row.label = cleanText(body.label, 160) || null;
+  for (const [field, max] of SEO_FIELDS) {
+    if (field in body) row[field] = cleanText(body[field], max) || null;
+  }
+  if ("in_sitemap" in body) row.in_sitemap = body.in_sitemap !== false;
+  if (row.robots && !/^(no)?index,\s*(no)?follow$/i.test(row.robots)) {
+    throw badRequest('robots must look like "index,follow"');
+  }
+  if (row.json_ld) {
+    try {
+      JSON.parse(row.json_ld);
+    } catch {
+      throw badRequest("JSON-LD is not valid JSON");
+    }
+  }
+
+  const existing = await dbApi.one("seo_pages", `path_key=eq.${encodeURIComponent(pathKey)}`);
+  if (existing) {
+    await dbApi.update("seo_pages", `path_key=eq.${encodeURIComponent(pathKey)}`, row);
+  } else {
+    await dbApi.insert("seo_pages", row);
+  }
+  invalidateSitemapCache();
+
+  await logActivity(admin.sub, "seo.update", "page", pathKey, {
+    title: row.seo_title,
+    in_sitemap: row.in_sitemap,
+  });
+  return json({ ok: true, page: { ...existing, ...row } });
+}
+
+/** DELETE /settings/seo — clear an override so defaults resume. */
+async function deleteSeoPage(req) {
+  const admin = requireAdmin(req);
+  const body = await readJson(req);
+  const pathKey = cleanText(body.path_key, 200);
+  if (!pathKey) throw badRequest("path_key is required");
+
+  await dbApi.remove("seo_pages", `path_key=eq.${encodeURIComponent(pathKey)}`);
+  invalidateSitemapCache();
+  await logActivity(admin.sub, "seo.delete", "page", pathKey, {});
+  return json({ ok: true });
+}
   const admin = requireAdmin(req);
   const body = await readJson(req);
   const value = {};
@@ -1283,6 +1402,9 @@ export async function handleAdmin(req, url, path) {
   if (first === "settings") {
     if (m === "GET") return getSettings();
     if (m === "PATCH") return patchSettings(req);
+    if (second === "seo" && m === "GET") return listSeoPages();
+    if (second === "seo" && m === "PATCH") return saveSeoPage(req);
+    if (second === "seo" && m === "DELETE") return deleteSeoPage(req);
   }
 
   if (first === "activity" && m === "GET") return listActivity(url);

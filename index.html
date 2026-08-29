@@ -3,8 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>EroBabe — Watch 18+ Adult Videos Online | erobabe.com</title>
-    <meta name="description" content="Stream premium 18+ adult videos online on EroBabe — trending categories, cinematic playback, fast private browsing and new releases daily. Adults only." />
+    <title>EroBabe — Watch Free 18+ Adult Videos in HD | Trending Porn Clips</title>
+    <meta name="description" content="Stream free 18+ adult videos in HD on EroBabe. Daily updates across trending, popular and new releases — fast, mobile-friendly playback with no sign-up required." />
+    <meta name="keywords" content="adult videos, 18+ videos, free porn, HD adult clips, trending videos" />
     <meta name="rating" content="adult" />
     <meta name="RATING" content="RTA-5042-1996-1400-1577-RTA" />
     <meta name="robots" content="index,follow,max-image-preview:large,max-video-preview:-1,max-snippet:-1" />
@@ -33,17 +34,30 @@
     <script type="application/ld+json" id="eb-schema">
       {
         "@context": "https://schema.org",
-        "@type": "WebSite",
-        "name": "EroBabe",
-        "url": "https://erobabe.com/",
-        "potentialAction": {
-          "@type": "SearchAction",
-          "target": {
-            "@type": "EntryPoint",
-            "urlTemplate": "https://erobabe.com/search?q={search_term_string}"
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://erobabe.com/#organization",
+            "name": "EroBabe",
+            "url": "https://erobabe.com/",
+            "logo": { "@type": "ImageObject", "url": "https://erobabe.com/favicon.svg" }
           },
-          "query-input": "required name=search_term_string"
-        }
+          {
+            "@type": "WebSite",
+            "@id": "https://erobabe.com/#website",
+            "name": "EroBabe",
+            "url": "https://erobabe.com/",
+            "publisher": { "@id": "https://erobabe.com/#organization" },
+            "potentialAction": {
+              "@type": "SearchAction",
+              "target": {
+                "@type": "EntryPoint",
+                "urlTemplate": "https://erobabe.com/search?q={search_term_string}"
+              },
+              "query-input": "required name=search_term_string"
+            }
+          }
+        ]
       }
     </script>
 

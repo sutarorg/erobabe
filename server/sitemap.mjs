@@ -1,4 +1,4 @@
-import { dbApi, dbConfigMissing, hasSlugColumn } from "./db.mjs";
+import { dbApi, dbConfigMissing, hasSlugColumn, hasColumn } from "./db.mjs";
 import { ENV } from "./util.mjs";
 
 /* ──────────────────────────────────────────────────────────────
@@ -15,6 +15,9 @@ import { ENV } from "./util.mjs";
  * ────────────────────────────────────────────────────────────── */
 
 const CANONICAL_HOST = "https://erobabe.com";
+
+/** No persistent cache — the sitemap reflects the live catalog per request. */
+let sitemapCache = { at: 0, data: null };
 
 const esc = (s) =>
   String(s)
@@ -39,7 +42,7 @@ const STATIC_PAGES = [
   { path: "/trending", changefreq: "hourly", priority: "0.9" },
   { path: "/new", changefreq: "hourly", priority: "0.8" },
   { path: "/popular", changefreq: "daily", priority: "0.8" },
-  { path: "/explore", changefreq: "daily", priority: "0.8" },
+  { path: "/explore", changefreq: "daily", priority: "0.7" },
   { path: "/categories", changefreq: "weekly", priority: "0.7" },
   { path: "/legal/about", changefreq: "monthly", priority: "0.3" },
   { path: "/legal/privacy", changefreq: "monthly", priority: "0.3" },
@@ -73,9 +76,31 @@ function urlEntry({ loc, lastmod, changefreq = "daily", priority = "0.5", video 
   );
 }
 
+/** SEO edits invalidate the cached sitemap so it regenerates on demand. */
+export function invalidateSitemapCache() {
+  sitemapCache = { at: 0, data: null };
+}
+
 export async function handleSitemap() {
   const base = siteBase();
   const entries = [];
+
+  // Admin SEO overrides can exclude a page from the sitemap entirely.
+  const excluded = new Set();
+  if (!(await hasColumn("seo_pages", "path_key")).valueOf()) {
+    /* table absent — nothing to exclude */
+  } else {
+    try {
+      const { data } = await dbApi.select(
+        "seo_pages",
+        "in_sitemap=eq.false&select=path_key&limit=1000"
+      );
+      for (const row of data ?? []) excluded.add(row.path_key);
+    } catch {
+      /* migration 0008 not applied yet */
+    }
+  }
+  const isExcluded = (key, path) => excluded.has(key) || excluded.has(`page:${path.slice(1)}`);
 
   let published = [];
   let categories = [];
@@ -107,6 +132,7 @@ export async function handleSitemap() {
 
   // 1. Static, indexable pages (homepage first, always on erobabe.com).
   for (const page of STATIC_PAGES) {
+    if (isExcluded("home", page.path) || isExcluded(`page:${page.path.slice(1)}`, page.path)) continue;
     entries.push(
       urlEntry({
         loc: `${base}${page.path}`,
@@ -119,6 +145,7 @@ export async function handleSitemap() {
 
   // 2. Category landing pages.
   for (const c of categories) {
+    if (excluded.has(`category:${c.slug}`)) continue;
     entries.push({
       loc: `${base}/category/${c.slug}`,
       changefreq: "daily",
@@ -128,6 +155,7 @@ export async function handleSitemap() {
 
   // 3. Every published video page, addressed by its canonical SEO slug.
   for (const v of published) {
+    if (excluded.has(`video:${v.slug || v.id}`) || excluded.has(`video:${v.id}`)) continue;
     entries.push({
       loc: `${base}/video/${v.slug || v.id}`,
       lastmod: day(v.updated_at || v.published_at),
@@ -174,7 +202,7 @@ export function handleRobots() {
   const body =
     [
       "# EroBabe - 18+ adult video website",
-      "# Crawling is allowed; private and parameterized areas are excluded.",
+      "# Crawling is allowed; private, admin and low-value pages are excluded.",
       "",
       "User-agent: *",
       "Allow: /",
@@ -182,21 +210,31 @@ export function handleRobots() {
       "Disallow: /admin/",
       "Disallow: /api/",
       "Disallow: /search",
+      "Disallow: /history",
+      "Disallow: /liked",
+      "Disallow: /watch-later",
+      "Disallow: /*?q=",
       "",
       "User-agent: Googlebot",
       "Allow: /",
       "Disallow: /admin",
       "Disallow: /api/",
       "Disallow: /search",
+      "Disallow: /history",
+      "Disallow: /liked",
+      "Disallow: /watch-later",
+      "Disallow: /*?q=",
       "",
       "User-agent: Bingbot",
       "Allow: /",
       "Disallow: /admin",
       "Disallow: /api/",
       "Disallow: /search",
+      "Disallow: /history",
+      "Disallow: /liked",
+      "Disallow: /watch-later",
       "",
       `Sitemap: ${base}/sitemap.xml`,
-      `Host: ${base.replace(/^https?:\/\//, "")}`,
     ].join("\n") + "\n";
 
   return new Response(body, {

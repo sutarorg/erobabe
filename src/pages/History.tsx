@@ -18,7 +18,12 @@ function watchedAgo(at: number): string {
 }
 
 export default function History() {
-  useSEO({ title: "Watch History — EroBabe", robots: "noindex, follow" });
+  // Personal, viewer-specific page — never indexed.
+  useSEO({
+    title: "Watch History — EroBabe",
+    description: "Your recent watches on EroBabe — private to this browser.",
+    robots: "noindex, nofollow",
+  });
   const { list, remove, clear } = useHistory();
   const [confirming, setConfirming] = useState(false);
 

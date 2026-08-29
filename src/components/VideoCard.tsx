@@ -82,7 +82,7 @@ export function VideoCard({ video, priority = false, className }: { video: Video
         ) : (
           <img
             src={video.thumbnail}
-            alt={`${video.title} thumbnail`}
+            alt={`${video.title} — free 18+ video preview`}
             loading={priority ? "eager" : "lazy"}
             decoding="async"
             fetchPriority={priority ? "high" : undefined}

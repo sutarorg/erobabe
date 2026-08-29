@@ -97,6 +97,43 @@ async function siteSettings() {
   return data?.[0]?.value ?? {};
 }
 
+/**
+ * Load admin SEO overrides. Returns a lookup keyed by the public path
+ * (e.g. "/", "/category/hardcore", "/video/{slug}") so the frontend can
+ * resolve an override for whatever page it is rendering.
+ */
+async function seoOverrides() {
+  try {
+    if (!(await hasColumn("seo_pages", "path_key"))) return {};
+    const { data } = await dbApi.select("seo_pages", "select=path_key,seo_title,meta_description,keywords,canonical_url,robots,og_title,og_description,og_image,json_ld,in_sitemap&limit=1000");
+    const out = {};
+    for (const row of data ?? []) {
+      const key = row.path_key;
+      let path;
+      if (key === "home") path = "/";
+      else if (key.startsWith("page:")) path = `/${key.slice(5)}`;
+      else if (key.startsWith("category:")) path = `/category/${key.slice(9)}`;
+      else if (key.startsWith("video:")) path = `/video/${key.slice(6)}`;
+      else continue;
+      out[path] = {
+        seoTitle: row.seo_title ?? null,
+        metaDescription: row.meta_description ?? null,
+        keywords: row.keywords ?? null,
+        canonicalUrl: row.canonical_url ?? null,
+        robots: row.robots ?? null,
+        ogTitle: row.og_title ?? null,
+        ogDescription: row.og_description ?? null,
+        ogImage: row.og_image ?? null,
+        jsonLd: row.json_ld ?? null,
+        inSitemap: row.in_sitemap !== false,
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 export async function handlePublic(req, url, path) {
   const seg = path.replace(/^\/api\/public\/?/, "").split("/").filter(Boolean);
   const first = seg[0] ?? "";
@@ -126,6 +163,8 @@ export async function handlePublic(req, url, path) {
       heroEnabled: s.hero_enabled !== false,
       featuredVideoId: s.featured_video_id ?? null,
       ageText: s.age_text ?? null,
+      // Per-page SEO overrides, keyed by public path.
+      seo: await seoOverrides(),
     });
   }
 

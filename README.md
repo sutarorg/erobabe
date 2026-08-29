@@ -223,6 +223,83 @@ options. To add a glyph, import it in the registry and add an entry to `CATEGORY
 - **Analytics** — 7/14/30-day series, lifetime totals, storage monitoring, top-performers, full audit log
 - **Settings** — site title, announcement, homepage hero toggle, pinned featured video, age-gate copy, infrastructure status
 
+## SEO architecture
+
+Every indexable page ships complete, unique metadata. Coverage:
+
+| Page | Title pattern | Schema | Indexable |
+| --- | --- | --- | --- |
+| `/` | `EroBabe — Watch Free 18+ Adult Videos in HD…` | WebSite + Organization + CollectionPage | ✅ |
+| `/video/{slug}` | `{title} - Free 18+ Video \| EroBabe` | VideoObject + WebPage + BreadcrumbList | ✅ |
+| `/category/{slug}` | `Free {name} Videos in HD — Watch {n} 18+ Clips…` | CollectionPage + BreadcrumbList | ✅ |
+| `/trending` `/popular` `/new` `/explore` | Intent-focused per page | CollectionPage + BreadcrumbList | ✅ |
+| `/categories` | `All Adult Video Categories…` | CollectionPage + BreadcrumbList | ✅ |
+| `/legal/{topic}` | `{topic} — EroBabe` | WebPage | ✅ (low priority) |
+| `/search` `/history` `/liked` `/watch-later` | — | none | ❌ noindex |
+| `/admin` | — | none | ❌ robots + noindex |
+
+**Structured data.** All schema is emitted as one connected `@graph` so entities cross-reference by
+`@id` — `Organization` → `WebSite` → `CollectionPage`/`WebPage` → `VideoObject` — which is how Google
+prefers linked data. Video pages carry the full `VideoObject` (thumbnail, duration, uploadDate,
+contentUrl, embedUrl, genre, keywords, view count, `isFamilyFriendly: false`) plus a `WebPage`
+wrapper and a breadcrumb trail (Home → Category → Video) that helps generate sitelinks.
+
+**Titles follow search intent.** Each targets the phrasing people actually search —
+`Free {category} Videos in HD`, `{title} - Free 18+ Video`, `Trending Adult Videos — Today's Hottest`
+— and stays under ~60 characters where possible so it doesn't truncate in SERPs. Descriptions stay
+under ~160 characters, read naturally, and never repeat the same phrase twice.
+
+**Canonical rules.** Every indexable page emits a self-referencing canonical. Parameterized search
+(`?q=`) is `noindex, follow` so crawlers still reach linked videos without indexing thin result
+pages. `/watch/{slug}` 301-redirects to `/video/{slug}` so no duplicate URL competes with the
+canonical one.
+
+**Server-rendered video pages.** Social crawlers don't execute JavaScript, so `/video/{slug}` returns
+a fully-tagged HTML document from the serverless function (title, description, thumbnail, OG, Twitter,
+JSON-LD). This is what makes WhatsApp previews and Google indexing actually work.
+
+**Sitemap.** Generated per-request from the live published catalog with the Google video extension
+(`video:thumbnail_loc`, `video:duration`, `video:publication_date`, `video:tag`, family_friendly=no).
+Admin, search, history and personal pages are excluded.
+
+**Robots.** Blocks `/admin`, `/api/`, `/search`, `/history`, `/liked`, `/watch-later` and `?q=`
+parameters for all major crawlers, and references the sitemap.
+
+## SEO Settings (Admin CMS)
+
+**Admin → SEO Settings** lets you override SEO for any page — homepage, every category, every
+individual video, plus the listing pages.
+
+For each page you can set: **SEO Title**, **Meta Description**, **SEO Tags/Keywords**,
+**Canonical URL**, **Robots Directive** (index/noindex × follow/nofollow), **Open Graph Title**,
+**OG Description**, **OG Image** (with a live preview), **JSON-LD**, and **Include in Sitemap**.
+
+**Everything is opt-in.** Every field is nullable — leave one empty and the page keeps using the
+smart default generated from its real content. So you can tweak just a title without losing the
+auto-generated description, schema or canonical. A dot marks pages with an override, and
+**Reset to default** clears it entirely.
+
+The UI shows live character counts against the 60/160-character SERP guidelines, and JSON-LD is
+validated as JSON before saving — invalid JSON is rejected.
+
+**How it applies.** Overrides are stored in the `seo_pages` table and served to the browser through
+`/api/public/settings`, then merged into each page's metadata by `withOverride()` in
+`src/lib/seo.ts`. Extra JSON-LD is *appended* to the page's existing schema graph rather than
+replacing it, so a custom `FAQPage` block adds to the `VideoObject` instead of destroying it.
+
+Setting **Include in Sitemap = No** removes the page from `sitemap.xml` immediately and applies
+`noindex` — the sitemap cache is invalidated on save.
+
+**Run `supabase/migrations/0008_seo_pages.sql`** to create the table. Without it the CMS shows a
+clear "not enabled" state and the site keeps using its generated SEO, so nothing breaks.
+
+### After deploying
+
+1. Submit `https://erobabe.com/sitemap.xml` in [Google Search Console](https://search.google.com/search-console)
+2. Request indexing for `/`, `/trending` and a few `/video/{slug}` URLs
+3. Validate a video URL with the [Rich Results Test](https://search.google.com/test/rich-results)
+4. Set `SITE_URL=https://erobabe.com` so every canonical and sitemap entry uses the production domain
+
 ## Self-learning recommendations
 
 Every rail — homepage discovery, Related, Recommended, Up Next — is ranked by one adaptive model

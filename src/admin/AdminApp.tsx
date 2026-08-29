@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, NavLink, Outlet } from "react-router-dom";
 import {
   BarChart3, Film, Flame, LayoutGrid, LogOut, Menu, Settings as SettingsIcon,
-  ShieldCheck, UploadCloud, X, LayoutDashboard, type LucideIcon,
+  ShieldCheck, UploadCloud, X, LayoutDashboard, Globe, type LucideIcon,
 } from "lucide-react";
 import { api } from "./api";
 import { Logo } from "@/components/Brand";
@@ -258,6 +258,7 @@ const NAV: { to: string; icon: LucideIcon; label: string; end?: boolean }[] = [
   { to: "/admin/categories", icon: LayoutGrid, label: "Categories & Tags" },
   { to: "/admin/analytics", icon: BarChart3, label: "Analytics" },
   { to: "/admin/security", icon: ShieldCheck, label: "Security" },
+  { to: "/admin/seo", icon: Globe, label: "SEO Settings" },
   { to: "/admin/settings", icon: SettingsIcon, label: "Settings" },
 ];
 
@@ -416,6 +417,7 @@ export default function AdminApp() {
             <Route path="categories" element={<Lazy name="taxonomy" />} />
             <Route path="analytics" element={<Lazy name="analytics" />} />
             <Route path="security" element={<Lazy name="security" />} />
+            <Route path="seo" element={<Lazy name="seoSettings" />} />
             <Route path="settings" element={<Lazy name="settings" />} />
             <Route path="*" element={<Navigate to="/admin" replace />} />
           </Route>
@@ -436,9 +438,10 @@ const Analytics = lazy(() => import("./Analytics"));
 const Settings = lazy(() => import("./Settings"));
 const VideoAnalytics = lazy(() => import("./VideoAnalytics"));
 const Security = lazy(() => import("./Security"));
+const SeoSettings = lazy(() => import("./SeoSettings"));
 
-function Lazy({ name }: { name: "dashboard" | "videos" | "edit" | "upload" | "taxonomy" | "analytics" | "settings" | "videoAnalytics" | "security" }) {
-  const map = { dashboard: Dashboard, videos: VideosList, edit: VideoEdit, upload: UploadWizard, taxonomy: Taxonomy, analytics: Analytics, settings: Settings, videoAnalytics: VideoAnalytics, security: Security };
+function Lazy({ name }: { name: "dashboard" | "videos" | "edit" | "upload" | "taxonomy" | "analytics" | "settings" | "videoAnalytics" | "security" | "seoSettings" }) {
+  const map = { dashboard: Dashboard, videos: VideosList, edit: VideoEdit, upload: UploadWizard, taxonomy: Taxonomy, analytics: Analytics, settings: Settings, videoAnalytics: VideoAnalytics, security: Security, seoSettings: SeoSettings };
   const C = map[name];
   return (
     <Suspense fallback={<div className="flex items-center gap-3 py-20 text-fog-500"><span className="size-5 animate-spin rounded-full border-2 border-fog-600 border-t-brand-400" /><span className="text-sm">Loading…</span></div>}>

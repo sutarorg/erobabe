@@ -266,6 +266,12 @@ export const api = {
 
   activity: (limit = 50) => req<{ activity: ActivityItem[] }>(`/activity?limit=${limit}`),
 
+  seoPages: () => req<SeoPagesResponse>("/settings/seo"),
+  saveSeoPage: (page: SeoPageInput) =>
+    req<{ ok: boolean; page: SeoPageRecord }>("/settings/seo", { method: "PATCH", body: page }),
+  deleteSeoPage: (pathKey: string) =>
+    req<{ ok: boolean }>("/settings/seo", { method: "DELETE", body: { path_key: pathKey } }),
+
   traffic: (days: number) => req<TrafficResponse>(`/analytics/traffic?days=${days}`),
   videoAnalytics: (id: string, days: number) =>
     req<VideoAnalyticsResponse>(`/videos/${id}/analytics?days=${days}`),
@@ -287,6 +293,46 @@ export interface ScheduledVideo {
   thumbnail_url: string | null;
   scheduled_publish_at: string;
   bulk_batch: string | null;
+}
+
+/* ── Per-page SEO overrides ── */
+
+export interface SeoPageRecord {
+  path_key: string;
+  label: string | null;
+  path?: string;
+  overridden?: boolean;
+  seo_title: string | null;
+  meta_description: string | null;
+  keywords: string | null;
+  canonical_url: string | null;
+  robots: string | null;
+  og_title: string | null;
+  og_description: string | null;
+  og_image: string | null;
+  json_ld: string | null;
+  in_sitemap: boolean;
+}
+
+export interface SeoPageInput {
+  path_key: string;
+  label?: string | null;
+  seo_title?: string | null;
+  meta_description?: string | null;
+  keywords?: string | null;
+  canonical_url?: string | null;
+  robots?: string | null;
+  og_title?: string | null;
+  og_description?: string | null;
+  og_image?: string | null;
+  json_ld?: string | null;
+  in_sitemap?: boolean;
+}
+
+export interface SeoPagesResponse {
+  available: boolean;
+  pages: SeoPageRecord[];
+  videoAliases: { slug: string | null; id: string }[];
 }
 
 export interface Share {

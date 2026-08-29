@@ -19,12 +19,14 @@ export default function SearchPage() {
   const [sort, setSort] = useState("relevance");
   const { list: recent, clear: clearRecent } = useRecentSearches();
 
+  // Search results are parameterized and thin — noindex avoids duplicate
+  // content while "follow" still lets crawlers reach the videos linked here.
   useSEO({
     title: q ? `"${q}" — Search — EroBabe` : "Search — EroBabe",
     description: q
       ? `Search results for "${q}" on EroBabe — 18+ adult videos, categories and tags.`
       : "Search the EroBabe 18+ adult video catalog by title, category, tag or keyword.",
-    robots: "noindex, follow",
+    robots: "noindex, follow, max-image-preview:large",
   });
   useEffect(() => setSort("relevance"), [q]);
 
