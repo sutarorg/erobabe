@@ -40,8 +40,7 @@ export function AgeGate({ onEnter }: { onEnter: () => void }) {
             <>
               EroBabe is intended for adults only. You must be{" "}
               <span className="font-semibold text-white">18 years or older</span> — or the age of majority in
-              your jurisdiction — to enter. All content here is fictional demo material for interface
-              demonstration.
+              your jurisdiction — to enter.
             </>
           )}
         </p>

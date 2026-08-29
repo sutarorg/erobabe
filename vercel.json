@@ -62,7 +62,7 @@
       "destination": "/api/index"
     },
     {
-      "source": "/((?!api/|assets/|favicon|site.webmanifest).*)",
+      "source": "/((?!api/|assets/|favicon|favicon-|apple-touch-icon|site\\.webmanifest|robots\\.txt|sitemap\\.xml).*)",
       "destination": "/index.html"
     }
   ]
