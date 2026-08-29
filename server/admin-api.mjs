@@ -1276,6 +1276,9 @@ async function deleteSeoPage(req) {
   await logActivity(admin.sub, "seo.delete", "page", pathKey, {});
   return json({ ok: true });
 }
+
+/** PATCH /settings — site-wide settings. */
+async function patchSettings(req) {
   const admin = requireAdmin(req);
   const body = await readJson(req);
   const value = {};
@@ -1400,11 +1403,12 @@ export async function handleAdmin(req, url, path) {
   }
 
   if (first === "settings") {
-    if (m === "GET") return getSettings();
-    if (m === "PATCH") return patchSettings(req);
+    // Match the more specific SEO route before the parent /settings route.
     if (second === "seo" && m === "GET") return listSeoPages();
     if (second === "seo" && m === "PATCH") return saveSeoPage(req);
     if (second === "seo" && m === "DELETE") return deleteSeoPage(req);
+    if (!second && m === "GET") return getSettings();
+    if (!second && m === "PATCH") return patchSettings(req);
   }
 
   if (first === "activity" && m === "GET") return listActivity(url);

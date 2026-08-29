@@ -115,11 +115,9 @@ export async function bootstrapCatalog(): Promise<void> {
     // Decision to go dynamic is based solely on whether the catalog itself
     // serves — never gated on the health probe, so a broken health endpoint
     // can never fall the whole site back to the demo catalog.
-    const [vRes, cRes, sRes] = await Promise.all([
-      fetch("/api/public/videos?limit=300&sort=new"),
-      fetch("/api/public/categories"),
-      fetch("/api/public/settings"),
-    ]);
+    // Videos are the only required response. Categories/settings are
+    // optional enhancements and must never make the catalog disappear.
+    const vRes = await fetch("/api/public/videos?limit=300&sort=new");
     // Stay in demo mode only when the catalog itself can't be served.
     if (!vRes.ok) return;
 
@@ -128,6 +126,15 @@ export async function bootstrapCatalog(): Promise<void> {
 
     const mapped = vData.videos.map(mapRemote);
     installCatalog(mapped);
+
+    // Fetch optional data independently. A broken SEO/category migration
+    // cannot push the public site back to the built-in demo catalog.
+    const [cResult, sResult] = await Promise.allSettled([
+      fetch("/api/public/categories"),
+      fetch("/api/public/settings"),
+    ]);
+    const cRes = cResult.status === "fulfilled" ? cResult.value : null;
+    const sRes = sResult.status === "fulfilled" ? sResult.value : null;
 
     // Discovery line-ups come from the analytics ranking engine.
     try {
@@ -142,7 +149,7 @@ export async function bootstrapCatalog(): Promise<void> {
       /* Local ranking already installed as the fallback. */
     }
 
-    if (cRes.ok) {
+    if (cRes?.ok) {
       const c = (await cRes.json()) as {
         categories: {
           slug: string; name: string; blurb: string; gradient: string;
@@ -157,7 +164,7 @@ export async function bootstrapCatalog(): Promise<void> {
       );
     }
 
-    if (sRes.ok) {
+    if (sRes?.ok) {
       const s = (await sRes.json()) as {
         siteTitle?: string | null;
         announcement?: string | null;

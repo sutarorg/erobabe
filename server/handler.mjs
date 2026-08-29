@@ -1,5 +1,4 @@
 import { handlePublic } from "./public-api.mjs";
-import { handleAdmin } from "./admin-api.mjs";
 import { handleSitemap, handleRobots } from "./sitemap.mjs";
 import { handleOEmbed, handleVideoPage } from "./video-page.mjs";
 import { handleCronPublish } from "./scheduler.mjs";
@@ -39,7 +38,12 @@ export async function handle(request) {
       return await handleOEmbed(request);
     }
     if (path.startsWith("/api/public")) return await handlePublic(request, url, path);
-    if (path.startsWith("/api/admin")) return await handleAdmin(request, url, path);
+    if (path.startsWith("/api/admin")) {
+      // Keep admin code isolated: an admin-only module regression must never
+      // take down /api/public/videos and force the public site into demo mode.
+      const { handleAdmin } = await import("./admin-api.mjs");
+      return await handleAdmin(request, url, path);
+    }
     return json({ error: "Not found", code: "not_found" }, { status: 404 });
   } catch (e) {
     const err = toError(e);
