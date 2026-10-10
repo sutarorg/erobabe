@@ -1,3 +1,4 @@
+"use client";
 import { Menu, Search, User, X } from "lucide-react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { LOGO_URL } from "../data/content";

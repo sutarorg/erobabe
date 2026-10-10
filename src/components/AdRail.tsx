@@ -1,10 +1,21 @@
+"use client";
 import AdSlot from "./AdSlot";
+
+interface ActiveCampaign {
+  slot_id: number;
+  creative?: {
+    image_url?: string;
+    destination_url?: string;
+    title?: string;
+  };
+}
 
 interface AdRailProps {
   side: "left" | "right";
   start: number;
   count?: number;
   onAdvertise?: () => void;
+  activeCampaigns?: ActiveCampaign[];
 }
 
 /**
@@ -12,8 +23,14 @@ interface AdRailProps {
  * rendered outside the scrollable center column, and hidden below the
  * desktop three-column breakpoint (1000px).
  */
-export default function AdRail({ side, start, count = 5, onAdvertise }: AdRailProps) {
+export default function AdRail({ side, start, count = 5, onAdvertise, activeCampaigns = [] }: AdRailProps) {
   const slots = Array.from({ length: count }, (_, i) => start + i);
+
+  const getCreativeForSlot = (slotId: number) => {
+    const campaign = activeCampaigns.find((c) => c.slot_id === slotId);
+    return campaign?.creative || null;
+  };
+
   return (
     <aside
       aria-label={`${side === "left" ? "Left" : "Right"} advertising rail`}
@@ -22,7 +39,7 @@ export default function AdRail({ side, start, count = 5, onAdvertise }: AdRailPr
       }`}
     >
       {slots.map((n) => (
-        <AdSlot key={n} index={n} onAdvertise={onAdvertise} />
+        <AdSlot key={n} index={n} onAdvertise={onAdvertise} creative={getCreativeForSlot(n)} />
       ))}
     </aside>
   );

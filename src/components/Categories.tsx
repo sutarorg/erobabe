@@ -1,13 +1,25 @@
-import { CATEGORIES } from "../data/content";
+"use client";
+import { CATEGORIES as MOCK_CATEGORIES } from "../data/content";
 import { cn } from "../utils/cn";
+import type { LucideIcon } from "lucide-react";
+import { Flame } from "lucide-react";
+
+interface CategoryInput {
+  id: string;
+  label: string;
+  slug?: string;
+  icon?: LucideIcon;
+}
 
 interface CategoriesProps {
   activeCategory: string | null;
-  /** "More" is routed to the /categories page by the parent. */
   onSelect: (label: string) => void;
+  categories?: CategoryInput[];
 }
 
-export default function Categories({ activeCategory, onSelect }: CategoriesProps) {
+export default function Categories({ activeCategory, onSelect, categories }: CategoriesProps) {
+  const list = categories && categories.length > 0 ? categories : MOCK_CATEGORIES;
+
   return (
     <div>
       <div className="flex items-center justify-between">
@@ -15,8 +27,8 @@ export default function Categories({ activeCategory, onSelect }: CategoriesProps
       </div>
 
       <div className="mt-3.5 grid grid-cols-4 gap-2.5 @2xl:grid-cols-8">
-        {CATEGORIES.map((cat) => {
-          const Icon = cat.icon;
+        {list.map((cat) => {
+          const Icon = (cat as any).icon || Flame;
           const active = activeCategory === cat.label;
           return (
             <button

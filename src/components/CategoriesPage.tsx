@@ -1,3 +1,4 @@
+"use client";
 import { ArrowRight } from "lucide-react";
 import { ALL_CATEGORIES } from "../data/content";
 

@@ -1,3 +1,4 @@
+"use client";
 import { VIDEOS, type Video } from "../data/content";
 import VideoCard from "./VideoCard";
 

@@ -1,3 +1,4 @@
+"use client";
 import { Lock, Mail, X } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { LOGO_URL } from "../data/content";

@@ -1,3 +1,4 @@
+"use client";
 import { ArrowLeft, SearchX } from "lucide-react";
 import { ALL_CATEGORIES, type Video } from "../data/content";
 import { cn } from "../utils/cn";

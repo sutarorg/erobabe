@@ -1,29 +1,42 @@
 {
-  "name": "react-vite-tailwind",
+  "name": "erobabe",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "dev": "next dev --port 3000 --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start --port 3000 --hostname 0.0.0.0",
+    "lint": "next lint",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "db:generate": "echo 'Run supabase migrations via CLI or dashboard'"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.45.4",
     "clsx": "2.1.1",
-    "lucide-react": "^1.55.0",
+    "groq-sdk": "^0.15.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.1.6",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "tailwind-merge": "3.4.0"
+    "resend": "^4.0.1",
+    "tailwind-merge": "3.4.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "4.1.17",
+    "@playwright/test": "^1.49.0",
+    "@tailwindcss/postcss": "^4.1.17",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
     "@types/node": "22.19.17",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
-    "@vitejs/plugin-react": "5.1.1",
+    "jsdom": "^25.0.1",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
-    "vite": "7.3.2",
-    "vite-plugin-singlefile": "2.3.0"
+    "vitest": "^3.0.0"
   }
 }
