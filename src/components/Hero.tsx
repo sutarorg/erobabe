@@ -1,3 +1,4 @@
+"use client";
 import { ChevronLeft, ChevronRight, LayoutGrid, Play } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { HERO_SLIDES } from "../data/content";

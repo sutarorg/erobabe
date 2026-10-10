@@ -1,21 +1,18 @@
+"use client";
 import { Eye, Play } from "lucide-react";
 import type { Video } from "../data/content";
 import { cn } from "../utils/cn";
 
 interface VideoCardProps {
   video: Video;
-  onOpen: (video: Video) => void;
+  onOpen?: (video: Video) => void;
   dense?: boolean;
 }
 
 export default function VideoCard({ video, onOpen, dense = false }: VideoCardProps) {
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(video)}
-      className="group block w-full text-left"
-      aria-label={`${video.title} — ${video.duration}, ${video.views} views`}
-    >
+  const href = `/video/${video.id}`;
+  const content = (
+    <>
       <span className="relative block aspect-video overflow-hidden rounded-lg border border-line bg-card transition-colors duration-200 group-hover:border-accent/40">
         <img
           src={video.thumb}
@@ -28,15 +25,12 @@ export default function VideoCard({ video, onOpen, dense = false }: VideoCardPro
           aria-hidden
           className="absolute inset-0 bg-gradient-to-t from-black/35 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"
         />
-        {/* Quality badge */}
         <span className="absolute left-1.5 top-1.5 rounded border border-white/10 bg-black/65 px-1.5 py-[2px] text-[9px] font-semibold tracking-[0.08em] text-zinc-100 backdrop-blur-sm">
           {video.quality}
         </span>
-        {/* Duration badge */}
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/75 px-1.5 py-[2px] text-[10px] font-medium tabular-nums text-zinc-100 backdrop-blur-sm">
           {video.duration}
         </span>
-        {/* Hover play affordance */}
         <span
           aria-hidden
           className="absolute inset-0 flex items-center justify-center opacity-0 transition-all duration-300 group-hover:opacity-100"
@@ -70,6 +64,32 @@ export default function VideoCard({ video, onOpen, dense = false }: VideoCardPro
           </span>
         </span>
       </span>
-    </button>
+    </>
+  );
+
+  // If onOpen provided (legacy), render button that also navigates via href for SEO
+  if (onOpen) {
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          // Allow client-side navigation if onOpen handles it, but preserve crawlable href
+          if (onOpen) {
+            e.preventDefault();
+            onOpen(video);
+          }
+        }}
+        className="group block w-full text-left"
+        aria-label={`${video.title} — ${video.duration}, ${video.views} views`}
+      >
+        {content}
+      </a>
+    );
+  }
+
+  return (
+    <a href={href} className="group block w-full text-left" aria-label={`${video.title} — ${video.duration}`}>
+      {content}
+    </a>
   );
 }

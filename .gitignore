@@ -1,0 +1,61 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Testing
+coverage
+.nyc_output
+
+# Next.js
+.next
+out
+build
+dist
+.vercel
+.turbo
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local env files (never commit secrets)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.example.local
+
+# Supabase
+.supabase
+temp
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+
+# Private test files
+private
+secrets
+*.key
+*.secret
+
+# Uploads
+uploads
+tmp
+
+# Playwright
+test-results
+playwright-report
+playwright/.cache

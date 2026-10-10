@@ -1,3 +1,4 @@
+"use client";
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 
 /** Every video section is exactly four rows tall. */

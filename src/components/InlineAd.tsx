@@ -1,3 +1,4 @@
+"use client";
 import { Megaphone } from "lucide-react";
 
 /**

@@ -1,3 +1,4 @@
+"use client";
 import {
   ArrowLeft, ChevronDown, CircleCheck, FileText, Globe, HeartPulse, Mail,
   Megaphone, ShieldCheck, Sparkles, Trash2,

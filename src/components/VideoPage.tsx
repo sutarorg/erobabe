@@ -1,3 +1,4 @@
+"use client";
 import {
   ArrowLeft, Bookmark, Check, Eye, Maximize2, Play, Settings, Share2, ThumbsUp, Volume2,
 } from "lucide-react";

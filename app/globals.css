@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+@theme {
+  /* Erobabe design tokens */
+  --color-void: #050506;
+  --color-panel: #0a0a0c;
+  --color-rail: #101114;
+  --color-card: #151518;
+  --color-card-hover: #17171c;
+  --color-ink: #f5f5f7;
+  --color-ink-2: #a1a1aa;
+  --color-ink-3: #71717a;
+  --color-accent: #f51655;
+  --color-accent-soft: #ff326c;
+  --color-line: #242429;
+  /* Advertiser portal surfaces */
+  --color-psidebar: #0d0e10;
+  --color-pcard: #101113;
+  --color-pcard-2: #141518;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(245, 22, 85, 0.32);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Advertising slot sizing: always keeps an exact 16:9 ratio while     */
+/* guaranteeing five slots + gaps + rail padding fit the viewport.     */
+/* Per-slot height budget = (100dvh - chrome) / 5  →  width = h * 16/9 */
+/* chrome = py-4 (32px) + 4 × gap-3 (48px) = 80px                      */
+/* ------------------------------------------------------------------ */
+.ad-slot {
+  aspect-ratio: 16 / 9;
+  flex: none;
+  margin-inline: auto;
+  width: min(100%, calc((100vh - 80px) * 16 / 45));
+  width: min(100%, calc((100dvh - 80px) * 16 / 45));
+}
+
+/* Thin custom scrollbar for the independently scrolling center panel */
+.center-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #2b2b31 transparent;
+}
+.center-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.center-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.center-scroll::-webkit-scrollbar-thumb {
+  background: #26262c;
+  border-radius: 8px;
+  border: 3px solid var(--color-panel);
+  background-clip: padding-box;
+}
+.center-scroll::-webkit-scrollbar-thumb:hover {
+  background: #34343c;
+  border: 3px solid var(--color-panel);
+  background-clip: padding-box;
+}
+
+/* Public website: scrolling stays functional, the bar itself is hidden */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Video grids                                                         */
+/* ------------------------------------------------------------------ */
+.video-grid {
+  display: grid;
+  gap: 1.25rem 0.875rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@keyframes eb-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes eb-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.eb-backdrop { animation: eb-fade 0.18s ease-out both; }
+.eb-panel { animation: eb-pop 0.22s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@keyframes eb-slide-in {
+  from { opacity: 0; transform: translateX(28px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.eb-drawer { animation: eb-slide-in 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+input::placeholder {
+  color: var(--color-ink-3);
+  opacity: 1;
+}

@@ -1,3 +1,4 @@
+"use client";
 import { LOGO_URL } from "../data/content";
 import type { NavKey } from "./Header";
 
