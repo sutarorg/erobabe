@@ -50,16 +50,15 @@ export default function Categories({ activeCategory = null, onSelect, onMore, ca
         <h2 className="text-[15px] font-semibold tracking-tight text-ink">Top Categories</h2>
       </div>
 
-      <div className="category-row no-scrollbar mt-3.5 flex snap-x snap-mandatory gap-2.5 overflow-x-auto py-1 -my-1">
+      <div className="category-grid mt-3.5 grid grid-cols-2 gap-2.5 @md:grid-cols-3 @2xl:grid-cols-4">
         {list.map((cat) => {
           const isMore = cat.label.trim().toLowerCase() === "more";
           const Icon = resolveCategoryIcon(cat.icon, cat.slug || cat.label);
           const active = !isMore && activeCategory === cat.label;
           const className = cn(
-            // `flex-1` lets the seven cards share one single row when there is
-            // room; `min-w` stops them from squeezing the label, so a narrower
-            // panel scrolls sideways instead of stacking the cards vertically.
-            "group flex h-[64px] min-w-[132px] flex-1 snap-start items-center justify-center gap-2.5 rounded-lg border px-3.5 transition-colors duration-150",
+            // Cards wrap into a compact, responsive grid so every category is
+            // visible without horizontal scrolling in the center content panel.
+            "group flex min-h-[64px] min-w-0 items-center justify-center gap-2.5 rounded-lg border px-3 py-3 transition-colors duration-150",
             active
               ? "border-accent/70 bg-accent/8"
               : "border-line bg-card hover:border-accent/45 hover:bg-card-hover"

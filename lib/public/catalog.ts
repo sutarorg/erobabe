@@ -20,6 +20,7 @@ export type PublicCategory = {
   label: string;
   slug: string;
   icon: string | null;
+  video_count?: number;
 };
 
 export type PublicAd = {
@@ -87,16 +88,39 @@ async function loadPopularVideos(limit: number): Promise<PublicVideo[]> {
   return (data || []).map(mapVideo);
 }
 
+async function countPublicVideos(
+  supabase: NonNullable<ReturnType<typeof tryCreateServiceClient>>,
+  categoryId: string
+): Promise<number | null> {
+  const { count } = await supabase
+    .from("videos")
+    .select("id", { count: "exact", head: true })
+    .eq("category_id", categoryId)
+    .eq("status", "published")
+    .eq("visibility", "public")
+    .eq("rights_status", "cleared")
+    .eq("moderation_status", "approved");
+
+  return count;
+}
+
 async function loadCategories(): Promise<PublicCategory[]> {
   const supabase = tryCreateServiceClient();
   if (!supabase) return [];
-  const { data } = await supabase.from("categories").select("id, label, slug, icon").order("label");
-  return (data || []).map((row: any) => ({
-    id: String(row.id),
-    label: String(row.label),
-    slug: String(row.slug || ""),
-    icon: row.icon ? String(row.icon) : null,
-  }));
+  const { data } = await supabase.from("categories").select("id, label, slug, icon, video_count").order("label");
+  return Promise.all(
+    (data || []).map(async (row: any) => {
+      const storedCount = Number(row.video_count) || 0;
+      const publicCount = await countPublicVideos(supabase, String(row.id));
+      return {
+        id: String(row.id),
+        label: String(row.label),
+        slug: String(row.slug || ""),
+        icon: row.icon ? String(row.icon) : null,
+        video_count: publicCount ?? storedCount,
+      };
+    })
+  );
 }
 
 async function loadActiveAds(): Promise<PublicAd[]> {

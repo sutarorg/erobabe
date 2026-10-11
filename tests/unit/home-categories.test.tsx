@@ -18,17 +18,17 @@ const DATABASE_CATEGORIES = [
 ];
 
 describe("homepage categories", () => {
-  it("lays the seven cards out in one horizontal row ending with More", () => {
+  it("shows all seven featured cards in a responsive grid without horizontal scrolling", () => {
     const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
-    const row = container.querySelector(".category-row");
-    expect(row).toBeTruthy();
-    expect(row?.className).toMatch(/\bflex\b/);
-    // A single row: side-by-side flex items that scroll sideways when the
-    // panel is narrow, never a stacked vertical column.
-    expect(row?.className).toMatch(/flex-row|overflow-x-auto/);
-    expect(row?.className).not.toMatch(/grid-cols-1/);
+    const grid = container.querySelector(".category-grid");
+    expect(grid).toBeTruthy();
+    expect(grid?.className).toMatch(/\bgrid\b/);
+    expect(grid?.className).toContain("grid-cols-2");
+    expect(grid?.className).toContain("@md:grid-cols-3");
+    expect(grid?.className).toContain("@2xl:grid-cols-4");
+    expect(grid?.className).not.toMatch(/overflow-x-auto|snap-x/);
 
-    const links = within(row as HTMLElement).getAllByRole("link");
+    const links = within(grid as HTMLElement).getAllByRole("link");
     expect(links).toHaveLength(7);
     expect(links.slice(0, 6).map((link) => link.textContent?.trim())).toEqual([
       "Mature",
@@ -42,14 +42,14 @@ describe("homepage categories", () => {
     expect(links[6].getAttribute("href")).toBe("/categories");
   });
 
-  it("gives every card the same flexible width so the row stays even", () => {
+  it("lets each card shrink to its grid track instead of forcing overflow", () => {
     const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
-    const row = container.querySelector(".category-row") as HTMLElement;
+    const grid = container.querySelector(".category-grid") as HTMLElement;
 
-    const cards = within(row).getAllByRole("link");
+    const cards = within(grid).getAllByRole("link");
     for (const card of cards) {
-      expect(card.className).toMatch(/\bflex-1\b/);
-      expect(card.className).toMatch(/min-w-\[132px\]/);
+      expect(card.className).toMatch(/\bmin-w-0\b/);
+      expect(card.className).not.toMatch(/min-w-\[132px\]/);
     }
   });
 });

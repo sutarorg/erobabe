@@ -96,7 +96,7 @@ export default function Header({
         )}
 
         {/* Desktop / wide-container navigation */}
-        <nav aria-label="Primary" className="hidden h-full items-stretch min-[1000px]:flex">
+        <nav aria-label="Primary" className="hidden h-full items-stretch gap-1 min-[1000px]:flex">
           {NAV_ITEMS.map((item) => {
             const active = navActive === item.key;
             const className = cn(
