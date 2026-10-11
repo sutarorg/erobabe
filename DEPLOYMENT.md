@@ -331,8 +331,8 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
 
 1. Go to https://console.groq.com → **API Keys** → **Create API Key**
 2. Copy key (starts `gsk_...`) — this is `GROQ_API_KEY` (server-only, never expose to browser)
-3. Set env: `GROQ_API_KEY=gsk_...`, `GROQ_MODEL=llama-3.1-8b-instant` (or current recommended model per docs)
-4. Test: go to `/admin/videos/upload`, choose a category and source, then publish. The server must generate title, description, and tags with Groq before it creates the video record.
+3. Set env: `GROQ_API_KEY=gsk_...`, `GROQ_MODEL=openai/gpt-oss-20b` (or another active model available to your API key; check Groq's [supported models](https://console.groq.com/docs/models) and [deprecations](https://console.groq.com/docs/deprecations)).
+4. Test: go to `/admin/videos/upload`, choose a category and source, then publish. The server must generate title, description, and tags with Groq before it creates the video record. The application defaults to `openai/gpt-oss-20b`, automatically migrates the retired `llama-3.1-8b-instant` setting, and retries that default if a custom model ID is no longer available.
 5. If Groq is not configured or returns incomplete metadata, publishing stops with a clear error; title, description, and tags are intentionally not browser-editable in this workflow.
 6. **Important**: Never send video bytes, private rights docs, payment records, or personal info to Groq. Only the source filename/URL path and selected category are sent for metadata generation. AI output is not proof of rights, age, consent, or factual attributes.
 
@@ -448,7 +448,7 @@ fly deploy
 | `UQLOAD_API_KEY` | Uqload API key | No | https://uqload.vc → Account → API key | Hosting secrets | prod (if using) | Test via `GET /api/upload/server` | Yes |
 | `UQLOAD_ADULT_CONTENT_APPROVED` | Flag confirming written approval for adult content on Uqload | No | Set to `true` only after written provider confirmation | Hosting env | prod | Must be `true` AND `UQLOAD_API_KEY` set for Uqload to be enabled | Yes |
 | `GROQ_API_KEY` | Groq API key for metadata suggestions | No | https://console.groq.com → API Keys | Hosting secrets | prod (optional) | Test via `/api/groq/suggest` | Yes |
-| `GROQ_MODEL` | Groq model name | No | Current docs, e.g., `llama-3.1-8b-instant` | Hosting env | prod (optional) | Check Groq docs | Yes |
+| `GROQ_MODEL` | Groq model name | No | Active model available to the key (default: `openai/gpt-oss-20b`) | Hosting env | prod (optional) | Check Groq supported models/deprecations | Yes |
 | `RESEND_API_KEY` | Resend API key | No | https://resend.com → API Keys | Hosting secrets, Supabase SMTP password | prod | Test via contact form | Yes |
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |

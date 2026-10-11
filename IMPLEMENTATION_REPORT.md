@@ -53,7 +53,7 @@
 ### Admin Video Upload and Management
 - Preserved and improved `UploadView` UI in new route `/admin/videos/upload` (client component):
   - Local file selection, drag-drop, title, description, category, tags, rights status, thumbnail handling.
-  - Groq integration: optional button "Suggest with Groq" calls `/api/groq/suggest` which uses server-side Groq SDK, model `llama-3.1-8b-instant`, returns JSON with title, description, tags, category — editable, requires human review, note that AI not proof of rights.
+  - Groq integration: optional button "Suggest with Groq" calls `/api/groq/suggest` which uses server-side Groq SDK, defaults to `openai/gpt-oss-20b` and migrates the retired `llama-3.1-8b-instant` ID, returns JSON with title, description, tags, category — editable, requires human review, note that AI is not proof of rights.
   - Removed simulated `probeMedia()` and timer-driven fake processing.
   - Real upload via `/api/videos/upload` route (server-side):
     - Verifies admin session, validates file (video/*, max 2GB), validates title.
@@ -124,7 +124,7 @@
 ### Groq AI Integration
 - Implemented server-side client `lib/groq/client.ts` using `groq-sdk`:
   - `getGroqClient` returns null if `GROQ_API_KEY` missing, so rest of app continues without AI.
-  - `suggestVideoMetadata` uses model `llama-3.1-8b-instant` (env configurable), prompt that asks for title, description, tags, category JSON, with instructions not to invent performer names, ages, unverified facts, keep professional for SEO.
+  - `suggestVideoMetadata` uses model `openai/gpt-oss-20b` by default (env configurable), automatically migrates the retired `llama-3.1-8b-instant` ID, and retries the default model if a configured model is unavailable. The prompt asks for title, description, tags, and category JSON, with instructions not to invent performer names, ages, or unverified facts and to keep professional for SEO.
   - Never sends video bytes, private rights docs, payment records, personal info — only file name, title, category, tags.
   - AI output editable, requires human review, not proof of rights.
 - Route `/api/groq/suggest` verifies admin session, calls suggestion, returns with note "AI-generated, requires human review".
