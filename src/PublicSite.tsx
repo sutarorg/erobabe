@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import AdRail from "./components/AdRail";
 import AgeGate from "./components/AgeGate";
-import BrowseView from "./components/BrowseView";
 import Categories from "./components/Categories";
 import CategoriesPage from "./components/CategoriesPage";
 import Footer from "./components/Footer";
@@ -17,7 +16,7 @@ import VideoGrid from "./components/VideoGrid";
 import VideoPage from "./components/VideoPage";
 import VideoSection from "./components/VideoSection";
 import {
-  categoryFromSlug, categorySlug, FEATURED_VIDEOS, LATEST_VIDEOS, VIDEOS, type Video,
+  ALL_CATEGORIES, categoryFromSlug, categorySlug, FEATURED_VIDEOS, LATEST_VIDEOS, VIDEOS, type Video,
 } from "./data/content";
 
 /** Which header item lights up for each route. */
@@ -25,9 +24,77 @@ const NAV_FOR_PAGE: Record<string, NavKey> = {
   "": "home",
   categories: "categories",
   latest: "latest",
-  browse: "browse",
   toprated: "toprated",
 };
+
+/**
+ * The legacy `src/` SPA tree is not part of the production build; this file is
+ * kept only so the old screens still type-check. `BrowseView` was removed with
+ * the public /browser page, so the listing renders inline below.
+ */
+function LegacyListingSection({
+  eyebrow,
+  title,
+  videos,
+  showFilters,
+  activeCategory,
+  onCategory,
+  onClear,
+  onOpen,
+}: {
+  eyebrow: string;
+  title: string;
+  videos: Video[];
+  showFilters: boolean;
+  activeCategory: string | null;
+  onCategory: (label: string | null) => void;
+  onClear: () => void;
+  onOpen: (video: Video) => void;
+}) {
+  return (
+    <section className="mx-auto w-full max-w-[1200px] px-4 pt-5 @sm:px-5 @2xl:px-7">
+      <button
+        type="button"
+        onClick={onClear}
+        className="flex items-center gap-1.5 text-[12px] font-medium text-ink-3 transition-colors hover:text-accent"
+      >
+        ← Back to home
+      </button>
+
+      <p className="mt-4 text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">{eyebrow}</p>
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h1 className="text-[20px] font-semibold tracking-tight text-ink">{title}</h1>
+        <span className="text-[12px] tabular-nums text-ink-3">
+          {videos.length} {videos.length === 1 ? "video" : "videos"}
+        </span>
+      </div>
+
+      {showFilters && (
+        <div className="mt-4 flex flex-wrap gap-1.5" role="group" aria-label="Filter by category">
+          {["All", ...ALL_CATEGORIES.map((category) => category.label)].map((label) => {
+            const active = label === "All" ? activeCategory === null : activeCategory === label;
+            return (
+              <button
+                key={label}
+                type="button"
+                onClick={() => onCategory(label === "All" ? null : label)}
+                className={`rounded-full border px-3 py-1 text-[11.5px] font-medium transition-colors ${
+                  active ? "border-accent bg-accent/15 text-accent" : "border-line text-ink-3 hover:border-ink-3 hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-5">
+        <VideoGrid videos={videos} onOpen={onOpen} />
+      </div>
+    </section>
+  );
+}
 
 interface PublicSiteProps {
   /** Sub-path inside the site, e.g. "", "video/{slug}", "browse/all". */
@@ -52,8 +119,8 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
   const activeVideo: Video | null =
     page === "video" ? VIDEOS.find((v) => v.id === segments[1]) ?? null : null;
 
-  /** Listing routes: /browse/{category|all} and /toprated/{category|all}. */
-  const isListPage = page === "browse" || page === "toprated";
+  /** Listing routes: /toprated/{category|all}. */
+  const isListPage = page === "toprated";
   const routeCategory =
     isListPage && segments[1] && segments[1] !== "all"
       ? categoryFromSlug(segments[1])
@@ -96,15 +163,12 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
         case "toprated":
           onRoute("toprated/all");
           break;
-        case "browse":
-          onRoute("browse/all");
-          break;
       }
     },
     [onRoute]
   );
 
-  /** Category chosen from a tile — always lands on the Browse listing. */
+  /** Category chosen from a tile — always lands on the listing page. */
   const selectCategory = useCallback(
     (label: string) => {
       setQuery("");
@@ -112,7 +176,7 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
         onRoute("categories");
         return;
       }
-      onRoute(`browse/${categorySlug(label)}`);
+      onRoute(`toprated/${categorySlug(label)}`);
     },
     [onRoute]
   );
@@ -120,8 +184,7 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
   /** Chip clicked inside a listing — keeps you on the same listing type. */
   const filterCategory = useCallback(
     (label: string | null) => {
-      const base = page === "toprated" ? "toprated" : "browse";
-      onRoute(`${base}/${label ? categorySlug(label) : "all"}`);
+      onRoute(`toprated/${label ? categorySlug(label) : "all"}`);
     },
     [onRoute, page]
   );
@@ -152,7 +215,7 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
         title: routeCategory ? `Top Rated ${routeCategory}` : "Top Rated All",
       };
     }
-    return { eyebrow: "Browse", title: routeCategory ?? "Browse All" };
+    return { eyebrow: "Top Rated", title: routeCategory ?? "Top Rated All" };
   }, [isSearching, query, page, routeCategory]);
 
   /** Featured: 4 rows × 5 columns = 20. Latest: 4 rows × 4 columns = 16. */
@@ -170,7 +233,7 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
     onRoute("");
   }, [onRoute]);
 
-  const effectiveNav: NavKey = isSearching ? "browse" : NAV_FOR_PAGE[page] ?? "home";
+  const effectiveNav: NavKey = isSearching ? "home" : NAV_FOR_PAGE[page] ?? "home";
   const showHome = !isSearching && page === "";
 
   return (
@@ -199,7 +262,7 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
 
         {/* ---- search results take precedence over any route ---- */}
         {isSearching ? (
-          <BrowseView
+          <LegacyListingSection
             eyebrow={eyebrow}
             title={title}
             videos={listVideos}
@@ -239,7 +302,7 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
             )}
 
             {isListPage && (
-              <BrowseView
+              <LegacyListingSection
                 eyebrow={eyebrow}
                 title={title}
                 videos={listVideos}

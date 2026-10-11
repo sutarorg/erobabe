@@ -6,6 +6,12 @@
  */
 
 import { parseUqloadUploadResponse } from "@/lib/video/uqload-response";
+import {
+  expectedTitlesFor,
+  pickConfirmedUpload,
+  type ConfirmedUpload,
+  type LibraryFile,
+} from "@/lib/video/uqload-match";
 
 export { parseUqloadUploadResponse } from "@/lib/video/uqload-response";
 
@@ -121,10 +127,16 @@ export class UqloadProvider implements VideoProvider {
   async getUploadServer(): Promise<string> {
     const response = await fetch(this.apiUrl("upload/server"), { cache: "no-store" });
     const json = await readJson(response, "Uqload upload-server request");
-    if (!isProviderSuccess(json.status) || typeof json.result !== "string") {
+    // Uqload occasionally answers with a mirror list ("https://s1…,https://s2…"
+    // or an array) — take the first usable URL instead of failing the upload.
+    const raw = json?.result;
+    const candidates = (Array.isArray(raw) ? raw : String(raw ?? "").split(","))
+      .map((value: unknown) => String(value).trim())
+      .filter((value: string) => /^https?:\/\//i.test(value));
+    if (!isProviderSuccess(json.status) || !candidates.length) {
       throw new Error(`Uqload could not provide an upload server${json?.msg ? `: ${json.msg}` : ""}`);
     }
-    return json.result;
+    return candidates[0];
   }
 
   /**
@@ -148,63 +160,46 @@ export class UqloadProvider implements VideoProvider {
    * Confirms a file that the browser just POSTed straight to Uqload.
    *
    * The browser can never read the upload server's JSON response (no CORS
-   * headers), so the filecode has to be recovered from the account library via
-   * the documented `file/list` endpoint — filtered by the `created` parameter
-   * (a number means "uploaded within the last X minutes") and matched against
-   * the title we sent with the upload.
+   * headers), so the file code has to be recovered from the account library via
+   * the documented `file/list` endpoint.
    *
-   * Uqload rewrites duplicate titles by appending a suffix (e.g. uploading
-   * "My Video" twice yields "My Video" and "My Video_1_"), so a candidate also
-   * matches when the expected title is a prefix of the stored title followed by
-   * a separator.
-   *
-   * Returns null when nothing matching is in the window yet (the caller may
-   * retry) or when the window holds several files but none matches the
-   * expected title (ambiguous — never guess a filecode).
+   * Identification is a **diff** against a pre-upload snapshot of the account's
+   * file codes, never the title alone: Uqload ignores multipart fields sent
+   * after the `file` part, so it stores a title derived from the file name
+   * (`my trip.mp4` → `My_Trip`) and a cleaned title can never match it. The
+   * title is only a ranking hint (see `lib/video/uqload-match.ts`).
    */
   async findRecentUpload(
     meta: { title?: string; fileName?: string },
-    windowMinutes = 5
-  ): Promise<{ fileCode: string; uploaded?: string; matchedBy: "title" | "recent" } | null> {
-    const files = await this.listLibraryFiles({ created: windowMinutes });
-    const withCode = files.filter((file) => typeof file?.file_code === "string" && file.file_code.trim() !== "");
-    if (!withCode.length) return null;
-
-    const normalize = (value: unknown) => String(value ?? "").trim().toLowerCase();
-    const expectedTitles = [meta.title, meta.fileName, meta.fileName?.replace(/\.[^.]+$/, "")]
-      .map(normalize)
-      .filter(Boolean);
-
-    const matchesTitle = (candidateTitle: string) =>
-      expectedTitles.some(
-        (expected) =>
-          candidateTitle === expected ||
-          candidateTitle.startsWith(`${expected}_`) ||
-          candidateTitle.startsWith(`${expected} `)
-      );
-
-    const matches = withCode.filter((file) => {
-      const candidateTitle = normalize(file.title);
-      return Boolean(candidateTitle) && matchesTitle(candidateTitle);
+    options: { knownFileCodes?: string[] | null; finalAttempt?: boolean } = {}
+  ): Promise<ConfirmedUpload | null> {
+    const files = await this.listRecentUploads();
+    return pickConfirmedUpload({
+      files,
+      // `undefined` (no snapshot passed) behaves like an unreadable snapshot:
+      // never fall back to "the newest new file" on a guess alone.
+      knownFileCodes: options.knownFileCodes ?? null,
+      expectedTitles: expectedTitlesFor(meta),
+      finalAttempt: options.finalAttempt,
     });
-    if (matches.length) {
-      // Several matches in the window (e.g. a retry of the same file) — the
-      // most recently uploaded one is the one we just sent.
-      const newest = matches.reduce((latest, file) =>
-        String(file.uploaded ?? "") > String(latest.uploaded ?? "") ? file : latest
-      );
-      return { fileCode: String(newest.file_code), uploaded: newest.uploaded, matchedBy: "title" };
-    }
+  }
 
-    // No expected title to match (pathological file name like ".mp4"): fall
-    // back to the only file in the recent window, if there is one — so we
-    // can't mis-attribute someone else's video. If we did send a title and
-    // nothing matched, a lone file is just as likely to be someone else's
-    // (or the upload genuinely failed) — the client retries, then reports it.
-    if (!expectedTitles.length && withCode.length === 1) {
-      return { fileCode: String(withCode[0].file_code), uploaded: withCode[0].uploaded, matchedBy: "recent" };
-    }
-    return null;
+  /**
+   * The newest files in the account library, mapped to a stable shape.
+   * `file/list` is metered by Uqload, so callers poll sparingly — one request
+   * per poll — and reuse the same query for the pre-upload snapshot so the
+   * diff stays consistent.
+   */
+  async listRecentUploads(perPage = 50): Promise<LibraryFile[]> {
+    const files = await this.listLibraryFiles({ per_page: perPage });
+    return files
+      .filter((file) => typeof file?.file_code === "string" && file.file_code.trim() !== "")
+      .map((file) => ({
+        fileCode: String(file.file_code),
+        title: typeof file.title === "string" ? file.title : "",
+        uploaded: typeof file.uploaded === "string" ? file.uploaded : undefined,
+        canPlay: file.canplay === 1 || file.canplay === "1" || file.canplay === true,
+      }));
   }
 
   private async listLibraryFiles(parameters: Record<string, string | number> = {}): Promise<any[]> {
@@ -215,14 +210,19 @@ export class UqloadProvider implements VideoProvider {
 
   async uploadFile(serverUrl: string, file: File | Blob, meta: UploadRequest): Promise<UploadResult> {
     const form = new FormData();
+    // ⚠️ Order matters: Uqload ignores every multipart field that arrives
+    // *after* the `file` part (verified against the live API — a `file_title`
+    // sent behind the file is dropped and the title falls back to the file
+    // name). Every scalar must therefore precede the file; Uqload's own curl
+    // sample puts the optional `snapshot` last.
     form.append("key", this.getApiKey());
-    form.append("file", file, meta.fileName);
     if (meta.title) form.append("file_title", meta.title);
     if (meta.description) form.append("file_descr", meta.description);
     if (meta.tags) form.append("tags", meta.tags);
-    if (meta.snapshot) form.append("snapshot", meta.snapshot, meta.snapshotFileName || "thumbnail.jpg");
     form.append("file_public", "1");
     form.append("file_adult", "1");
+    form.append("file", file, meta.fileName);
+    if (meta.snapshot) form.append("snapshot", meta.snapshot, meta.snapshotFileName || "thumbnail.jpg");
 
     const response = await fetch(serverUrl, { method: "POST", body: form, cache: "no-store" });
     const text = await response.text();

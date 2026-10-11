@@ -305,14 +305,18 @@ describe("direct Uqload upload from the browser (CORS-free simple request)", () 
     addEventListener() {}
   }
 
-  function stubUqloadFetch(confirmSequence: Array<Record<string, unknown>>) {
+  function stubUqloadFetch(
+    confirmSequence: Array<Record<string, unknown>>,
+    options: { fileCodes?: string[] | null } = {}
+  ) {
     const requests: Array<{ url: string; body: any }> = [];
     let confirmCalls = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: any, init?: any) => {
         const path = String(url);
-        requests.push({ url: path, body: init?.body ? JSON.parse(init.body) : null });
+        const body = init?.body ? JSON.parse(init.body) : null;
+        requests.push({ url: path, body });
         if (path.includes("uqload-session")) {
           return new Response(
             JSON.stringify({ serverUrl: "https://e17.uqload.example/upload/02", fields: { key: "test-key", file_public: "1", file_adult: "1" } }),
@@ -320,6 +324,13 @@ describe("direct Uqload upload from the browser (CORS-free simple request)", () 
           );
         }
         if (path.includes("uqload-confirm")) {
+          if (body?.mode === "snapshot") {
+            // Pre-upload library snapshot: the diff baseline for confirmation.
+            return new Response(JSON.stringify({ fileCodes: options.fileCodes ?? [] }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            });
+          }
           const response = confirmSequence[Math.min(confirmCalls, confirmSequence.length - 1)];
           confirmCalls += 1;
           return new Response(JSON.stringify(response), { status: 200, headers: { "content-type": "application/json" } });
@@ -339,10 +350,11 @@ describe("direct Uqload upload from the browser (CORS-free simple request)", () 
     return requests;
   }
 
-  it("sends a listener-less simple request and publishes the filecode confirmed from the library", async () => {
-    const requests = stubUqloadFetch([
-      { found: true, fileCode: "xyz789", uploaded: "2026-10-11 09:58:00", matchedBy: "title" },
-    ]);
+  it("snapshots the library, sends a listener-less simple request, and publishes the filecode confirmed by the diff", async () => {
+    const requests = stubUqloadFetch(
+      [{ found: true, fileCode: "xyz789", uploaded: "2026-10-11 09:58:00", matchedBy: "only-new" }],
+      { fileCodes: ["old000"] }
+    );
     vi.stubGlobal("XMLHttpRequest", DeliveredButUnreadableXHR);
 
     render(<UploadPage />);
@@ -358,8 +370,20 @@ describe("direct Uqload upload from the browser (CORS-free simple request)", () 
     const publish = requests.find((request) => request.url.includes("/api/videos/upload"));
     expect(publish?.body?.providerFileId).toBe("xyz789");
     const confirm = requests.filter((request) => request.url.includes("uqload-confirm"));
-    expect(confirm).toHaveLength(1);
-    expect(confirm[0]?.body).toEqual({ fileTitle: "my trip", fileName: "my trip.mp4" });
+    expect(confirm).toHaveLength(2);
+    // The snapshot is taken *before* the bytes leave the browser…
+    expect(confirm[0]?.body).toEqual({ mode: "snapshot" });
+    // …and the confirmation carries the baseline plus the upload's title/name.
+    expect(confirm[1]?.body).toEqual({
+      fileTitle: "my trip",
+      fileName: "my trip.mp4",
+      knownFileCodes: ["old000"],
+      finalAttempt: false,
+    });
+
+    // The snapshot request must precede the publish call.
+    const snapshotIndex = requests.findIndex((request) => request.body?.mode === "snapshot");
+    expect(snapshotIndex).toBeGreaterThan(-1);
 
     // Regression guard for the preflight bug: no listener may be registered on
     // `upload` (that forces the CORS preflight Uqload never answers) and no
@@ -374,11 +398,42 @@ describe("direct Uqload upload from the browser (CORS-free simple request)", () 
     vi.unstubAllGlobals();
   });
 
-  it("retries the confirmation until the file appears in the Uqload library", async () => {
-    const requests = stubUqloadFetch([
-      { found: false },
-      { found: true, fileCode: "late123", uploaded: "2026-10-11 09:58:01", matchedBy: "title" },
-    ]);
+  it("sends every scalar before the file part, with the snapshot last", async () => {
+    stubUqloadFetch([{ found: true, fileCode: "order1", uploaded: "2026-10-11 09:58:00", matchedBy: "title" }]);
+    const forms: FormData[] = [];
+    class CapturingXHR extends DeliveredButUnreadableXHR {
+      send(body?: Document | XMLHttpRequestBodyInit | null) {
+        forms.push(body as FormData);
+        super.send(body as any);
+      }
+    }
+    vi.stubGlobal("XMLHttpRequest", CapturingXHR);
+
+    render(<UploadPage />);
+    publishVideoFile();
+    expect(await screen.findByText("my trip.mp4")).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
+    fireEvent.submit(screen.getByText("Add videos").closest("form") as HTMLFormElement);
+    expect(await screen.findByText("Published · provider is still encoding", {}, { timeout: 5000 })).toBeTruthy();
+
+    // ⚠️ Regression guard: Uqload ignores every multipart field sent after the
+    // `file` part — a `file_title` behind the file is dropped and the stored
+    // title falls back to the file name, which the confirmation cannot match.
+    expect(forms).toHaveLength(1);
+    const names = [...forms[0].keys()];
+    expect(names).toEqual(["key", "file_public", "file_adult", "file_title", "file"]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("retries the confirmation until the diff finds the file in the Uqload library", async () => {
+    const requests = stubUqloadFetch(
+      [
+        { found: false },
+        { found: true, fileCode: "late123", uploaded: "2026-10-11 09:58:01", matchedBy: "only-new" },
+      ],
+      { fileCodes: ["old000"] }
+    );
     vi.stubGlobal("XMLHttpRequest", DeliveredButUnreadableXHR);
 
     render(<UploadPage />);
@@ -388,11 +443,14 @@ describe("direct Uqload upload from the browser (CORS-free simple request)", () 
     const form = screen.getByText("Add videos").closest("form") as HTMLFormElement;
     fireEvent.submit(form);
 
-    // First poll finds nothing, second poll (after the 3 s interval) confirms.
+    // First poll finds nothing, second poll (after the backoff) confirms.
     expect(await screen.findByText("Published · provider is still encoding", {}, { timeout: 15000 })).toBeTruthy();
 
     const confirm = requests.filter((request) => request.url.includes("uqload-confirm"));
-    expect(confirm).toHaveLength(2);
+    expect(confirm).toHaveLength(3);
+    expect(confirm[0]?.body).toEqual({ mode: "snapshot" });
+    expect(confirm[1]?.body?.finalAttempt).toBe(false);
+    expect(confirm[2]?.body?.finalAttempt).toBe(false);
     const publish = requests.find((request) => request.url.includes("/api/videos/upload"));
     expect(publish?.body?.providerFileId).toBe("late123");
 

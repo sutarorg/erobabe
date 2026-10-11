@@ -290,19 +290,22 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
 2. **Set env**: `UQLOAD_API_KEY=your_key`, `UQLOAD_ADULT_CONTENT_APPROVED=true`, `VIDEO_PROVIDER=uqload`
 3. **Endpoints used by code**:
    - `GET https://uqload.vc/api/upload/server?key=API_KEY` → returns upload server URL
-   - `POST https://sX.myvideo.com/upload/01` with FormData: `key`, `file`, `file_title`, `file_descr`, `tags`, `file_public=1`, `file_adult=1`
+   - `POST https://sX.myvideo.com/upload/01` with FormData **in this order**: `key`, `file_title`, `file_descr`, `tags`, `file_public=1`, `file_adult=1`, then `file`, then `snapshot` (thumbnail) last. ⚠️ Uqload ignores every multipart field sent **after** `file`, so a `file_title` appended behind the file is dropped and the stored title falls back to the file name (`my trip.mp4` → `My_Trip`).
    - Response: `{ status:200, files:[{ filecode, filename, status }] }`
+   - `GET https://uqload.vc/api/file/list?key=...&per_page=50` → account library; used to confirm a just-sent upload by **diffing file codes against a pre-upload snapshot** (one request per poll). Do not filter by `title`: it is a literal substring match on the stored title and can never find a file whose stored title is unknown.
    - `GET https://uqload.vc/api/file/info?key=...&file_code=...` → check processing status, thumbnail
 4. **Upload path — how large files get in**: Vercel functions reject any request body above **4.5 MB** with a plain-text `413 Request Entity Too Large`. Posting a video to one of our own routes therefore cannot work, and used to surface in the admin UI as `Unexpected token 'R', "Request En"... is not valid JSON`. The current flow keeps `UQLOAD_API_KEY` server-only and never sends a large body through a function:
 
-   1. `POST /api/videos/storage-token` (admin, JSON) returns a short-lived Supabase **signed upload URL** for a private `video-incoming` object — or, with `kind: "thumbnail"`, for a public `video-thumbnails` object.
-   2. The browser `PUT`s the bytes straight to Supabase Storage with `XMLHttpRequest`, which is what drives the per-video progress bar in `/admin/videos/upload`.
-   3. The browser then posts only `{ storagePath, thumbnailPath, categoryId }` to `POST /api/videos/upload` (a few hundred bytes). That route generates Groq metadata and hands Uqload a **signed download URL** via its `upload/url` remote-import endpoint, so Uqload pulls the file itself.
-   4. `/api/videos/status` deletes the transit object once `canplay=1`, and stale transit files are swept on the next upload request.
+   1. `POST /api/videos/storage-token` (admin, JSON, `kind: "thumbnail"`) returns a short-lived Supabase **signed upload URL** for a public `video-thumbnails` object. Video bytes must not be posted there — the route answers `410` and points at the Uqload session route instead.
+   2. The browser `PUT`s the thumbnail straight to Supabase Storage with `XMLHttpRequest`.
+   3. `POST /api/videos/uqload-session` returns the Uqload upload-server URL plus its form fields (`key`, `file_public=1`, `file_adult=1`) so the browser can POST the video bytes **directly to Uqload** (a CORS "simple request" — no custom headers, no `xhr.upload` listeners, `withCredentials=false`; adding any of those forces a preflight Uqload never answers and cancels the upload before a single byte is sent).
+   4. `POST /api/videos/uqload-confirm` (`mode: "snapshot"`) snapshots the account's file codes **before** the bytes leave; the browser then re-sends `{ fileTitle, fileName, knownFileCodes, finalAttempt }` until a new code appears (backoff polling, one `file/list` per poll). The title only ranks several new files — the diff identifies the upload, because Uqload's stored title is derived from the file name and never matches a cleaned title.
+   5. The browser posts only `{ providerFileId, thumbnailPath, categoryId, fileName }` to `POST /api/videos/upload` (a few hundred bytes). That route generates Groq metadata and creates the video record.
+   6. If the confirmation window closes before the file appears, the admin UI shows **Re-check library** — it re-runs the same diff against the stored snapshot instead of re-uploading the bytes.
 
    Do not move `UQLOAD_API_KEY` into browser code merely to shorten this path.
 5. **Thumbnail behavior**: Each video has its own thumbnail picker — including every iframe embed and every remote link, not just local files. A custom thumbnail is stored in the public `video-thumbnails` bucket; Uqload's `player_img` is used as a fallback once it is available.
-6. **Processing status**: A publish click makes the video public immediately. `canplay=1` lets `/api/videos/status` refresh duration/player details, mark its upload job complete, and clean up the transit object.
+6. **Processing status**: A publish click makes the video public immediately. `canplay=1` lets `/api/videos/status` refresh duration/player details and mark its upload job complete.
 
 ### If using replacement provider
 
@@ -315,10 +318,11 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
 ### Supabase Storage
 
 1. Go to **Storage** → **New bucket** → `ad-creatives` (public, for advertiser creatives)
-2. Create bucket `video-thumbnails` (public, for admin-selected video thumbnails)
-3. Create bucket `video-incoming` (**private**, 2 GB limit) — the transit bucket browser uploads land in before Uqload imports them. Migration `00000000000004_video_transit_storage.sql` creates it; `lib/video/storage.ts` also creates it on first use so a missed migration does not block uploads.
-4. Optionally create bucket `videos` (private, only if you later implement an internal provider)
-5. Set policies: allow authenticated advertisers to upload/delete only within their own `ad-creatives/<user-id>/` folder; public read is needed for creative and thumbnail display. `video-incoming` needs **no** policy — every access goes through the service-role key server-side via signed URLs.
+2. Create bucket `video-thumbnails` (public, for admin-selected video thumbnails). `lib/video/storage.ts` also creates it on first use so a missed migration does not block thumbnail uploads.
+3. Optionally create bucket `videos` (private, only if you later implement an internal provider)
+4. Set policies: allow authenticated advertisers to upload/delete only within their own `ad-creatives/<user-id>/` folder; public read is needed for creative and thumbnail display.
+
+> **Legacy**: `video-incoming` (from migration `00000000000004_video_transit_storage.sql`) belonged to the abandoned Supabase-transit flow — video bytes now go straight from the browser to Uqload, so the bucket is no longer used. On Supabase projects with a 50 MB global file limit the migration's 2 GB bucket insert can fail; skip/ignore that bucket and do not upload video bytes to Supabase.
 6. The campaign and publisher flows now fail clearly if their required bucket is missing. Verify both bucket names before accepting uploads.
 
 ---

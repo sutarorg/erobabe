@@ -5,14 +5,13 @@ import type { FormEvent, KeyboardEvent } from "react";
 import { LOGO_URL } from "../data/content";
 import { cn } from "../utils/cn";
 
-export type NavKey = "home" | "categories" | "latest" | "toprated" | "browse";
+export type NavKey = "home" | "categories" | "latest" | "toprated";
 
 export const NAV_HREFS: Record<NavKey, string> = {
   home: "/",
   categories: "/categories",
   latest: "/latest",
   toprated: "/popular",
-  browse: "/browser",
 };
 
 const NAV_ITEMS: { key: NavKey; label: string }[] = [
@@ -20,7 +19,6 @@ const NAV_ITEMS: { key: NavKey; label: string }[] = [
   { key: "categories", label: "Categories" },
   { key: "latest", label: "Latest" },
   { key: "toprated", label: "Top Rated" },
-  { key: "browse", label: "Browse" },
 ];
 
 interface HeaderProps {
