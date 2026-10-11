@@ -2,26 +2,28 @@
 
 import { useState, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { Eye, EyeOff } from "lucide-react";
 
 function SignInForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") || "/advertiser";
 
-  const handleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSignIn = async (event: React.FormEvent) => {
+    event.preventDefault();
     setError("");
     setLoading(true);
     const supabase = createClient();
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setError(error.message);
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (signInError) {
+      setError(signInError.message);
       setLoading(false);
       return;
     }
@@ -42,11 +44,38 @@ function SignInForm() {
       <form onSubmit={handleSignIn} className="mt-6 space-y-4">
         <label className="block">
           <span className="mb-1 block text-[11px] font-medium text-ink-2">Email</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px] outline-none focus:border-accent/50" placeholder="you@example.com" />
+          <input
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            required
+            autoComplete="email"
+            className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px] outline-none focus:border-accent/50"
+            placeholder="you@example.com"
+          />
         </label>
         <label className="block">
           <span className="mb-1 block text-[11px] font-medium text-ink-2">Password</span>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px] outline-none focus:border-accent/50" placeholder="••••••••" />
+          <span className="relative block">
+            <input
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+              autoComplete="current-password"
+              className="h-9 w-full rounded-md border border-line bg-void px-3 pr-10 text-[13px] outline-none focus:border-accent/50"
+              placeholder="••••••••"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((visible) => !visible)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+              className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-ink-3 hover:text-ink"
+            >
+              {showPassword ? <EyeOff aria-hidden="true" className="h-4 w-4" /> : <Eye aria-hidden="true" className="h-4 w-4" />}
+            </button>
+          </span>
         </label>
         {error && <p className="text-[11px] text-red-400">{error}</p>}
         <button type="submit" disabled={loading} className="flex h-9 w-full items-center justify-center rounded-md bg-accent text-[13px] font-semibold text-white hover:bg-accent-soft disabled:opacity-50">
@@ -57,10 +86,6 @@ function SignInForm() {
       <div className="mt-4 flex justify-between text-[11px]">
         <Link href="/auth/sign-up" className="text-accent hover:underline">Create advertiser account</Link>
         <Link href="/auth/reset" className="text-ink-3 hover:text-ink">Forgot password?</Link>
-      </div>
-
-      <div className="mt-6 rounded-md bg-amber-500/10 p-3 text-[11px] text-amber-200">
-        First admin: see DEPLOYMENT.md for secure bootstrap procedure. Never allow self-assigned admin role from browser.
       </div>
     </div>
   );

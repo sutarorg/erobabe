@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { parseBconCallback } from "@/lib/bcon/client";
+import { mapBconStatus, parseBconCallback } from "@/lib/bcon/client";
 import { verifyAndProcessBconPayment, confirmPayment } from "@/lib/bcon/verify";
 
 /**
@@ -15,6 +15,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   return handleCallback(req);
+}
+
+// Lets Bcon (and an operator) verify that the configured callback URL is
+// reachable without attempting to process a payment.
+export async function HEAD() {
+  return new NextResponse(null, { status: 200 });
 }
 
 async function handleCallback(req: NextRequest) {
@@ -46,7 +52,18 @@ async function handleCallback(req: NextRequest) {
 
     const callback = parseBconCallback(combined);
 
-    console.log("Bcon callback received", callback);
+    // Store setup screens may probe the URL without a transaction payload.
+    // Return a successful, side-effect-free health response in that case.
+    if (!callback.external_id && !callback.addr && !callback.address && !callback.txid && !callback.transaction_id) {
+      return NextResponse.json({ status: "ok" }, { status: 200 });
+    }
+
+    console.log("Bcon callback received", {
+      external_id: callback.external_id,
+      status: callback.status,
+      has_address: Boolean(callback.addr || callback.address),
+      has_transaction: Boolean(callback.txid || callback.transaction_id),
+    });
 
     // Verify and process
     const result = await verifyAndProcessBconPayment(callback);
@@ -65,16 +82,13 @@ async function handleCallback(req: NextRequest) {
 
     // Check if status indicates confirmed
     const rawStatus = callback.status || (callback as any).confirmations || "";
-    const isConfirmed =
-      rawStatus === "confirmed" ||
-      rawStatus === "2" ||
-      (callback as any).status === "confirmed" ||
-      // Bcon example: status param may be numeric confirmations
-      (typeof rawStatus === "string" && rawStatus.toLowerCase().includes("confirm"));
+    // Bcon documents 0 = unconfirmed, 1 = partially confirmed, and 2 =
+    // confirmed. Never treat "partially_confirmed" as a completed payment.
+    const isConfirmed = mapBconStatus(String(rawStatus)) === "confirmed";
 
     // For safety, only mark confirmed if explicitly confirmed status
     // Bcon docs: confirmed = 2 confirmations
-    if (isConfirmed && result.payment) {
+    if (isConfirmed && result.payment && result.status !== "underpaid" && result.status !== "overpaid") {
       const txid = callback.txid || callback.transaction_id || "";
       if (txid) {
         await confirmPayment(result.payment.id, txid);

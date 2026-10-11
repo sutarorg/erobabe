@@ -96,7 +96,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 
 - [ ] **Account and API key**: Groq account, API key created at https://console.groq.com → `GROQ_API_KEY` set.
 - [ ] **Model configured**: `GROQ_MODEL` set to current model, e.g., `llama-3.1-8b-instant`, matches docs.
-- [ ] **Metadata suggestions tested**: Upload view → Suggest with Groq → returns title, description, tags, category, editable, requires human review.
+- [ ] **Metadata generation tested**: Publisher sends source filename/URL path and selected category to Groq, receives title, description, and tags server-side, and blocks publication if Groq is not configured or returns incomplete metadata.
 - [ ] **No auto-publish**: AI output never auto-publishes video or asserts facts about content not verified.
 - [ ] **Privacy**: No video bytes, private rights docs, payment records, or unnecessary personal info sent to Groq.
 - [ ] **Fallback**: App continues to work without Groq if not configured.
