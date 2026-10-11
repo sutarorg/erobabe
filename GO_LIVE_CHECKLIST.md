@@ -66,14 +66,16 @@ This checklist lists all external decisions, approvals, and configurations that 
 ## 5. Bcon Global Payments
 
 - [ ] **Account created**: Bcon Global account, KYC completed if required.
-- [ ] **Store created per chain**: e.g., Ethereum store for USDT.
+- [ ] **Store (Merchants) created**: one store for the token/network you accept, e.g. Ethereum store for USDT — a store can serve several chains, so one store per chain is not required.
 - [ ] **Receiving wallet configured**: Authorized wallet address set in Bcon dashboard (e.g., Ethereum address for USDT-ERC20).
 - [ ] **Token and network chosen**: e.g., USDT on Ethereum, or USDT on Tron — set `BCON_PAYMENT_CURRENCY` and `BCON_CHAIN` accordingly.
-- [ ] **API key obtained**: Per-chain API key from Store Settings → Copy Generated Keys → set `BCON_API_KEY`.
-- [ ] **Callback endpoint configured on EVERY chain**: `https://YOUR_DOMAIN/api/bcon/callback` set for `callback_url.btc`, `callback_url.bnb`, and each enabled chain (`eth`, `trx`, `sol`). Bcon validates a per-chain callback field and rejects the store form with `The callback_url.btc must be a string` when any of them is blank.
-- [ ] **Callback verified from the app**: Admin → System Health shows every chain on the Bcon store with its registered `callback_url` and no empty entries.
-- [ ] **Test payments**: Create test payment via `/api/bcon/create` with $1, simulate callback, verify `payments` table status, `payment_events` immutable, invoice paid, campaign activation.
-- [ ] **Verification logic**: Callback validation (external_id, address, txid, amount tolerance) tested, idempotency tested (duplicate callback does not duplicate ledger).
+- [ ] **API key obtained**: Store Settings → Copy Generated Keys → set `BCON_API_KEY` (server-only, never `NEXT_PUBLIC_*`).
+- [ ] **Callback URL set in EVERY callback field the store form shows**: type the raw URL `https://YOUR_DOMAIN/api/bcon/callback` into each per-chain input (BTC/BNB fields are always rendered, plus one per enabled chain) — no quotes, Markdown, JSON or arrays. Leave a field empty only when that chain is disabled in the same form. Bcon's own validation rejects a blank field with `The callback_url.btc must be a string. (and 2 more errors)`. Click-by-click steps: DEPLOYMENT.md section C.5.
+- [ ] **Callback reachable**: `curl -i https://YOUR_DOMAIN/api/bcon/callback` (or Admin → System Health → **Test callback reachability**) returns HTTP 200 `{"status":"ok"}` and writes nothing to `payments`/`payment_events`.
+- [ ] **Callback verified from the app**: Admin → System Health → Bcon store table shows every chain Bcon returns with `matches this deployment`; chains not returned by Bcon are labelled unverified (never "working").
+- [ ] **Genuine payment processed end to end** (smallest real checkout, real funds): Bcon callback → payment `confirmed` with `transaction_id`, invoice `paid`, campaign `active`/`pending_review`, `payment_events` contains `callback_received`, `transaction_verified`, `confirmed`.
+- [ ] **Verification logic**: callback address vs stored payment address, provider transaction lookup (`GET /api/v1/transactions/<txid>`), provider status/currency/sum, and idempotency tested (duplicate callback does not duplicate ledger).
+- [ ] **Fails closed**: a hand-made callback with a bogus txid, a wrong address, a wrong currency, an unverifiable amount, or during a Bcon API outage must leave the payment unconfirmed and record an audit row.
 - [ ] **Under/overpayment handling**: Test underpaid/overpaid cases, ensure logged for admin review, not silently discarded.
 - [ ] **Refund process defined**: Real, auditable refund workflow using actual wallet procedures — not fabricated automatic reversals that provider doesn't support.
 - [ ] **Checkout UX**: Amount, USD equivalent, ticker, network, address, QR, copy button, expiration, pending/confirmed status, network instructions — all displayed, consistent with dark theme.

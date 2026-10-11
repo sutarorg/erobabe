@@ -32,10 +32,15 @@ export default async function SystemHealthAdmin() {
       bconDetail = "BCON_API_KEY did not resolve to a store";
     } else if (bcon.missingCallbackChains.length) {
       bconStatus = "Callback incomplete";
-      bconDetail = `Missing callback_url for: ${bcon.missingCallbackChains.join(", ")}`;
+      bconDetail = `Empty callback field(s) on the Bcon store: ${bcon.missingCallbackChains
+        .map((code) => `callback_url.${code}`)
+        .join(", ")} — type the callback URL into those inputs (or disable those chains) before saving the store form`;
+    } else if (bcon.mismatchedCallbackChains.length) {
+      bconStatus = "Callback mismatch";
+      bconDetail = `Chains pointing somewhere else: ${bcon.mismatchedCallbackChains.join(", ")} (expected ${bcon.callbackUrl})`;
     } else {
       bconStatus = "Operational";
-      bconDetail = `Store “${bcon.store.name || bcon.store.id}” · ${bcon.chains.length} chain(s) configured`;
+      bconDetail = `Store “${bcon.store.name || bcon.store.id}” · ${bcon.chains.length} chain(s) reported by Bcon · callback URL registered on every chain Bcon reports. Delivery itself is not proven by this check — use “Test callback reachability” below.`;
     }
   }
 
