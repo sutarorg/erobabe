@@ -1,37 +1,61 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getVideoProvider } from "@/lib/video/provider";
+import { getVideoProvider, UqloadProvider } from "@/lib/video/provider";
 import {
   completeUploadJob,
   createGeneratedVideo,
   createUploadJob,
   failUpload,
-  getOptionalFile,
   httpErrorStatus,
   publishVideo,
   requireActiveAdmin,
-  uploadThumbnail,
 } from "@/lib/video/publishing";
+import { assertOwnTransitPath, createTransitDownloadUrl, resolveThumbnailUrl } from "@/lib/video/storage";
 
-const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
-const UQLOAD_SNAPSHOT_LIMIT = 300 * 1024;
+/** Groq metadata plus the Uqload hand-off can take a few seconds each. */
+export const maxDuration = 60;
 
+/**
+ * Publishes a video the browser has already streamed into Supabase Storage.
+ *
+ * Only the storage path travels through this route, so the request stays a few
+ * hundred bytes and never trips Vercel's 4.5 MB function body limit. Uqload
+ * pulls the actual bytes itself from a signed download URL, which also keeps
+ * this function from buffering a multi-gigabyte file in memory.
+ *
+ * Legacy clients that posted the raw file as multipart/form-data are rejected
+ * with an explicit message instead of the opaque
+ * `Unexpected token 'R', "Request En"... is not valid JSON` parse error.
+ */
 export async function POST(req: NextRequest) {
   try {
-    const { user, service } = await requireActiveAdmin();
-    const formData = await req.formData();
-    const file = getOptionalFile(formData, "file");
-    const thumbnail = getOptionalFile(formData, "thumbnail");
-    const categoryId = String(formData.get("categoryId") || "").trim();
+    const contentType = req.headers.get("content-type") || "";
+    if (contentType.includes("multipart/form-data")) {
+      return NextResponse.json(
+        {
+          error: "Video files can no longer be posted to this route",
+          details:
+            "Hosting rejects request bodies above 4.5 MB. Ask /api/videos/storage-token for a signed URL, upload the file to it from the browser, then post the returned storagePath here.",
+        },
+        { status: 415 }
+      );
+    }
 
-    if (!file) return NextResponse.json({ error: "Select a video file" }, { status: 400 });
+    const { user, service } = await requireActiveAdmin();
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+
+    const categoryId = String(body.categoryId || "").trim();
+    const storagePath = assertOwnTransitPath(user.id, String(body.storagePath || ""));
+    const fileName = String(body.fileName || storagePath.split("/").pop() || "uploaded-video").slice(0, 240);
+    const fileSize = Number.isFinite(Number(body.fileSize)) ? Number(body.fileSize) : null;
+    const thumbnailUrl = resolveThumbnailUrl(service, user.id, body.thumbnailPath ?? null);
+
     if (!categoryId) return NextResponse.json({ error: "Choose a category" }, { status: 400 });
-    if (file.size > MAX_FILE_SIZE) return NextResponse.json({ error: "Video file is too large (max 2 GB)" }, { status: 413 });
-    if (!file.type.startsWith("video/")) return NextResponse.json({ error: "Only video files are allowed" }, { status: 400 });
 
     // Local uploads always use Uqload. An operator must explicitly configure
     // its server-only key and policy approval before this route can publish.
     const provider = getVideoProvider("uqload");
-    if (!provider.isEnabled()) {
+    if (!provider.isEnabled() || !(provider instanceof UqloadProvider)) {
       return NextResponse.json(
         {
           error: "Uqload upload is not enabled",
@@ -41,11 +65,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const thumbnailUrl = await uploadThumbnail({ service, userId: user.id, file: thumbnail });
     const generated = await createGeneratedVideo({
       service,
       userId: user.id,
-      sourceName: file.name,
+      sourceName: fileName,
       categoryId,
       provider: "uqload",
       thumbnailUrl,
@@ -54,24 +77,14 @@ export async function POST(req: NextRequest) {
       service,
       videoId: generated.video.id,
       userId: user.id,
-      fileName: file.name,
-      fileSize: file.size,
+      fileName,
+      fileSize: fileSize || undefined,
+      storagePath,
     });
 
     try {
-      const server = await provider.getUploadServer();
-      const result = await provider.uploadFile(server, file, {
-        fileName: file.name,
-        fileSize: file.size,
-        title: generated.metadata.title,
-        description: generated.metadata.description,
-        tags: generated.metadata.tags.join(", "),
-        mimeType: file.type,
-        // Uqload limits custom snapshots to 300 KB. The full thumbnail is
-        // still stored in video-thumbnails and used on our site.
-        snapshot: thumbnail && thumbnail.size <= UQLOAD_SNAPSHOT_LIMIT ? thumbnail : undefined,
-        snapshotFileName: thumbnail?.name,
-      });
+      const downloadUrl = await createTransitDownloadUrl(service, storagePath);
+      const result = await provider.uploadByUrl(downloadUrl, { tags: generated.metadata.tags.join(", ") });
 
       const video = await publishVideo({
         service,
@@ -89,7 +102,7 @@ export async function POST(req: NextRequest) {
         target_type: "video",
         target_id: generated.video.id,
         level: "info",
-        metadata: { provider: "uqload", file_name: file.name, file_size: file.size },
+        metadata: { provider: "uqload", file_name: fileName, file_size: fileSize, transit_path: storagePath },
       });
 
       return NextResponse.json({

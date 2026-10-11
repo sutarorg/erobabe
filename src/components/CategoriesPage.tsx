@@ -2,22 +2,6 @@
 import { ArrowRight } from "lucide-react";
 import { ALL_CATEGORIES } from "../data/content";
 
-/** Keyed by the displayed tile name. */
-const COUNTS: Record<string, string> = {
-  Mature: "248 videos",
-  Amateur: "176 videos",
-  POV: "112 videos",
-  Lesbian: "96 videos",
-  Kinky: "88 videos",
-  "Mature 18+": "134 videos",
-  Couples: "121 videos",
-  Boudoir: "92 videos",
-  Romantic: "118 videos",
-  Solo: "87 videos",
-  Roleplay: "73 videos",
-  Massage: "64 videos",
-};
-
 interface CategoriesPageProps {
   onSelect: (label: string) => void;
 }
@@ -52,7 +36,6 @@ export default function CategoriesPage({ onSelect }: CategoriesPageProps) {
                 <Icon className="h-5 w-5 text-accent" strokeWidth={1.8} aria-hidden />
               </span>
               <span className="mt-3 block text-[14px] font-semibold text-ink">{name}</span>
-              <span className="mt-0.5 block text-[11px] text-ink-3">{COUNTS[name] ?? "—"}</span>
               <span className="mt-2.5 flex items-center gap-1 text-[11px] font-semibold text-accent opacity-0 transition-opacity group-hover:opacity-100">
                 Browse
                 <ArrowRight className="h-3 w-3" aria-hidden />

@@ -70,7 +70,8 @@ This checklist lists all external decisions, approvals, and configurations that 
 - [ ] **Receiving wallet configured**: Authorized wallet address set in Bcon dashboard (e.g., Ethereum address for USDT-ERC20).
 - [ ] **Token and network chosen**: e.g., USDT on Ethereum, or USDT on Tron — set `BCON_PAYMENT_CURRENCY` and `BCON_CHAIN` accordingly.
 - [ ] **API key obtained**: Per-chain API key from Store Settings → Copy Generated Keys → set `BCON_API_KEY`.
-- [ ] **Callback endpoint configured**: `https://YOUR_DOMAIN/api/bcon/callback` set in Bcon dashboard.
+- [ ] **Callback endpoint configured on EVERY chain**: `https://YOUR_DOMAIN/api/bcon/callback` set for `callback_url.btc`, `callback_url.bnb`, and each enabled chain (`eth`, `trx`, `sol`). Bcon validates a per-chain callback field and rejects the store form with `The callback_url.btc must be a string` when any of them is blank.
+- [ ] **Callback verified from the app**: Admin → System Health shows every chain on the Bcon store with its registered `callback_url` and no empty entries.
 - [ ] **Test payments**: Create test payment via `/api/bcon/create` with $1, simulate callback, verify `payments` table status, `payment_events` immutable, invoice paid, campaign activation.
 - [ ] **Verification logic**: Callback validation (external_id, address, txid, amount tolerance) tested, idempotency tested (duplicate callback does not duplicate ledger).
 - [ ] **Under/overpayment handling**: Test underpaid/overpaid cases, ensure logged for admin review, not silently discarded.

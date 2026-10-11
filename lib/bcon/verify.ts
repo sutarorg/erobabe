@@ -21,6 +21,7 @@ export async function verifyAndProcessBconPayment(
     transaction_id?: string;
     value?: string;
     amount?: string;
+    sum?: string;
     external_id?: string;
   }
 ) {
@@ -29,7 +30,8 @@ export async function verifyAndProcessBconPayment(
   const paymentAddress = callback.addr || callback.address;
   const txid = callback.txid || callback.transaction_id;
   const externalId = callback.external_id;
-  const value = callback.value || callback.amount;
+  // Bcon's live callback sends `value`; its Test Payment endpoint sends `sum`.
+  const value = callback.value || callback.amount || callback.sum;
 
   if (!paymentAddress && !externalId) {
     return { ok: false, error: "Missing address and external_id" };

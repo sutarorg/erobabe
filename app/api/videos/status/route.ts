@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getVideoProvider } from "@/lib/video/provider";
+import { removeTransitObject } from "@/lib/video/storage";
 
 export async function GET(req: NextRequest) {
   try {
@@ -63,7 +64,14 @@ export async function GET(req: NextRequest) {
               .select("*")
               .single();
             video = updatedVideo || video;
-            if (job) await service.from("upload_jobs").update({ status: "completed" }).eq("id", job.id);
+            if (job) {
+              await service.from("upload_jobs").update({ status: "completed" }).eq("id", job.id);
+              // The provider has the file now — drop the transit copy.
+              if (job.storage_path) {
+                await removeTransitObject(service, job.storage_path);
+                await service.from("upload_jobs").update({ storage_path: null }).eq("id", job.id);
+              }
+            }
           }
           return NextResponse.json({ video, job, providerInfo });
         }
