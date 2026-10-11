@@ -1,8 +1,18 @@
 /**
  * Video hosting provider abstraction.
- * Keep provider-specific logic out of React components and never expose a
- * provider API key to the browser.
+ * Keep provider-specific logic out of React components. The Uqload API key is
+ * only ever returned to an authenticated admin as a short-lived upload-session
+ * field so the browser can POST the video bytes straight to Uqload.
  */
+
+import { parseUqloadUploadResponse } from "@/lib/video/uqload-response";
+
+export { parseUqloadUploadResponse } from "@/lib/video/uqload-response";
+
+export interface DirectUploadSession {
+  serverUrl: string;
+  fields: Record<string, string>;
+}
 
 export interface UploadRequest {
   fileName: string;
@@ -117,6 +127,23 @@ export class UqloadProvider implements VideoProvider {
     return json.result;
   }
 
+  /**
+   * Server URL + form fields for a browser POST straight to Uqload.
+   * The `key` field is Uqload's documented API-key parameter; it is only
+   * returned to authenticated admins via `/api/videos/uqload-session`.
+   */
+  async getDirectUploadSession(): Promise<DirectUploadSession> {
+    const serverUrl = await this.getUploadServer();
+    return {
+      serverUrl,
+      fields: {
+        key: this.getApiKey(),
+        file_public: "1",
+        file_adult: "1",
+      },
+    };
+  }
+
   async uploadFile(serverUrl: string, file: File | Blob, meta: UploadRequest): Promise<UploadResult> {
     const form = new FormData();
     form.append("key", this.getApiKey());
@@ -129,17 +156,36 @@ export class UqloadProvider implements VideoProvider {
     form.append("file_adult", "1");
 
     const response = await fetch(serverUrl, { method: "POST", body: form, cache: "no-store" });
-    const json = await readJson(response, "Uqload file upload");
-    const uploaded = json?.files?.[0];
-    if (!isProviderSuccess(json.status) || !uploaded?.filecode) {
-      throw new Error(`Uqload file upload failed${json?.msg ? `: ${json.msg}` : ""}`);
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Uqload file upload failed (${response.status})`);
     }
+    const uploaded = parseUqloadUploadResponse(text);
 
     return {
-      providerFileId: String(uploaded.filecode),
+      providerFileId: uploaded.filecode,
       status: "processing",
-      rawResponse: json,
+      rawResponse: uploaded,
     };
+  }
+
+  async editFile(
+    fileId: string,
+    meta: { title?: string; description?: string; tags?: string } = {}
+  ): Promise<boolean> {
+    const response = await fetch(
+      this.apiUrl("file/edit", {
+        file_code: fileId,
+        file_title: meta.title,
+        file_descr: meta.description,
+        tags: meta.tags,
+        file_public: 1,
+        file_adult: 1,
+      }),
+      { cache: "no-store" }
+    );
+    const json = await readJson(response, "Uqload file edit");
+    return isProviderSuccess(json.status);
   }
 
   /** Queue a remote video URL with Uqload's documented /upload/url endpoint. */

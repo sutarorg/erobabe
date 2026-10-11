@@ -17,7 +17,8 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { postJson } from "@/src/utils/api";
 import { splitEmbedEntries, splitUrlEntries } from "@/lib/video/entries";
-import { uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
+import { uploadFormWithProgress, uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
+import { parseUqloadUploadResponse } from "@/lib/video/uqload-response";
 
 type Category = { id: string; label: string };
 type UploadMode = "files" | "embed" | "url";
@@ -45,6 +46,12 @@ type Item = {
 
 const THUMBNAIL_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024;
+const MAX_UQLOAD_SNAPSHOT = 300 * 1024;
+const VIDEO_EXTENSION = /\.(mp4|webm|mov|m4v|mkv|avi|wmv|flv|ts|mpg|mpeg|3gp)$/i;
+
+function isVideoFile(file: File) {
+  return file.type.startsWith("video/") || VIDEO_EXTENSION.test(file.name);
+}
 
 function readableSize(size: number) {
   if (size > 1024 * 1024 * 1024) return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`;
@@ -150,7 +157,7 @@ export default function UploadPage() {
   }
 
   function chooseLocalVideos(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("video/"));
+    const files = Array.from(event.target.files || []).filter(isVideoFile);
     if (!files.length) {
       setNotice("No video files were selected.");
       return;
@@ -254,39 +261,48 @@ export default function UploadPage() {
     // would silently drop the thumbnail.
     let thumbnailPath = item.thumbnailPath;
 
-    // 0–12%: thumbnail, 12–92%: the video itself, 92–100%: Groq + Uqload.
+    // 0–8%: thumbnail, 8–88%: Uqload, 88–100%: Groq metadata.
     if (item.thumbnail && !thumbnailPath) {
       patchItem(item.id, { phase: "uploading", detail: "Uploading thumbnail…", percent: 0 });
       thumbnailPath = await uploadThumbnailFile(item, controller, (percent) =>
-        patchItem(item.id, { percent: Math.round(percent * 0.12) })
+        patchItem(item.id, { percent: Math.round(percent * 0.08) })
       );
-      patchItem(item.id, { thumbnailPath, percent: 12 });
+      patchItem(item.id, { thumbnailPath, percent: 8 });
     }
 
-    const target = await postJson<{ uploadUrl: string; storagePath: string }>("/api/videos/storage-token", {
-      kind: "video",
+    patchItem(item.id, { phase: "uploading", detail: "Connecting to Uqload…", percent: 10 });
+    const session = await postJson<{ serverUrl: string; fields: Record<string, string> }>("/api/videos/uqload-session", {
       fileName: item.file.name,
       fileSize: item.file.size,
       mimeType: item.file.type,
     });
+    if (!session?.serverUrl) throw new Error("Uqload did not return an upload server");
+
+    const form = new FormData();
+    for (const [name, value] of Object.entries(session.fields || {})) form.append(name, value);
+    form.append("file", item.file, item.file.name);
+    form.append("file_title", item.file.name.replace(/\.[^.]+$/, "").slice(0, 160) || item.file.name);
+    if (item.thumbnail && item.thumbnail.size <= MAX_UQLOAD_SNAPSHOT) {
+      form.append("snapshot", item.thumbnail, item.thumbnail.name);
+    }
 
     let speed: number | null = null;
-    await uploadWithProgress(target.uploadUrl, item.file, {
-      contentType: item.file.type,
+    const responseText = await uploadFormWithProgress(session.serverUrl, form, {
       signal: controller.signal,
       onProgress: (progress) => {
         speed = progress.bytesPerSecond;
         patchItem(item.id, {
           phase: "uploading",
-          percent: 12 + Math.round(progress.percent * 0.8),
-          detail: `Uploading ${readableSize(progress.loaded)} of ${readableSize(progress.total)}${readableSpeed(speed)}`,
+          percent: 10 + Math.round(progress.percent * 0.75),
+          detail: `Uploading to Uqload ${readableSize(progress.loaded)} of ${readableSize(progress.total)}${readableSpeed(speed)}`,
         });
       },
     });
+    const uploaded = parseUqloadUploadResponse(responseText);
 
-    patchItem(item.id, { phase: "processing", percent: 93, detail: "Generating AI metadata…" });
+    patchItem(item.id, { phase: "processing", percent: 90, detail: "Generating AI metadata…" });
     const json = await postJson<any>("/api/videos/upload", {
-      storagePath: target.storagePath,
+      providerFileId: uploaded.filecode,
       thumbnailPath: thumbnailPath || null,
       categoryId,
       fileName: item.file.name,
@@ -392,7 +408,7 @@ export default function UploadPage() {
   }
 
   const modes: { key: UploadMode; label: string; icon: typeof CloudUpload; description: string }[] = [
-    { key: "files", label: "Upload videos", icon: CloudUpload, description: "Stream local video files straight to storage — no size limit from the web server." },
+    { key: "files", label: "Upload videos", icon: CloudUpload, description: "Files POST directly to Uqload from your browser — they never touch our storage bucket." },
     { key: "embed", label: "Embed by iframe", icon: PlaySquare, description: "Publish trusted iframe sources, each with its own thumbnail." },
     { key: "url", label: "Upload by link", icon: Link2, description: "Send direct video URLs to Uqload, each with its own thumbnail." },
   ];
@@ -466,7 +482,7 @@ export default function UploadPage() {
               <Film aria-hidden="true" className="mx-auto h-6 w-6 text-ink-3" />
               <p className="mt-2 text-[13px] font-medium">Select one or more video files</p>
               <p className="mt-1 text-[11px] text-ink-3">
-                Files stream directly to storage, so large videos are fine. Each one gets AI metadata and its own optional thumbnail.
+                Files upload directly to Uqload, so large videos are fine. Each one gets AI metadata and its own optional thumbnail.
               </p>
               <label className="mt-4 inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-line bg-card px-4 text-[12px] font-semibold hover:bg-card-hover">
                 <Plus aria-hidden="true" className="h-4 w-4" />

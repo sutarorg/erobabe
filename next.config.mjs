@@ -2,6 +2,13 @@
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  compress: true,
+  experimental: {
+    staleTimes: {
+      dynamic: 30,
+      static: 180,
+    },
+  },
   images: {
     remotePatterns: [
       { protocol: 'https', hostname: 'i.postimg.cc' },
@@ -11,6 +18,12 @@ const nextConfig = {
       { protocol: 'https', hostname: '**.bcon.global' },
       { protocol: 'https', hostname: '**.resend.com' },
     ],
+  },
+  async redirects() {
+    return [
+      { source: '/browse', destination: '/browser', permanent: false },
+      { source: '/browse/:path*', destination: '/browser', permanent: false },
+    ];
   },
   async headers() {
     return [

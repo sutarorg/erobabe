@@ -14,6 +14,17 @@ test.describe("SEO acceptance", () => {
     expect(page.url()).not.toContain("#");
   });
 
+  test("/browser page loads", async ({ page }) => {
+    const res = await page.goto("/browser");
+    expect(res?.status()).toBe(200);
+    await expect(page.locator("h1")).toContainText(/all videos/i);
+  });
+
+  test("/browse redirects to /browser", async ({ page }) => {
+    await page.goto("/browse");
+    await expect(page).toHaveURL(/\/browser/);
+  });
+
   test("video page returns 404 for missing video", async ({ page }) => {
     const res = await page.goto("/video/nonexistent-slug-12345");
     expect(res?.status()).toBe(404);

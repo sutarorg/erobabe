@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Eye, EyeOff } from "lucide-react";
+import BackToHome from "../BackToHome";
 
 function SignInForm() {
   const [email, setEmail] = useState("");
@@ -93,10 +94,13 @@ function SignInForm() {
 
 export default function SignInPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-void px-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-void px-4">
       <Suspense fallback={<div className="text-[12px] text-ink-3">Loading...</div>}>
         <SignInForm />
       </Suspense>
+      <div className="mt-5">
+        <BackToHome />
+      </div>
     </div>
   );
 }

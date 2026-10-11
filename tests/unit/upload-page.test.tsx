@@ -133,11 +133,11 @@ describe("per-video progress bar", () => {
       "fetch",
       vi.fn(async (url: any) => {
         const path = String(url);
-        if (path.includes("storage-token")) {
-          return new Response(JSON.stringify({ uploadUrl: "https://storage.example/put", storagePath: "u/1/a.mp4" }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
+        if (path.includes("uqload-session")) {
+          return new Response(
+            JSON.stringify({ serverUrl: "https://s1.uqload.example/upload/01", fields: { key: "test-key", file_public: "1", file_adult: "1" } }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
         }
         return new Response(JSON.stringify({ error: "stop here" }), {
           status: 500,
@@ -149,6 +149,7 @@ describe("per-video progress bar", () => {
       "XMLHttpRequest",
       class {
         upload: any = {};
+        responseText = JSON.stringify({ status: 200, msg: "OK", files: [{ filecode: "abc123", filename: "clip.mp4", status: "OK" }] });
         open(_m: string, url: string) {
           uploads.push(url);
         }
@@ -179,7 +180,7 @@ describe("per-video progress bar", () => {
     // The failure from the stubbed publish route is shown inline on the row,
     // proving the per-item state machine (not a global error banner) ran.
     expect(await screen.findByText("stop here")).toBeTruthy();
-    expect(uploads).toContain("https://storage.example/put");
+    expect(uploads).toContain("https://s1.uqload.example/upload/01");
 
     vi.unstubAllGlobals();
   });

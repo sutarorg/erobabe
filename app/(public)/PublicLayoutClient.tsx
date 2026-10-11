@@ -8,14 +8,7 @@ import AgeGate from "@/src/components/AgeGate";
 import type { NavKey } from "@/src/components/Header";
 import { useRouter, usePathname } from "next/navigation";
 
-interface Slot {
-  id: number;
-  name: string;
-  side: string;
-}
-
 interface ActiveCampaign {
-  id: string;
   slot_id: number;
   creative: {
     id: string;
@@ -28,11 +21,9 @@ interface ActiveCampaign {
 
 export default function PublicLayoutClient({
   children,
-  slots,
   activeCampaigns,
 }: {
   children: React.ReactNode;
-  slots: Slot[];
   activeCampaigns: ActiveCampaign[];
 }) {
   const router = useRouter();
@@ -46,6 +37,7 @@ export default function PublicLayoutClient({
     if (pathname.startsWith("/categories") || pathname.startsWith("/category")) return "categories";
     if (pathname.startsWith("/latest")) return "latest";
     if (pathname.startsWith("/popular")) return "toprated";
+    if (pathname.startsWith("/browser") || pathname.startsWith("/browse")) return "browse";
     return "home";
   };
 
@@ -65,12 +57,11 @@ export default function PublicLayoutClient({
         router.push("/popular");
         break;
       case "browse":
-        router.push("/categories");
+        router.push("/browser");
         break;
     }
   };
 
-  // Search handling - if query present, redirect to search page (we use /?q=)
   const handleSearch = (q: string) => {
     setQuery(q);
     if (q.trim()) {
@@ -80,7 +71,7 @@ export default function PublicLayoutClient({
 
   return (
     <div className="grid h-screen grid-cols-1 bg-void text-ink min-[1000px]:grid-cols-[minmax(0,1fr)_minmax(0,3fr)_minmax(0,1fr)]">
-      <AdRail side="left" start={1} onAdvertise={() => router.push("/advertiser")} />
+      <AdRail side="left" start={1} onAdvertise={() => router.push("/advertiser")} activeCampaigns={activeCampaigns} />
 
       <main className="no-scrollbar relative h-screen min-h-0 min-w-0 overflow-y-auto bg-panel">
         <Header
@@ -95,19 +86,21 @@ export default function PublicLayoutClient({
           user={null}
           onSignInClick={() => router.push("/auth/sign-in")}
           onSignOut={() => {}}
+          useLinks
         />
         <div className="mx-auto w-full max-w-[1200px] px-4 pb-10 @sm:px-5 @2xl:px-7">
           {children}
         </div>
         <Footer
           onNavigate={navigate}
-          onOpenPage={(p) => router.push(`/${p}`)}
+          onOpenPage={(p) => router.push(p === "removal" ? "/content-removal" : `/${p}`)}
           onAdvertise={() => router.push("/advertiser")}
           onAdmin={() => router.push("/admin")}
+          useLinks
         />
       </main>
 
-      <AdRail side="right" start={6} onAdvertise={() => router.push("/advertiser")} />
+      <AdRail side="right" start={6} onAdvertise={() => router.push("/advertiser")} activeCampaigns={activeCampaigns} />
       <AgeGate />
     </div>
   );

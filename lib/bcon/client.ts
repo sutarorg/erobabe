@@ -43,6 +43,41 @@ export function bconCallbackUrl(siteUrl: string): string {
   return `${origin}/api/bcon/callback`;
 }
 
+/**
+ * Bcon's merchant-platforms form validates `callback_url` as an OBJECT of
+ * per-chain strings (`callback_url.btc`, `callback_url.bnb`, …). Pasting a
+ * bare URL string into that field produces:
+ *   "The callback_url.btc must be a string. (and 2 more errors)"
+ * because `.btc` on a string is undefined.
+ *
+ * Every value here is a non-empty string — never null, never nested.
+ */
+export type BconCallbackUrlMap = {
+  btc: string;
+  bnb: string;
+  eth: string;
+  trx: string;
+  sol: string;
+};
+
+export function bconCallbackUrlMap(siteUrl: string): BconCallbackUrlMap {
+  const url = bconCallbackUrl(siteUrl);
+  if (typeof url !== "string" || !url.startsWith("http")) {
+    throw new Error("callback_url.btc must be a string");
+  }
+  const map: BconCallbackUrlMap = { btc: url, bnb: url, eth: url, trx: url, sol: url };
+  for (const [code, value] of Object.entries(map)) {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(`callback_url.${code} must be a string`);
+    }
+  }
+  return map;
+}
+
+export function bconMerchantCallbackPayload(siteUrl: string): { callback_url: BconCallbackUrlMap } {
+  return { callback_url: bconCallbackUrlMap(siteUrl) };
+}
+
 export interface BconCreateAddressParams {
   payment_currency: string; // USDT, USDC, BTC...
   origin_amount: string; // e.g. "99"
@@ -287,6 +322,9 @@ export interface BconChainCheck {
 export interface BconSetupReport {
   configured: boolean;
   callbackUrl: string;
+  /** Per-chain strings for Bcon's merchant-platforms `callback_url` object. */
+  callbackUrlMap: BconCallbackUrlMap;
+  merchantPayload: { callback_url: BconCallbackUrlMap };
   expectedChain: string;
   expectedChainCode: string;
   paymentCurrency: string;
@@ -305,12 +343,16 @@ export interface BconSetupReport {
  */
 export async function inspectBconSetup(siteUrl: string): Promise<BconSetupReport> {
   const callbackUrl = bconCallbackUrl(siteUrl);
+  const callbackUrlMap = bconCallbackUrlMap(siteUrl);
+  const merchantPayload = { callback_url: callbackUrlMap };
   const expectedChain = (process.env.BCON_CHAIN || "ethereum").trim().toLowerCase();
   const expectedChainCode = bconChainCode(expectedChain);
 
   const report: BconSetupReport = {
     configured: Boolean(process.env.BCON_API_KEY),
     callbackUrl,
+    callbackUrlMap,
+    merchantPayload,
     expectedChain,
     expectedChainCode,
     paymentCurrency: (process.env.BCON_PAYMENT_CURRENCY || "USDT").toUpperCase(),
@@ -339,4 +381,76 @@ export async function inspectBconSetup(siteUrl: string): Promise<BconSetupReport
   }));
   report.missingCallbackChains = report.chains.filter((chain) => !chain.callbackUrl).map((chain) => chain.code);
   return report;
+}
+
+async function bconJson(method: string, path: string, body: unknown): Promise<{ ok: boolean; status: number; json: any; text: string }> {
+  const apiKey = process.env.BCON_API_KEY;
+  if (!apiKey) throw new Error("Missing BCON_API_KEY");
+
+  const res = await fetch(`${BCON_API_V1}/${path.replace(/^\/+/, "")}`, {
+    method,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = null;
+  }
+  return { ok: res.ok, status: res.status, json, text };
+}
+
+/**
+ * Pushes the per-chain callback URL object (all values strings) to Bcon so
+ * merchant-platforms stops rejecting the store with
+ * `The callback_url.btc must be a string`.
+ */
+export async function applyBconStoreCallbacks(siteUrl: string): Promise<{
+  ok: boolean;
+  applied: boolean;
+  status?: number;
+  error?: string;
+  payload: { callback_url: BconCallbackUrlMap };
+}> {
+  const payload = bconMerchantCallbackPayload(siteUrl);
+  const store = await getBconStore().catch(() => null);
+  const paths = [
+    store?.id ? `stores/${store.id}` : "",
+    "stores",
+    "stores/update",
+    "stores/get_store",
+  ].filter(Boolean);
+
+  let lastError = "Bcon did not accept a store update";
+  let lastStatus: number | undefined;
+  for (const path of paths) {
+    for (const method of ["PUT", "PATCH", "POST"]) {
+      const result = await bconJson(method, path, payload);
+      lastStatus = result.status;
+      if (result.ok) {
+        return { ok: true, applied: true, status: result.status, payload };
+      }
+      const message =
+        (typeof result.json?.message === "string" && result.json.message) ||
+        (typeof result.json?.error === "string" && result.json.error) ||
+        result.text.slice(0, 200);
+      lastError = `Bcon API ${method} /${path} → ${result.status}${message ? `: ${message}` : ""}`;
+      // 404/405 mean "this verb/path isn't the store update endpoint" — try the next.
+      if (result.status !== 404 && result.status !== 405 && result.status !== 422) {
+        // Other errors (401, 500) are not worth retrying across every combo.
+        if (result.status === 401 || result.status === 403) {
+          return { ok: false, applied: false, status: result.status, error: lastError, payload };
+        }
+      }
+    }
+  }
+
+  return { ok: false, applied: false, status: lastStatus, error: lastError, payload };
 }

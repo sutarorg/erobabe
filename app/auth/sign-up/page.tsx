@@ -4,6 +4,7 @@ import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 import { Eye, EyeOff } from "lucide-react";
+import BackToHome from "../BackToHome";
 
 export default function SignUpPage() {
   const [email, setEmail] = useState("");
@@ -48,6 +49,9 @@ export default function SignUpPage() {
           <h1 className="text-[18px] font-semibold">Check your email</h1>
           <p className="mt-2 text-[12px] text-ink-3">We sent a verification link to {email}. Please verify to continue.</p>
           <Link href="/auth/sign-in" className="mt-4 inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white">Go to sign in</Link>
+          <div className="mt-5 flex justify-center">
+            <BackToHome />
+          </div>
         </div>
       </div>
     );
@@ -105,6 +109,9 @@ export default function SignUpPage() {
         <p className="mt-4 text-center text-[11px] text-ink-3">
           Already have an account? <Link href="/auth/sign-in" className="text-accent hover:underline">Sign in</Link>
         </p>
+        <div className="mt-5 flex justify-center">
+          <BackToHome />
+        </div>
       </div>
     </div>
   );

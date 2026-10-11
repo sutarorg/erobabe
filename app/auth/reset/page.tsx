@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
+import BackToHome from "../BackToHome";
 
 export default function ResetPage() {
   const [email, setEmail] = useState("");
@@ -34,6 +35,9 @@ export default function ResetPage() {
           </form>
         )}
         <Link href="/auth/sign-in" className="mt-4 block text-center text-[11px] text-accent hover:underline">Back to sign in</Link>
+        <div className="mt-5 flex justify-center">
+          <BackToHome />
+        </div>
       </div>
     </div>
   );

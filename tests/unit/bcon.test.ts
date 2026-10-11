@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   bconCallbackAmount,
   bconCallbackUrl,
+  bconCallbackUrlMap,
   bconChainCode,
+  bconMerchantCallbackPayload,
   createBconExternalId,
   mapBconStatus,
   normalizeBconStore,
@@ -46,6 +48,30 @@ describe("bcon store configuration", () => {
   it("builds the callback URL every chain must point at", () => {
     expect(bconCallbackUrl("https://erobabe.vercel.app")).toBe("https://erobabe.vercel.app/api/bcon/callback");
     expect(bconCallbackUrl("https://erobabe.vercel.app/")).toBe("https://erobabe.vercel.app/api/bcon/callback");
+  });
+
+  it("builds a merchant-platforms callback_url object of strings", () => {
+    const payload = bconMerchantCallbackPayload("https://erobabe.com");
+    expect(payload.callback_url.btc).toBe("https://erobabe.com/api/bcon/callback");
+    expect(typeof payload.callback_url.btc).toBe("string");
+    expect(typeof payload.callback_url.bnb).toBe("string");
+    expect(typeof payload.callback_url.eth).toBe("string");
+    expect(Object.values(payload.callback_url).every((value) => typeof value === "string" && value.length > 0)).toBe(true);
+    // A bare string in callback_url is exactly what Bcon rejects as
+    // "The callback_url.btc must be a string".
+    expect(typeof payload.callback_url).toBe("object");
+    expect(Array.isArray(payload.callback_url)).toBe(false);
+  });
+
+  it("maps every supported chain to the same https callback string", () => {
+    const map = bconCallbackUrlMap("https://erobabe.com");
+    expect(map).toEqual({
+      btc: "https://erobabe.com/api/bcon/callback",
+      bnb: "https://erobabe.com/api/bcon/callback",
+      eth: "https://erobabe.com/api/bcon/callback",
+      trx: "https://erobabe.com/api/bcon/callback",
+      sol: "https://erobabe.com/api/bcon/callback",
+    });
   });
 
   it("reads the amount from value, amount, or sum", () => {
