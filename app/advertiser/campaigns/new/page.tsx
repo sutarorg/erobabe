@@ -16,6 +16,40 @@ type Slot = {
   available: boolean;
 };
 
+/** Asset/network combinations the server accepts (see lib/nowpayments). */
+const PAY_OPTIONS = [
+  { paymentCurrency: "USDT", chain: "ethereum", label: "USDT on Ethereum" },
+  { paymentCurrency: "USDT", chain: "tron", label: "USDT on Tron" },
+  { paymentCurrency: "USDT", chain: "binance", label: "USDT on BNB Smart Chain" },
+  { paymentCurrency: "USDT", chain: "solana", label: "USDT on Solana" },
+  { paymentCurrency: "BTC", chain: "bitcoin", label: "BTC on Bitcoin" },
+  { paymentCurrency: "ETH", chain: "ethereum", label: "ETH on Ethereum" },
+  { paymentCurrency: "TRX", chain: "tron", label: "TRX on Tron" },
+  { paymentCurrency: "BNB", chain: "binance", label: "BNB on BNB Smart Chain" },
+  { paymentCurrency: "SOL", chain: "solana", label: "SOL on Solana" },
+];
+
+type PaymentState = "awaiting_payment" | "confirming" | "confirmed" | "manual_review" | "failed" | "expired" | "refunded";
+
+function stateBanner(state: PaymentState | null): { text: string; tone: string } {
+  switch (state) {
+    case "confirmed":
+      return { text: "Payment confirmed — your campaign moves to review/activation.", tone: "bg-emerald-500/10 text-emerald-200" };
+    case "confirming":
+      return { text: "Payment detected — waiting for blockchain confirmations. This page updates automatically.", tone: "bg-sky-500/10 text-sky-200" };
+    case "manual_review":
+      return { text: "Payment needs manual review (partial or mismatched amount). Support will reconcile it — do not pay again yet.", tone: "bg-amber-500/10 text-amber-200" };
+    case "expired":
+      return { text: "This payment expired before the funds arrived. Start a new checkout to get a fresh address.", tone: "bg-red-500/10 text-red-300" };
+    case "failed":
+      return { text: "This payment failed. Start a new checkout or contact support.", tone: "bg-red-500/10 text-red-300" };
+    case "refunded":
+      return { text: "This payment was refunded. Contact support if you did not expect this.", tone: "bg-amber-500/10 text-amber-200" };
+    default:
+      return { text: "Waiting for your payment. This page updates automatically once it is detected.", tone: "bg-white/5 text-ink-2" };
+  }
+}
+
 function NewCampaignForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -30,6 +64,8 @@ function NewCampaignForm() {
   const [slotsLoading, setSlotsLoading] = useState(true);
   const [error, setError] = useState("");
   const [paymentInfo, setPaymentInfo] = useState<any>(null);
+  const [payOption, setPayOption] = useState(0);
+  const [paymentState, setPaymentState] = useState<PaymentState | null>(null);
 
   useEffect(() => {
     let current = true;
@@ -171,23 +207,25 @@ function NewCampaignForm() {
       if (campaignError || !campaigns?.length) throw new Error(campaignError?.message || "Unable to create campaigns");
       campaignIds = campaigns.map((campaign: any) => campaign.id);
 
-      const response = await fetch("/api/bcon/create", {
+      const selected = PAY_OPTIONS[payOption] || PAY_OPTIONS[0];
+      const response = await fetch("/api/nowpayments/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           campaignIds,
           slotIds: selectedSlotIds,
           durationMonths: duration,
-          paymentCurrency: "USDT",
-          chain: "ethereum",
+          paymentCurrency: selected.paymentCurrency,
+          chain: selected.chain,
         }),
       });
       const json = await response.json();
-      if (!response.ok) throw new Error(json.error || "Payment creation failed");
+      if (!response.ok) throw new Error(json.details ? `${json.error}: ${json.details}` : json.error || "Payment creation failed");
 
       setPaymentInfo(json);
+      setPaymentState("awaiting_payment");
     } catch (submitError: any) {
-      // Bcon only links a payment after it has successfully created an address.
+      // NOWPayments only links a payment after it has successfully created an address.
       // Remove a failed browser-side draft so it does not incorrectly reserve a slot.
       if (campaignIds.length) {
         const supabase = createClient();
@@ -203,12 +241,45 @@ function NewCampaignForm() {
     }
   }
 
+  useEffect(() => {
+    if (!paymentInfo?.paymentId) return;
+    let stopped = false;
+    async function poll() {
+      try {
+        const response = await fetch(`/api/nowpayments/status?paymentId=${paymentInfo.paymentId}`, { cache: "no-store" });
+        const json = await response.json().catch(() => null);
+        if (!response.ok || !json || stopped) return;
+        if (typeof json.state === "string") setPaymentState(json.state as PaymentState);
+        if (json.state === "confirmed" || json.state === "failed" || json.state === "expired" || json.state === "refunded") {
+          stopped = true;
+        }
+      } catch {
+        // A failed poll never breaks the screen — the next tick retries.
+      }
+    }
+    void poll();
+    const timer = setInterval(() => {
+      if (!stopped) void poll();
+    }, 8000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [paymentInfo?.paymentId]);
+
   if (paymentInfo) {
+    const banner = stateBanner(paymentState);
     return (
       <div className="max-w-xl">
         <h1 className="text-[20px] font-semibold">Complete payment</h1>
         <p className="mt-1 text-[12px] text-ink-3">Your campaign{paymentInfo.slotIds?.length > 1 ? "s are" : " is"} reserved pending payment.</p>
         <div className="mt-6 space-y-4 rounded-lg border border-line bg-pcard p-5">
+          <div className={`flex items-center gap-2 rounded-md p-3 text-[11px] ${banner.tone}`}>
+            {(paymentState === "awaiting_payment" || paymentState === "confirming" || !paymentState) && (
+              <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+            )}
+            {banner.text}
+          </div>
           <div>
             <p className="text-[11px] text-ink-3">Selected slots</p>
             <p className="mt-1 text-[14px] font-semibold">{(paymentInfo.slotIds || []).map((slotId: number) => `Slot ${slotId}`).join(", ")}</p>
@@ -216,14 +287,14 @@ function NewCampaignForm() {
           <div>
             <p className="text-[11px] text-ink-3">Amount due</p>
             <p className="text-[18px] font-semibold">${paymentInfo.priceUSD} USD</p>
-            <p className="text-[12px]">{paymentInfo.amount} {paymentInfo.paymentCurrency} on {paymentInfo.chain}</p>
+            <p className="text-[12px]">{paymentInfo.amount} {paymentInfo.paymentCurrency} on {paymentInfo.network || paymentInfo.chain}</p>
           </div>
           <div>
             <p className="text-[11px] text-ink-3">Receiving address</p>
             <p className="mt-1 break-all rounded-md bg-void p-3 font-mono text-[12px]">{paymentInfo.address}</p>
             <button type="button" onClick={() => navigator.clipboard.writeText(paymentInfo.address)} className="mt-2 h-8 rounded-md border border-line bg-card px-3 text-[11px]">Copy address</button>
           </div>
-          <div className="rounded-md bg-amber-500/10 p-3 text-[11px] text-amber-200">Send exactly the displayed amount on the selected network. The campaign activates only after Bcon confirms the payment and the creative review completes.</div>
+          <div className="rounded-md bg-amber-500/10 p-3 text-[11px] text-amber-200">Send exactly the displayed amount on the selected network. The campaign activates only after NOWPayments confirms the payment and the creative review completes.</div>
           <p className="text-[11px] text-ink-3">Invoice: {paymentInfo.invoiceNumber} • Expires: {new Date(paymentInfo.expiresAt).toLocaleString()}</p>
         </div>
         <button type="button" onClick={() => router.push("/advertiser/campaigns")} className="mt-5 h-9 rounded-md bg-accent px-4 text-[12px] font-semibold text-white">View campaigns</button>
@@ -307,6 +378,15 @@ function NewCampaignForm() {
                 <option value={6}>6 months</option>
                 <option value={12}>12 months</option>
               </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-medium">Payment asset & network *</span>
+              <select value={payOption} onChange={(event) => setPayOption(Number(event.target.value))} className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]">
+                {PAY_OPTIONS.map((option, index) => (
+                  <option key={`${option.paymentCurrency}-${option.chain}`} value={index}>{option.label}</option>
+                ))}
+              </select>
+              <span className="mt-1 block text-[10.5px] text-ink-3">Pay with crypto via NOWPayments. Send exactly the quoted amount on this network.</span>
             </label>
             <label className="block">
               <span className="mb-1 block text-[11px] font-medium">Destination URL *</span>

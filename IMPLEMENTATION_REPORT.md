@@ -4,6 +4,161 @@
 **Branch**: arena/2ee39806-erobabe  
 **Base**: Next.js 15 App Router, Supabase, Bcon Global, Resend, Groq
 
+> **Current providers (2026-10-11 migration, below):** NOWPayments for
+> cryptocurrency payments and Google's Gemini API for AI metadata. The original
+> report body is retained as history; the migration section describes the
+> active implementation.
+
+---
+
+## 2026-10-11 — NOWPayments + Gemini provider migration
+
+**Branch**: arena/d547af1d-erobabe
+
+### Summary
+
+- **Payments:** Bcon Global was removed as the active provider. Advertiser
+  checkout now creates payments with NOWPayments (`POST
+  https://api.nowpayments.io/v1/payment`, `x-api-key` auth), stores the
+  provider payment id / address / crypto amount / asset, and completes
+  payments only on a correctly signed IPN (`x-nowpayments-sig`,
+  HMAC-SHA512 over key-sorted JSON with `NOWPAYMENTS_IPN_SECRET`)
+  corroborated by an authenticated `GET /v1/payment/{id}` plus an
+  integer-math amount check. Only provider `finished` fulfills; `confirmed`
+  is intermediate; partial payments wait for manual review.
+- **AI metadata:** Groq (`groq-sdk`) was removed. Admin video metadata
+  suggestions now use Google's Gemini API via the official `@google/genai`
+  SDK (`GEMINI_API_KEY`, `GEMINI_MODEL`, default `gemini-flash-latest`),
+  with structured-JSON output, Zod validation, tag/category allowlists, and
+  an admin-only, rate-limited suggestion route. No silent fallback remains.
+- **UI/UX preserved:** same dashboards, same checkout flow (plus an explicit
+  asset/network selector and live status polling), same brand and styling.
+
+### Files added
+
+- `lib/nowpayments/client.ts` — API client (payment create/lookup, `/v1/status`
+  health check, currency allowlist, status map, integer-math amount compare,
+  IPN signature verification, setup inspection).
+- `lib/nowpayments/verify.ts` — IPN verification, idempotent processing,
+  fulfillment (`confirmNowpaymentsPayment`), refund/expired/failed handling.
+- `app/api/nowpayments/create/route.ts` — authenticated checkout.
+- `app/api/nowpayments/ipn/route.ts` — public signed IPN endpoint (+ probes).
+- `app/api/nowpayments/status/route.ts` — authenticated status polling with
+  throttled verified refresh.
+- `app/api/admin/nowpayments/route.ts` — admin integration-health API.
+- `app/admin/system-health/NowpaymentsCheck.tsx` — admin diagnostics panel.
+- `supabase/migrations/00000000000005_nowpayments.sql` — additive migration
+  (`provider`, `provider_payment_id` unique, `provider_status`,
+  `pay_currency`, `provider_response`; history preserved).
+- `lib/gemini/client.ts` — server-only Gemini client + validation.
+- `app/api/gemini/suggest/route.ts` — admin-only suggestion route.
+- `tests/unit/nowpayments.test.ts` (client: mapping, statuses, amounts,
+  signatures, API behavior), `tests/unit/nowpayments-ipn-route.test.ts`
+  (IPN route), `tests/unit/nowpayments-create-route.test.ts` (checkout),
+  `tests/unit/gemini.test.ts` (client + route).
+- `tests/e2e/payments.spec.ts` — public-surface e2e (probes, auth guards,
+  retired routes).
+
+### Files removed
+
+- `lib/bcon/client.ts`, `lib/bcon/verify.ts`, `app/api/bcon/create/route.ts`,
+  `app/api/bcon/callback/route.ts`, `app/api/admin/bcon/route.ts`,
+  `app/admin/system-health/BconStoreCheck.tsx`, `lib/groq/client.ts`,
+  `app/api/groq/suggest/route.ts`, `tests/unit/bcon.test.ts`,
+  `tests/unit/bcon-callback-route.test.ts`.
+- Dependency `groq-sdk` removed; `@google/genai@^2` added (lockfile updated).
+
+### Files changed (notable)
+
+- `app/advertiser/campaigns/new/page.tsx` — NOWPayments endpoint,
+  asset/network selector, live status polling, updated copy.
+- `app/advertiser/payments/page.tsx`, `app/admin/payments/page.tsx` —
+  provider-aware columns, updated copy.
+- `app/admin/system-health/page.tsx` — NOWPayments + Gemini health checks.
+- `lib/video/publishing.ts` — Gemini client, updated error text.
+- `middleware.ts` — public IPN path exclusion updated.
+- `next.config.mjs` — retired provider image host removed.
+- `app/(public)/faq/page.tsx`, `app/(public)/terms/page.tsx`,
+  `src/portal/data.ts`, `app/api/videos/upload/route.ts`,
+  `app/admin/videos/upload/page.tsx` — provider copy updated.
+- `tests/unit/helpers/fake-supabase.ts` — `neq`/`is`/`lte`/`gte`/`delete`,
+  NOWPayments payment shape.
+- `.env.example`, `README.md`, `DEPLOYMENT.md` (sections C + E rewritten),
+  `GO_LIVE_CHECKLIST.md` (sections 5 + 7 rewritten),
+  `IMPLEMENTATION_AUDIT.md` (supersede note).
+
+### Database migration details
+
+`00000000000005_nowpayments.sql` is purely additive: new nullable columns
+plus a partial unique index on `provider_payment_id`. Existing rows default
+to `provider = 'bcon'` and are never relabeled; `bcon_response` is retained
+for history. RLS policies already cover the table (advertiser-own reads,
+service-role writes) and needed no change.
+
+### Environment variables required in Vercel
+
+```text
+NOWPAYMENTS_API_KEY=            # Store Settings > API key (server-only)
+NOWPAYMENTS_IPN_SECRET=         # Store Settings > IPN Secret Key (server-only)
+NOWPAYMENTS_DEFAULT_PAY_CURRENCY=usdterc20
+NOWPAYMENTS_IPN_CALLBACK_URL=   # optional pin; else derived from NEXT_PUBLIC_SITE_URL
+GEMINI_API_KEY=                 # https://aistudio.google.com/apikey (server-only)
+GEMINI_MODEL=gemini-flash-latest
+```
+
+IPN callback URL format: `https://YOUR_DOMAIN/api/nowpayments/ipn`
+(production: `https://erobabe.vercel.app/api/nowpayments/ipn`).
+
+### Tests executed (real results, 2026-10-11)
+
+- `npm run type-check` — passed, no errors.
+- `npm run test` — **14 files, 183 tests, all passed** (49 new NOWPayments
+  client tests, 24 IPN route tests, 10 checkout tests, 23 Gemini tests, plus
+  the pre-existing suites). All network calls mocked; no real payments or AI
+  requests.
+- `npm run build` — passed; new routes present
+  (`/api/nowpayments/*`, `/api/gemini/suggest`), retired routes absent.
+- Client-bundle secret check — `grep` over `.next/static` for
+  `GEMINI_API_KEY|NOWPAYMENTS_API_KEY|NOWPAYMENTS_IPN_SECRET`: **0 matches**;
+  no `NEXT_PUBLIC_*` provider variables exist.
+- Live `next dev` probes — IPN probe 200; unsigned IPN rejected (401 with a
+  secret configured, 503 fails-closed without); signed IPN with a valid
+  HMAC passes verification (500 only at the unconfigured database step);
+  tampered signature 401; checkout/status/suggest 401 unauthenticated;
+  `/api/bcon/*` and `/api/groq/*` 404; homepage 200.
+- `npm run lint` — **pre-existing breakage, not introduced here**: the repo
+  has no ESLint config and `next lint` is deprecated/interactive under
+  Next.js 15. Left untouched; documented.
+- `npx playwright test` — **could not run in this sandbox**: browser
+  download from `cdn.playwright.dev` is blocked here. New spec
+  `tests/e2e/payments.spec.ts` added alongside the existing specs; run in CI
+  or locally with `npx playwright install`.
+
+### Remaining external setup (owner actions)
+
+1. Create/verify the NOWPayments account and **obtain written confirmation
+   that it permits this lawful adult-entertainment advertising business**
+   (unresolved approval blocker — API access is not proof).
+2. Copy the API key → `NOWPAYMENTS_API_KEY`; generate the IPN Secret Key →
+   `NOWPAYMENTS_IPN_SECRET`; set `NOWPAYMENTS_DEFAULT_PAY_CURRENCY`,
+   optional `NOWPAYMENTS_IPN_CALLBACK_URL`, and `NEXT_PUBLIC_SITE_URL` in
+   Vercel; enable the allowlisted coins and configure the payout wallet.
+3. Create a Gemini API key at https://aistudio.google.com/apikey →
+   `GEMINI_API_KEY` (+ `GEMINI_MODEL`); redeploy.
+4. Apply migration `00000000000005_nowpayments.sql` in Supabase.
+5. Run a minimum-amount genuine payment end to end (DEPLOYMENT.md C.9) and a
+   Gemini suggestion from `/admin/videos/upload` (DEPLOYMENT.md E.5).
+6. Pre-existing blockers unchanged: Uqload adult-content approval, hosting
+   approval, legal identity, age assurance, Resend domain verification.
+
+### Limitations
+
+- Live NOWPayments/Gemini accounts were unavailable in this environment, so
+  provider-dashboard labels and the genuine end-to-end payment were verified
+  against official documentation and mocked tests, not a live transaction.
+- The integration must not be called production-ready until the owner
+  completes the setup above and the genuine test payment succeeds.
+
 ---
 
 ## What Changed

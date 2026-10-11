@@ -63,22 +63,26 @@ This checklist lists all external decisions, approvals, and configurations that 
 
 ---
 
-## 5. Bcon Global Payments
+## 5. NOWPayments
 
-- [ ] **Account created**: Bcon Global account, KYC completed if required.
-- [ ] **Store (Merchants) created**: one store for the token/network you accept, e.g. Ethereum store for USDT — a store can serve several chains, so one store per chain is not required.
-- [ ] **Receiving wallet configured**: Authorized wallet address set in Bcon dashboard (e.g., Ethereum address for USDT-ERC20).
-- [ ] **Token and network chosen**: e.g., USDT on Ethereum, or USDT on Tron — set `BCON_PAYMENT_CURRENCY` and `BCON_CHAIN` accordingly.
-- [ ] **API key obtained**: Store Settings → Copy Generated Keys → set `BCON_API_KEY` (server-only, never `NEXT_PUBLIC_*`).
-- [ ] **Callback URL set in EVERY callback field the store form shows**: type the raw URL `https://YOUR_DOMAIN/api/bcon/callback` into each per-chain input (BTC/BNB fields are always rendered, plus one per enabled chain) — no quotes, Markdown, JSON or arrays. Leave a field empty only when that chain is disabled in the same form. Bcon's own validation rejects a blank field with `The callback_url.btc must be a string. (and 2 more errors)`. Click-by-click steps: DEPLOYMENT.md section C.5.
-- [ ] **Callback reachable**: `curl -i https://YOUR_DOMAIN/api/bcon/callback` (or Admin → System Health → **Test callback reachability**) returns HTTP 200 `{"status":"ok"}` and writes nothing to `payments`/`payment_events`.
-- [ ] **Callback verified from the app**: Admin → System Health → Bcon store table shows every chain Bcon returns with `matches this deployment`; chains not returned by Bcon are labelled unverified (never "working").
-- [ ] **Genuine payment processed end to end** (smallest real checkout, real funds): Bcon callback → payment `confirmed` with `transaction_id`, invoice `paid`, campaign `active`/`pending_review`, `payment_events` contains `callback_received`, `transaction_verified`, `confirmed`.
-- [ ] **Verification logic**: callback address vs stored payment address, provider transaction lookup (`GET /api/v1/transactions/<txid>`), provider status/currency/sum, and idempotency tested (duplicate callback does not duplicate ledger).
-- [ ] **Fails closed**: a hand-made callback with a bogus txid, a wrong address, a wrong currency, an unverifiable amount, or during a Bcon API outage must leave the payment unconfirmed and record an audit row.
-- [ ] **Under/overpayment handling**: Test underpaid/overpaid cases, ensure logged for admin review, not silently discarded.
-- [ ] **Refund process defined**: Real, auditable refund workflow using actual wallet procedures — not fabricated automatic reversals that provider doesn't support.
-- [ ] **Checkout UX**: Amount, USD equivalent, ticker, network, address, QR, copy button, expiration, pending/confirmed status, network instructions — all displayed, consistent with dark theme.
+- [ ] **Account created**: NOWPayments account, verification completed if required.
+- [ ] **Business approval confirmed in writing**: NOWPayments permits this lawful adult-entertainment business and its advertising use under the account's terms. API access alone is NOT proof of approval — unresolved until written confirmation exists.
+- [ ] **API key obtained**: Store Settings → API key → set `NOWPAYMENTS_API_KEY` (server-only, never `NEXT_PUBLIC_*`).
+- [ ] **IPN Secret Key obtained**: Store Settings → IPN Secret Key → set `NOWPAYMENTS_IPN_SECRET` (server-only). Every IPN is rejected without it.
+- [ ] **Coins enabled**: every asset the checkout offers (`usdterc20`, `usdttrc20`, `usdtbsc`, `usdtsol`, `btc`, `eth`, `trx`, `bnbbsc`, `sol`) enabled in the dashboard, and the payout wallet/addresses configured.
+- [ ] **IPN callback URL correct**: the app sends `https://YOUR_DOMAIN/api/nowpayments/ipn` with every payment (derived from `NEXT_PUBLIC_SITE_URL`, optionally pinned by `NOWPAYMENTS_IPN_CALLBACK_URL`). No per-chain dashboard entry is needed; enter the same URL as the store-level default if the dashboard offers the field.
+- [ ] **IPN reachable**: `curl -i https://YOUR_DOMAIN/api/nowpayments/ipn` (or Admin → System Health → **Test IPN reachability**) returns HTTP 200 `{"status":"ok"}` and writes nothing to `payments`/`payment_events`.
+- [ ] **Integration verified from the app**: Admin → System Health → NOWPayments panel shows API reachable, IPN secret set, and the expected callback URL.
+- [ ] **Genuine payment processed end to end** (smallest real checkout, real funds): signed IPN → payment `confirmed` with `provider_payment_id`, invoice `paid`, campaign `active`/`pending_review`, `payment_events` contains `ipn_received`, `payment_verified`, `confirmed`.
+- [ ] **Verification logic tested**: signature check, payment correlation by `payment_id`/`order_id`, pay-currency/address/USD-price match, provider corroboration (`GET /v1/payment/{id}`), integer-math amount check, and idempotency (duplicate final IPN answers `already_processed`, exactly one `confirmed` event).
+- [ ] **Fails closed**: an unsigned, malformed, tampered, or wrong-secret IPN; an unknown payment id; a mismatched order reference, currency, address, or amount; a `finished` claim the API does not corroborate; or a provider outage must all leave the payment unconfirmed and record an audit row.
+- [ ] **Intermediate statuses never fulfill**: `waiting`/`confirming`/`confirmed`/`sending` are recorded only — including provider `confirmed`, which is NOT completion.
+- [ ] **Partial/under/overpayment handling**: `partially_paid` → `underpaid` for manual review, campaigns not activated; finished-but-mismatched amounts → `underpaid`/`overpaid`, logged for admin review, not silently discarded.
+- [ ] **`failed`/`expired`/`refunded` handling**: terminal outcomes update payment + invoice, cancel pending campaigns, and pause campaigns on refund.
+- [ ] **Refund process defined**: real, auditable refund workflow — refunds are applied from verified provider `refunded` notifications, not fabricated automatic reversals.
+- [ ] **Checkout UX**: crypto amount, USD equivalent, asset, network, address, copy button, expiration, live status without page refresh, network instructions — all displayed, consistent with dark theme.
+- [ ] **Missing-credentials behavior tested**: no API key → checkout answers 503 without a payable-looking record; no IPN secret → IPNs rejected with 503.
+- [ ] **Provider downtime tested**: payment API unreachable during verification → 503 so NOWPayments retries; payment untouched; no success claimed.
 
 ---
 
@@ -95,14 +99,17 @@ This checklist lists all external decisions, approvals, and configurations that 
 
 ---
 
-## 7. Groq AI
+## 7. Gemini API
 
-- [ ] **Account and API key**: Groq account, API key created at https://console.groq.com → `GROQ_API_KEY` set.
-- [ ] **Model configured**: `GROQ_MODEL` set to current model, e.g., `llama-3.1-8b-instant`, matches docs.
-- [ ] **Metadata generation tested**: Publisher sends source filename/URL path and selected category to Groq, receives title, description, and tags server-side, and blocks publication if Groq is not configured or returns incomplete metadata.
-- [ ] **No auto-publish**: AI output never auto-publishes video or asserts facts about content not verified.
-- [ ] **Privacy**: No video bytes, private rights docs, payment records, or unnecessary personal info sent to Groq.
-- [ ] **Fallback**: App continues to work without Groq if not configured.
+- [ ] **Account and API key**: Google AI Studio API key created at https://aistudio.google.com/apikey → `GEMINI_API_KEY` set (server-only, never `NEXT_PUBLIC_*`).
+- [ ] **Model configured**: `GEMINI_MODEL` set to a currently supported model, e.g., `gemini-flash-latest`, matches https://ai.google.dev/gemini-api/docs.
+- [ ] **Metadata generation tested**: publisher sends source filename/URL path, working title, selected category, and existing tags to Gemini; receives validated title, description, tags, and category server-side; blocks publication if Gemini is not configured, errors, or returns incomplete metadata.
+- [ ] **Structured output validated**: title/description lengths, tags against the permitted list, category against the taxonomy — unvalidated model output is never trusted.
+- [ ] **Suggestion route secured**: `/api/gemini/suggest` requires an active admin session, validates and bounds its input, and rate-limits requests.
+- [ ] **Quota/rate-limit failures tested**: quota exhaustion answers 429 with an actionable message; generic provider errors answer 502 without leaking key material or internals.
+- [ ] **No auto-publish**: AI output never auto-publishes video or asserts facts about content not verified; suggestions require human review.
+- [ ] **Privacy**: no video bytes, private rights docs, payment records, or unnecessary personal info sent to Gemini.
+- [ ] **Fallback**: app continues to work without Gemini if not configured (clear configuration error, no silent fallback to another provider).
 
 ---
 
@@ -134,7 +141,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 - [ ] **Rate limiting**: Abuse-prone operations (login, sign-up, reports, support, payment creation) rate limited.
 - [ ] **Secret management**: No secrets in browser, no secret logging, env files gitignored, `.env.example` has fictional placeholders only.
 - [ ] **Audit logs**: Privileged actions logged (publishing, unpublishing, role changes, ad approvals, refunds, settings updates).
-- [ ] **Idempotent webhooks**: Bcon callbacks idempotent, no duplicate ledger entries.
+- [ ] **Idempotent webhooks**: NOWPayments IPNs idempotent (duplicate/out-of-order/stale notifications cannot duplicate business actions), no duplicate ledger entries.
 - [ ] **Concurrency-safe reservations**: Slot reservations use DB transactions or equivalent to prevent overlapping purchases.
 - [ ] **Pagination and limits**: Reasonable limits on queries, no unbounded table scans.
 - [ ] **File ownership**: Upload jobs owned by creator, verified.
@@ -161,7 +168,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 - [ ] **Hosting approval**: BLOCKED if using Vercel Hobby or host that prohibits adult/commercial. Need approval and documentation.
 - [ ] **Legal identity**: BLOCKED — owner must provide real business details.
 - [ ] **Age assurance**: Evaluate jurisdiction-specific requirements, implement verification integration if required.
-- [ ] **Bcon wallet**: Owner must configure authorized receiving wallet.
+- [ ] **NOWPayments approval and wallet**: BLOCKED until written confirmation that NOWPayments permits this adult-entertainment advertising business exists; then configure the payout wallet and enable the accepted coins.
 - [ ] **Resend domain verification**: Must verify DNS.
 - [ ] **Search Console**: Must verify domain property, submit sitemap, monitor indexing — cannot promise ranking or indexing speed.
 
@@ -178,10 +185,10 @@ This checklist lists all external decisions, approvals, and configurations that 
 7. [ ] Admin can genuinely upload, manage, review, publish approved videos via authorized hosting integration.
 8. [ ] Public watch pages play actual hosted videos.
 9. [ ] Advertisers can reserve ten fixed placements and create real campaigns.
-10. [ ] Bcon payment requests and confirmation processing work per actual API.
+10. [ ] NOWPayments payment requests, signed-IPN verification, and confirmation processing work per actual API.
 11. [ ] No campaign activates based on unverified payment or unapproved creative.
 12. [ ] Resend transactional emails work with verified sending configuration.
-13. [ ] Groq metadata suggestions work where configured and never publish automatically.
+13. [ ] Gemini metadata suggestions work where configured and never publish automatically.
 14. [ ] Public pages use crawlable URLs and dynamic accurate metadata.
 15. [ ] XML sitemap and video sitemap contain only eligible public records.
 16. [ ] SEO and structured-data tests pass.
@@ -203,7 +210,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 - Hosting provider approved: _________________________
 - Video provider approved: _________________________
 - Legal review completed: _________________________
-- Bcon wallet configured: _________________________
+- NOWPayments approval confirmed + wallet configured: _________________________
 - Resend domain verified: _________________________
 - Supabase project: _________________________
 - Search Console verified: _________________________

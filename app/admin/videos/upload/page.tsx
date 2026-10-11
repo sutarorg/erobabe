@@ -364,7 +364,7 @@ export default function UploadPage() {
     let thumbnailPath = item.thumbnailPath;
 
     // 0–8%: thumbnail, then an indeterminate state for the direct Uqload
-    // upload (no byte progress — see uploadFormDirect), then Groq metadata.
+    // upload (no byte progress — see uploadFormDirect), then Gemini metadata.
     if (item.thumbnail && !thumbnailPath) {
       patchItem(item.id, { phase: "uploading", detail: "Uploading thumbnail…", percent: 0 });
       thumbnailPath = await uploadThumbnailFile(item, controller, (percent) =>
@@ -575,7 +575,7 @@ export default function UploadPage() {
       <div>
         <h1 className="text-[20px] font-semibold">Publish videos</h1>
         <p className="mt-1 text-[12px] text-ink-3">
-          Choose a publishing method. Groq generates the title, description, and tags; you control only the category and each video&apos;s thumbnail.
+          Choose a publishing method. Gemini generates the title, description, and tags; you control only the category and each video&apos;s thumbnail.
         </p>
       </div>
 

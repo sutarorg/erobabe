@@ -24,7 +24,7 @@ export default function TermsPage() {
         </section>
         <section>
           <h2 className="text-[13.5px] font-semibold text-ink">3. Advertising & payments</h2>
-          <p className="mt-1">Ad placements are ten fixed 16:9 slots sold at USD $99 per 30-day period. Payments are processed via Bcon Global cryptocurrency integration. Campaigns become eligible only after payment is confirmed, creative is approved, and schedule allows delivery. No campaign activates based on unverified payment.</p>
+          <p className="mt-1">Ad placements are ten fixed 16:9 slots sold at USD $99 per 30-day period. Payments are processed via NOWPayments cryptocurrency integration. Campaigns become eligible only after payment is confirmed, creative is approved, and schedule allows delivery. No campaign activates based on unverified payment.</p>
         </section>
         <section>
           <h2 className="text-[13.5px] font-semibold text-ink">4. Moderation</h2>

@@ -22,8 +22,8 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      * - public folder
-     * - api routes that need to bypass auth (bcon callback)
+     * - api routes that need to bypass auth (nowpayments ipn)
      */
-    "/((?!_next/static|_next/image|favicon.ico|api/bcon/callback|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/nowpayments/ipn|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };
