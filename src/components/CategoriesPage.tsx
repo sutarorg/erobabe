@@ -10,10 +10,10 @@ interface CategoriesPageProps {
 export default function CategoriesPage({ onSelect }: CategoriesPageProps) {
   const tiles = ALL_CATEGORIES;
   return (
-    <div className="mx-auto w-full max-w-[1200px] px-4 pt-6 @sm:px-5 @2xl:px-7">
+    <div className="mx-auto w-full max-w-[1200px] px-4 pt-4 @sm:px-5 @2xl:px-7">
       <p className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">Browse</p>
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 className="text-[20px] font-semibold tracking-tight text-ink">All Categories</h1>
+        <h1 className="text-[22px] font-semibold tracking-tight text-ink">All Categories</h1>
         <span className="text-[12px] tabular-nums text-ink-3">{tiles.length} categories</span>
       </div>
       <p className="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">

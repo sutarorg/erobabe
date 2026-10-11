@@ -14,14 +14,16 @@ export default async function AboutPage() {
   const { data: settings } = await supabase.from("site_settings").select("*").eq("id", 1).single();
 
   return (
-    <div className="pt-6 max-w-3xl">
+    <div className="pt-4">
       <p className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">About</p>
-      <h1 className="mt-2 text-[24px] font-semibold tracking-tight">A premium destination, run with care</h1>
-      <p className="mt-3 text-[13.5px] leading-relaxed text-ink-3">
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h1 className="text-[22px] font-semibold tracking-tight">A premium destination, run with care</h1>
+      </div>
+      <p className="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">
         {settings?.tagline || "Your destination for discovering premium adult entertainment. 18+ adults only."}
       </p>
 
-      <div className="mt-8 rounded-lg border border-line bg-card p-6">
+      <div className="mt-6 rounded-lg border border-line bg-card p-6">
         <img src={settings?.brand_logo_url || "https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png"} alt="erobabe" className="h-10 w-auto" />
         <p className="mt-4 text-[13.5px] font-semibold">erobabe — founded for adults who expect better.</p>
         <p className="mt-2 text-[12.5px] leading-relaxed text-ink-3">

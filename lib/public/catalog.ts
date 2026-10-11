@@ -20,6 +20,7 @@ export type PublicCategory = {
   label: string;
   slug: string;
   icon: string | null;
+  description?: string | null;
   video_count?: number;
 };
 
@@ -182,7 +183,7 @@ export async function getCategoryBySlug(slug: string): Promise<{ category: Publi
     async () => {
       const supabase = tryCreateServiceClient();
       if (!supabase) return { category: null, videos: [] };
-      const { data: category } = await supabase.from("categories").select("id, label, slug, icon").eq("slug", slug).maybeSingle();
+      const { data: category } = await supabase.from("categories").select("id, label, slug, icon, description").eq("slug", slug).maybeSingle();
       if (!category) return { category: null, videos: [] };
       const { data } = await publishedQuery(supabase)
         .eq("category_id", category.id)
@@ -194,6 +195,7 @@ export async function getCategoryBySlug(slug: string): Promise<{ category: Publi
           label: String(category.label),
           slug: String(category.slug || slug),
           icon: category.icon ? String(category.icon) : null,
+          description: category.description ? String(category.description) : null,
         },
         videos: (data || []).map(mapVideo),
       };

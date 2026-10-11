@@ -36,7 +36,7 @@ describe("public listing grids and video cards", () => {
     ["/latest", () => latest.default()],
     ["/popular", () => popular.default()],
     ["/category/couples", () => category.default({ params: Promise.resolve({ slug: "couples" }) })],
-  ])("shows four columns, views with an icon, and relative publication time on %s", async (_path, page) => {
+  ])("shows four columns, views with an icon, and relative publication time without category on card on %s", async (_path, page) => {
     const html = renderToStaticMarkup(await page());
     expect(html).toContain("@lg:grid-cols-4");
     expect(html).not.toContain("lg:grid-cols-5");
@@ -44,13 +44,15 @@ describe("public listing grids and video cards", () => {
     expect(html).toContain("2 days ago");
     expect(html).toContain("lucide-eye");
     expect(html).toContain(`dateTime="${video.published_at}"`);
+    expect(html).not.toContain("<span>Couples</span>");
   });
 
-  it("shows zero views and a safe fallback for missing publication dates", async () => {
+  it("shows zero views, a safe fallback for missing publication dates, and omits category from card", async () => {
     const { default: PublicVideoCard } = await import("@/src/components/PublicVideoCard");
     const html = renderToStaticMarkup(<PublicVideoCard video={{ ...video, view_count: 0, published_at: null }} />);
     expect(html).toContain("0 views");
     expect(html).toContain("Recently");
     expect(html).not.toContain("Invalid Date");
+    expect(html).not.toContain("Couples");
   });
 });

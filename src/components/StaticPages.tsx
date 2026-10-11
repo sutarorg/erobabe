@@ -34,8 +34,10 @@ export function PageShell({
         Back to home
       </button>
       <p className="mt-4 text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">{eyebrow}</p>
-      <h1 className="mt-1 text-[20px] font-semibold tracking-tight text-ink">{title}</h1>
-      {sub && <p className="mt-1.5 max-w-[560px] text-[12.5px] leading-relaxed text-ink-3">{sub}</p>}
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h1 className="text-[22px] font-semibold tracking-tight text-ink">{title}</h1>
+      </div>
+      {sub && <p className="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">{sub}</p>}
       <div className="mt-5">{children}</div>
     </div>
   );
