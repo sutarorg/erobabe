@@ -133,7 +133,7 @@ export const INITIAL_PROFILE: Profile = {
 };
 
 export const FAQS = [
-  { q: "How do I reserve an ad slot?", a: "Pick any placement marked Available, create campaign, complete crypto payment via Bcon, wait for creative approval." },
+  { q: "How do I reserve an ad slot?", a: "Pick any placement marked Available, create campaign, complete crypto payment via NOWPayments, wait for creative approval." },
   { q: "When does my campaign go live?", a: "After payment confirmed (2 blockchain confirmations) and creative approved." },
   { q: "What creatives are allowed?", a: "16:9 image, 1200×675 PNG/JPG/WebP under 5MB. All persons must be adults (18+)." },
   { q: "Can I pause or cancel?", a: "Pause anytime. Cancellation within 48h may receive prorated refund per business policy." },

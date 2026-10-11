@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Production-ready Next.js application with Supabase backend, Bcon crypto payments, video hosting abstraction, Resend email, Groq AI, and SEO optimization.
+Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, video hosting abstraction, Resend email, Gemini AI, and SEO optimization.
 
 ## Quick Start
 
@@ -25,9 +25,9 @@ Open http://localhost:3000
 
 - Next.js 15 App Router
 - Supabase (Auth, Postgres, Storage, RLS)
-- Bcon Global (crypto payments)
+- NOWPayments (crypto payments)
 - Resend (transactional email)
-- Groq (server-generated video metadata)
+- Gemini API (server-generated video metadata)
 - Tailwind CSS 4
 
 ## Routes

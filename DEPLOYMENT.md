@@ -1,9 +1,9 @@
 # DEPLOYMENT.md — Erobabe Production Setup (Click-by-Click)
 
-This document gives complete, verified steps to deploy Erobabe from zero to production. It covers Supabase, Bcon, video hosting, Groq, Resend, GitHub, hosting, domain, env vars, testing, and rollback.
+This document gives complete, verified steps to deploy Erobabe from zero to production. It covers Supabase, NOWPayments, video hosting, Gemini, Resend, GitHub, hosting, domain, env vars, testing, and rollback.
 
 **Date**: October 10, 2026  
-**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), Bcon Global, Resend, Groq, internal video provider (Uqload blocked).
+**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, Gemini, internal video provider (Uqload blocked).
 
 ---
 
@@ -11,9 +11,9 @@ This document gives complete, verified steps to deploy Erobabe from zero to prod
 
 ### Accounts needed
 - Supabase account (https://supabase.com)
-- Bcon Global account (https://bcon.global)
+- NOWPayments account (https://nowpayments.io)
 - Resend account (https://resend.com)
-- Groq account (https://console.groq.com)
+- Google AI Studio account for the Gemini API (https://aistudio.google.com)
 - GitHub account with access to https://github.com/sutarorg/erobabe
 - Domain registrar (e.g., Cloudflare, Namecheap)
 - Hosting provider that permits lawful adult content and commercial use (NOT Vercel Hobby — see Hosting Restrictions). Recommended: Fly.io, Render, Railway, or self-hosted VPS with Docker. Verify Acceptable Use Policy before deploying.
@@ -30,7 +30,7 @@ This document gives complete, verified steps to deploy Erobabe from zero to prod
 2. **Hosting provider**: Vercel Hobby is limited to personal non-commercial use and its Acceptable Use Policy restricts objectionable content. Do NOT deploy commercial Erobabe to Vercel Hobby. Choose a host whose terms explicitly permit adult content and commercial use. Document approval.
 3. **Legal identity**: Operator must provide real legal name, business address, registration, contact emails, age-verification procedures. Do not publish fictional identity.
 4. **Age assurance**: Evaluate jurisdiction-specific requirements (e.g., UK, EU, US state laws). Frontend age gate alone is not robust assurance. Implement required verification integration where legally required.
-5. **Bcon wallet**: Owner must configure authorized receiving wallet in Bcon dashboard and choose token/network (e.g., USDT on Ethereum, Tron, etc.).
+5. **NOWPayments approval and payout wallet**: Owner must confirm in writing that NOWPayments permits this lawful adult-entertainment business and its advertising use, then configure the payout wallet/addresses and enable the accepted coins (e.g., USDT on Ethereum/Tron/BSC/Solana, BTC, ETH, TRX, BNB, SOL).
 
 ---
 
@@ -116,14 +116,15 @@ supabase functions deploy resend --no-verify-jwt
 ```
 Set secrets:
 ```bash
-supabase secrets set RESEND_API_KEY=... GROQ_API_KEY=... BCON_API_KEY=...
+supabase secrets set RESEND_API_KEY=... GEMINI_API_KEY=... NOWPAYMENTS_API_KEY=...
 ```
 
 ### 9. Add production function secrets
 In Supabase Dashboard → **Edge Functions** → **Secrets**, add:
 - `RESEND_API_KEY`
-- `GROQ_API_KEY`
-- `BCON_API_KEY`
+- `GEMINI_API_KEY`
+- `NOWPAYMENTS_API_KEY`
+- `NOWPAYMENTS_IPN_SECRET`
 - `UQLOAD_API_KEY` (if applicable, but see blocker)
 - `SITE_URL`
 
@@ -160,189 +161,216 @@ update public.profiles set role='admin' where email='admin@erobabe.com';
 
 ---
 
-## C. Bcon Global Setup
+## C. NOWPayments Setup
 
-Everything in this section is verified against Bcon's published API documentation
-(https://bcon.global/integrations/api/, checked 2026-10-11) and the code in `lib/bcon/`.
-Bcon publishes **no store-write endpoint**, so callback URLs are configured by hand in the
-Bcon dashboard; the application can only read the store back and report what it finds.
+Everything in this section follows NOWPayments' official documentation
+(Payment API: https://nowpayments.io/api, IPN:
+https://nowpayments.io/help/what-is/what-is-ipn) and the code in
+`lib/nowpayments/`.
 
-### 1. Create/configure the provider account
-1. Go to https://bcon.global → **Sign Up**.
-2. Complete KYC if required.
-3. Create a **Store** (the dashboard calls stores "Merchants" / "merchant-platforms").
-   One store can serve several blockchains — you do not need one store per chain. For this
-   launch create a single store for the token/network you actually want to accept
-   (e.g. USDT on Ethereum).
-4. The store's generated API keys appear under **Created Store Settings → Copy Generated
-   Keys** (step 4 below).
+How the pieces fit:
 
-### 2. Configure the authorized receiving wallet
-1. Bcon dashboard → **Merchants** (Stores) → select the store → **Settings**.
-2. Under **Wallet**, enter the receiving wallet address for the chain you will accept
-   (e.g. an Ethereum address for USDT-ERC20).
-3. Bitcoin requires a receiving address or an xpub — fill it only if you intend to accept BTC.
-4. Click **Save**.
+- Checkout calls `POST https://api.nowpayments.io/v1/payment` with the
+  `x-api-key` header and sends the payer the returned `pay_address` and
+  `pay_amount`. The payment starts in the `waiting` status.
+- Every payment carries this deployment's IPN URL
+  (`https://YOUR_DOMAIN/api/nowpayments/ipn`). NOWPayments POSTs a signed
+  JSON notification there on every status change.
+- Only a verified `finished` status marks a payment paid. `confirmed` is an
+  intermediate provider state and never fulfills anything on its own.
 
-### 3. Choose the enabled token and network
-1. Store Settings → **Currencies**: enable only the token(s) you will accept (e.g. USDT on Ethereum).
-2. Set `BCON_CHAIN` to the matching chain name — one of `ethereum`, `tron`, `binance`,
-   `bitcoin`, `solana`.
-3. Set `BCON_PAYMENT_CURRENCY` to the token ticker, e.g. `USDT`.
+> **Approval blocker (unresolved):** before accepting real payments, confirm in
+> writing that NOWPayments permits this lawful adult-entertainment business and
+> its advertising use under the account's terms. API access alone is not proof
+> of approval. Until that confirmation exists, payments are a launch blocker —
+> see `GO_LIVE_CHECKLIST.md`.
 
-### 4. Find the API credentials
-1. Store Settings → **Copy Generated Keys**.
-2. Copy the key belonging to the chain you are enabling (each configured chain has its own key).
-3. Set it as `BCON_API_KEY` — server-side only, never a `NEXT_PUBLIC_*` variable.
-4. Optional: set `BCON_CALLBACK_URL` to pin the exact callback URL the app reports
-   (`https://erobabe.vercel.app/api/bcon/callback`). It is only honoured when it is an
-   absolute URL ending in `/api/bcon/callback`; otherwise it is ignored and the URL is
-   derived from `NEXT_PUBLIC_SITE_URL`.
+### 1. Create or access a NOWPayments account
 
-### 5. Configure the callback URL — one URL per blockchain (click-by-click)
+1. Go to https://nowpayments.io → **Sign Up** (or sign in).
+2. Complete the account verification the dashboard asks for (KYC/business
+   verification if required for your account type).
+3. If you run a store/merchant profile, create one for Erobabe. You need a
+   single profile — you do not need one per blockchain.
 
-A Bcon store stores **one callback URL per blockchain**, not a single shared one. The store
-payload exposes them as `callback_url` (BTC), `callback_url_bnb` (BNB) and
-`callback_url_<code>` for every other configured chain, and Bcon's validation messages use
-the form paths `callback_url.btc`, `callback_url.bnb`, and so on.
+### 2. Obtain the API key
 
-1. Sign in at https://bcon.global and open **Merchants** (Stores) in the dashboard menu.
-2. Click the store you created, then open its **Settings**.
-3. Scroll to the callback section. It contains one callback input per blockchain the form
-   knows about. Bcon's docs state a store "by default returns information on BTC and BNB
-   even if they are empty", so expect BTC and BNB callback inputs plus one per chain you
-   enabled — the exact set is shown by the form (and named by its validation errors).
-4. Type the raw URL below into **every** callback input the form shows, exactly as written
-   — no quotes, no Markdown (`[label](url)`), no JSON, no arrays, no trailing spaces, no
-   line breaks:
+1. Sign in at https://nowpayments.io and open **Store Settings** (dashboard
+   menu).
+2. Find the **API key** section and generate/copy the key (dashboard labels it
+   the store API key / `x-api-key` value).
+3. Keep this value secret. It goes into `NOWPAYMENTS_API_KEY` (step 5) —
+   server-side only, never a `NEXT_PUBLIC_*` variable.
 
-   ```
-   https://erobabe.vercel.app/api/bcon/callback
-   ```
+### 3. Obtain the IPN Secret Key
 
-   On a different domain, use `https://YOUR_DOMAIN/api/bcon/callback` — the exact value the
-   app shows at the top of Admin → System Health → **Bcon store — per-chain callback URLs**.
-5. Leave a callback input empty **only** if you also disable that blockchain in the same
-   form (disabling removes the input and its validation). Never save the form with a
-   rendered callback input left blank.
-6. Scroll down and click **Save**.
-7. If validation fails, read the field names in the message and fill exactly those inputs.
+1. In **Store Settings**, find the **IPN Secret Key** section and generate a
+   secret (the dashboard offers a generate/copy control).
+2. Copy it into `NOWPAYMENTS_IPN_SECRET` (step 5). Every incoming IPN is
+   rejected unless its `x-nowpayments-sig` header verifies against this
+   secret, so a missing or wrong value blocks all payment completions.
+3. If you ever regenerate the secret, update the hosting environment variable
+   at the same time and redeploy.
 
-#### Understanding `The callback_url.btc must be a string. (and 2 more errors)`
+### 4. Enable the payout/accepted coins
 
-This message comes from **Bcon's own dashboard form validation, not from this application**.
-It is the standard Laravel "value is present but not a string" wording: the input was
-submitted as `null` — i.e. it was left empty. `callback_url.btc` is the BTC callback input,
-and "(and 2 more errors)" means two further inputs (typically `bnb` and one more chain the
-form rendered) were empty in the same submission.
+1. In **Store Settings**, open the coins/currencies section and enable every
+   asset the checkout offers (the app's fixed allowlist is `usdterc20`,
+   `usdttrc20`, `usdtbsc`, `usdtsol`, `btc`, `eth`, `trx`, `bnbbsc`, `sol` —
+   see Admin → System Health for the live availability check).
+2. Configure the payout wallet/address the dashboard asks for, so settled
+   funds have somewhere to go.
+3. Payment creation fails with a clear provider error (surfaced in checkout
+   and recorded on the payment) when a coin is not enabled — it never
+   silently substitutes another asset or network.
 
-* Which inputs the form renders is not exposed by the Bcon API — read the field names off
-  the error output itself (`callback_url.btc` plus the "2 more errors" it mentions) and fill
-  exactly those inputs.
-* Note: Bcon also returns BTC/BNB entries with `callback_url: null` for stores that simply
-  do not accept those chains (its own docs show such a store). An empty value therefore
-  means "not configured"; it only becomes a blocker when the form renders that input and
-  refuses to save it empty.
-* Fix: type the URL into every callback input the form renders (step 4 above), or disable
-  the chain so its input disappears, then save again.
-* Do **not** paste a JSON object, an array, or quote-wrapped text into these inputs, and do
-  not paste the URL into unrelated fields (wallet, tag, name). Each callback input accepts a
-  plain URL string only.
-* No code change can fix this: Bcon exposes no endpoint that writes store configuration, so
-  the empty dashboard field can only be corrected in the dashboard.
+### 5. Configure the production IPN callback URL
 
-#### Verify what Bcon has actually stored
+The application sends the callback URL with **every** payment
+(`ipn_callback_url`), so there is no per-chain dashboard entry to maintain.
+The URL is:
 
-Admin → System Health → **Bcon store — per-chain callback URLs** calls
-`GET https://external-api.bcon.global/api/v1/stores/get_store` with `BCON_API_KEY` and, for
-every chain Bcon returns, shows the registered callback URL (`empty — this is the field
-Bcon rejects`, `matches this deployment`, or the wrong value). A chain Bcon does not return
-at all is labelled **unverified** — never "working".
+```text
+https://YOUR_DOMAIN/api/nowpayments/ipn
+```
 
-Reference: verified API shape (https://bcon.global/integrations/api/, 2026-10-11)
-* Store fields: `callback_url` (BTC), `callback_url_bnb` (BNB), `callback_url_<code>` for
-  each other configured chain, plus a `chains[]` array whose entries each carry `chain`,
-  `code`, `api_key`, `callback_url`, `address`/`xpub`.
-* Callback request: `status` (0 = unconfirmed, 1 = partially confirmed, 2 = confirmed),
-  `addr`, `value` (satoshis for BTC), `txid`, `external_id` (plus `memo` on BNB).
-* "A callback succeeds when the server returns 200 HTTP status."
+On the current production deployment:
 
-### 6. What the application does with a callback
+```text
+https://erobabe.vercel.app/api/nowpayments/ipn
+```
 
-Bcon documents no callback signature, so none is invented. `/api/bcon/callback` treats every
-parameter as untrusted and:
+Rules:
 
-1. Answers a parameter-less probe with HTTP 200 without touching any payment record.
-2. Finds the payment by `external_id`, then requires the callback `addr` to equal that
-   payment's stored `payment_address` (EVM chains compared case-insensitively).
-3. Treats only `status=2` / `confirmed` as a confirmation claim; `0` and `1` are recorded as
-   `unconfirmed` / `partially_confirmed` and never mark a payment paid.
-4. Re-checks the claim against Bcon's own record —
-   `GET https://external-api.bcon.global/api/v1/transactions/<txid>` — and requires the
-   transaction to exist, to be `confirmed`, to point at the same payment address, to use the
-   same currency, and its `sum` to match `expected_amount` within 2%.
-5. Stays idempotent: a payment already `confirmed` is never confirmed twice, and a non-200
-   answer makes Bcon retry.
-6. Fails closed. Unknown txid, address or currency mismatch, a missing amount, or an
-   unreachable Bcon API leave the payment unconfirmed and write an audit entry
-   (`bcon_callback_transaction_unverified`, `bcon_callback_address_mismatch`,
-   `bcon_callback_currency_mismatch`, `bcon_callback_amount_unverified`,
-   `bcon_callback_underpaid`, `bcon_callback_overpaid`).
-7. Answers HTTP 200 for everything it has fully processed — including under/over payments,
-   which stay unpaid for human review — and a non-200 status only when a retry of the same
-   callback could still change the outcome: 400 for invalid/unverifiable notifications
-   (including a txid Bcon does not yet report) and 503 while Bcon's API is unreachable.
+- It must be an absolute HTTPS URL ending in `/api/nowpayments/ipn`.
+- By default it is derived from `NEXT_PUBLIC_SITE_URL`. Set
+  `NOWPAYMENTS_IPN_CALLBACK_URL` only to pin a different absolute URL; an
+  invalid value is ignored with a warning in System Health.
+- If the NOWPayments dashboard also offers a store-level IPN/default callback
+  field, enter the same URL there for consistency.
+- The endpoint is public by design (NOWPayments calls it server-to-server)
+  and is excluded from the auth middleware. Reachability is necessary but not
+  sufficient — every notification must also carry a valid signature.
 
-Consequence: a hand-crafted callback URL typed into a browser cannot confirm a payment any
-more. Confirmation requires a transaction that Bcon itself reports as confirmed for that
-address and amount.
+### 6. Configure the matching Vercel environment variables
 
-### 7. Test callback reachability safely (no money, no payment records touched)
+Vercel → Project → **Settings** → **Environment Variables** (Production, and
+Preview if you test there):
 
-1. Admin → System Health → **Bcon store** → **Test callback reachability**: performs a real
-   HTTPS GET of the callback URL from the deployment and reports the status code. Bcon
-   treats HTTP 200 as a successful callback.
+| Variable | Value |
+|---|---|
+| `NOWPAYMENTS_API_KEY` | API key from step 2 |
+| `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key from step 3 |
+| `NOWPAYMENTS_DEFAULT_PAY_CURRENCY` | `usdterc20` (must be one of the allowlist identifiers) |
+| `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional pin for the URL in step 5 |
+| `NEXT_PUBLIC_SITE_URL` | Canonical origin, e.g. `https://erobabe.vercel.app` |
+
+Redeploy after changing any of them. Then open Admin → System Health →
+**NOWPayments — API & IPN configuration** and confirm: API key configured,
+API reachable, IPN secret set, and the expected callback URL shown.
+
+### 7. What the application does with an IPN
+
+`/api/nowpayments/ipn` (POST) treats every notification as untrusted until:
+
+1. The `x-nowpayments-sig` header verifies: the body is parsed as JSON, its
+   top-level keys are sorted, and HMAC-SHA512 (hex) is computed with
+   `NOWPAYMENTS_IPN_SECRET`, compared in constant time. Missing, malformed,
+   or wrong signatures are rejected (401) and touch nothing.
+2. The `payment_id` / `order_id` (our invoice number) resolves to a real
+   payment row. Unknown references answer 200 as `unknown_payment` with an
+   audit row — never retried, never applied.
+3. The reported `pay_currency`, receiving address, and USD price match the
+   stored payment. Mismatches are rejected and audited.
+4. Terminal claims are corroborated with an authenticated
+   `GET https://api.nowpayments.io/v1/payment/{payment_id}`. A `finished`
+   claim the API does not confirm is recorded, never fulfilled.
+5. The paid crypto amount (`actually_paid`, else `pay_amount`) is compared to
+   the stored expected amount with integer math (2% tolerance). Under/over
+   payments become `underpaid`/`overpaid` for human review — campaigns never
+   activate on them.
+6. Processing is idempotent: a repeated final IPN answers `already_processed`
+   and cannot duplicate a confirmation, invoice payment, campaign activation,
+   or business event; stale intermediate IPNs never overwrite a terminal
+   state; a `refunded` IPN after completion moves the payment to `refunded`
+   and pauses its campaigns.
+7. HTTP semantics: 200 for processed/recorded notifications, 401 for bad
+   signatures, 400 for invalid or mismatched payloads, 503 when NOWPayments
+   (or the network) is transiently unreachable so the IPN is retried — and
+   500 on database failure without claiming success.
+
+Status mapping (internal `payments.status` keeps the lifecycle,
+`provider_status` keeps the raw value):
+
+| NOWPayments | Internal | Fulfills? |
+|---|---|---|
+| `waiting` | `awaiting_confirmation` | No |
+| `confirming`, `confirmed`, `sending` | `partially_confirmed` | No |
+| `partially_paid` | `underpaid` (manual review) | No |
+| `finished` | `confirmed` (only after verification) | Yes |
+| `failed` / `expired` | `failed` / `expired` | No |
+| `refunded` | `refunded` | No (pauses campaigns) |
+
+### 8. Test IPN reachability safely (no money, no payment records touched)
+
+1. Admin → System Health → **NOWPayments** → **Test IPN reachability**:
+   performs a real HTTPS GET of the IPN URL from the deployment and reports
+   the status code. NOWPayments retries notifications that do not answer 200.
 2. Or from any machine:
+
    ```bash
-   curl -i https://erobabe.vercel.app/api/bcon/callback
+   curl -i https://erobabe.vercel.app/api/nowpayments/ipn
    ```
-   Expect `HTTP/2 200` and `{"status":"ok","message":"Bcon callback endpoint is reachable"}`.
-3. Bcon's dashboard **Merchants → Test Payments** page (API equivalent
-   `POST https://external-api.bcon.global/api/v1/test`) can generate a fake transaction for
-   the store. It proves Bcon can reach the URL and is recorded as `unknown_payment` (or
-   rejected by verification) for review — it does **not** confirm a real payment, because no
-   matching payment row/address exists. Never treat a test payment as money received.
 
-### 8. Process a genuine test payment end to end
+   Expect `HTTP/2 200` and
+   `{"status":"ok","message":"NOWPayments IPN endpoint is reachable"}`.
+3. Prove signatures are enforced (must NOT confirm anything):
 
-1. Sign in to the deployed site with a test advertiser account and create the smallest
-   checkout you are willing to pay for (the current minimum is one $99 slot for one month —
-   there is no fabricated sandbox amount).
-2. The checkout shows the exact amount, token, network and receiving address. Send exactly
-   that amount from your own wallet on the matching network; a different token or network
-   will not confirm.
-3. Wait for confirmations (Bcon reports `confirmed` after 2 confirmations).
-4. Expected result: Bcon calls `/api/bcon/callback` → the route verifies the payment row and
-   Bcon's transaction record → `payments.status = 'confirmed'` with `confirmed_at` set, the
-   invoice becomes `paid`, `payment_events` gains `callback_received`, `transaction_verified`
-   and `confirmed`, and the campaign becomes `active` (creative approved) or `pending_review`.
-5. Verify: Admin → System Health shows the store healthy, Admin → Logs shows
-   `payment_confirmed`, and the advertiser's campaign page shows the activated campaign.
+   ```bash
+   curl -i -X POST https://erobabe.vercel.app/api/nowpayments/ipn \
+     -H 'Content-Type: application/json' \
+     -d '{"payment_id":"123","payment_status":"finished"}'
+   ```
 
-### 9. Diagnose missing callbacks, unconfirmed payments and wrong callback values
+   Expect HTTP 401 `{"status":"rejected",…}` and no new `payment_events` row.
+
+### 9. Process a genuine test payment end to end
+
+1. Sign in to the deployed site with a test advertiser account and create the
+   smallest checkout you are willing to pay for (the current minimum is one
+   $99 slot for one month — there is no fabricated sandbox amount).
+2. The checkout shows the exact crypto amount, asset, network, and receiving
+   address, and polls `/api/nowpayments/status` so the state updates without
+   a page refresh. Send exactly that amount from your own wallet on the
+   matching network; a different token or network will not confirm.
+3. Wait for NOWPayments to process the payment to `finished`.
+4. Expected result: NOWPayments POSTs the signed IPN → the route verifies the
+   signature, correlates the payment, corroborates with the payment API, and
+   verifies the amount → `payments.status = 'confirmed'` with `confirmed_at`
+   set, the invoice becomes `paid`, `payment_events` gains `ipn_received`,
+   `payment_verified`, and `confirmed`, and the campaign becomes `active`
+   (creative approved) or `pending_review`.
+5. Verify: Admin → System Health shows NOWPayments healthy, Admin → Logs
+   shows `payment_confirmed`, and the advertiser's campaign page shows the
+   activated campaign.
+6. Send the same final IPN again (NOWPayments retries, or replay the exact
+   signed body): expect `already_processed` and exactly one `confirmed` event.
+
+### 10. Diagnose missing IPNs, unconfirmed payments, and wrong values
 
 | Symptom | Where to look | What to do |
 |---|---|---|
-| Bcon form still says `callback_url.btc must be a string` | The Bcon dashboard form | One or more callback inputs were submitted empty. Fill every rendered callback input (step 5) or disable the chain, then save. |
-| System Health shows **Callback incomplete** | System Health → Bcon store table | The `Registered value` column says `empty`; paste the URL shown at the top of that panel into that chain's field in Bcon and save. |
-| System Health shows **Callback mismatch** | Same table | The chain points at another deployment (often an old preview URL). Replace it with the URL shown at the top of the panel. |
-| System Health shows **Unreachable** | Same panel | `BCON_API_KEY` missing/invalid or the Bcon API cannot be reached; the panel prints the HTTP status. |
-| Payment stays `awaiting_confirmation` after a real payment | `payment_events` and `audit_logs` for that payment | `callback_received` = Bcon reached us. `verification_pending` + HTTP 503 = Bcon's API was unreachable, Bcon retries. `verification_failed` / `bcon_callback_transaction_unverified` = Bcon has no such txid. `amount_unverified` / `amount_mismatch` = amount evidence missing or mismatched (`underpaid`/`overpaid`). |
-| `unknown_payment` | `audit_logs.action = 'bcon_callback_unknown_payment'` | The callback matched no `external_id`/address — usually a Bcon **Test Payment** (expected) or a callback from another/older store. |
-| Nothing arrives at all | Bcon dashboard callback field(s) | Bcon never called us: the URL is missing or wrong on the store, or the payment has not reached the confirmation threshold. Confirm with steps 5 and 7. |
+| System Health shows **Unreachable** | NOWPayments panel | `NOWPAYMENTS_API_KEY` missing/invalid or the API cannot be reached; the panel prints the message. |
+| System Health shows **IPN secret missing** | Same panel | Set `NOWPAYMENTS_IPN_SECRET` — every IPN is rejected until then. |
+| Payment stays `awaiting_confirmation` after a real payment | `payment_events` and `audit_logs` for that payment | `ipn_received` = NOWPayments reached us. `verification_pending` + HTTP 503 = the payment API was unreachable, NOWPayments retries. `verification_failed` / `nowpayments_ipn_unverified` = the API does not report that payment id. `amount_unverified` / `amount_mismatch` = amount evidence missing or mismatched (`underpaid`/`overpaid`). |
+| `unknown_payment` | `audit_logs.action = 'nowpayments_ipn_unknown_payment'` | The IPN matched no `payment_id`/`order_id` — usually a notification for another store or a stale replay. |
+| Signature rejections | Server logs (`NOWPayments IPN rejected`) | The IPN secret on the server does not match the dashboard value, or the body was altered in transit. |
+| Nothing arrives at all | NOWPayments dashboard payment page | NOWPayments never sent the IPN: check the payment exists, its status, and that the `ipn_callback_url` on it is this deployment's URL. Confirm reachability with step 8. |
+| Currency errors at checkout | Checkout error + payment `creation_failed` event | The `pay_currency` is not enabled for the account — enable the coin (step 4) or pick another asset. |
 
-Never mark a payment `confirmed` by hand unless you independently verified the transaction
-in Bcon or on a blockchain explorer first — see "Rollback and recovery" below.
+Never mark a payment `confirmed` by hand unless you independently verified the
+payment in NOWPayments (`GET /v1/payment/{payment_id}` with the API key
+shows `finished` for that address and amount) — see "Rollback and recovery".
 
 ---
 
@@ -389,7 +417,7 @@ in Bcon or on a blockchain explorer first — see "Rollback and recovery" below.
    2. The browser `PUT`s the thumbnail straight to Supabase Storage with `XMLHttpRequest`.
    3. `POST /api/videos/uqload-session` returns the Uqload upload-server URL plus its form fields (`key`, `file_public=1`, `file_adult=1`) so the browser can POST the video bytes **directly to Uqload** (a CORS "simple request" — no custom headers, no `xhr.upload` listeners, `withCredentials=false`; adding any of those forces a preflight Uqload never answers and cancels the upload before a single byte is sent).
    4. `POST /api/videos/uqload-confirm` (`mode: "snapshot"`) snapshots the account's file codes **before** the bytes leave; the browser then re-sends `{ fileTitle, fileName, knownFileCodes, finalAttempt }` until a new code appears (backoff polling, one `file/list` per poll). The title only ranks several new files — the diff identifies the upload, because Uqload's stored title is derived from the file name and never matches a cleaned title.
-   5. The browser posts only `{ providerFileId, thumbnailPath, categoryId, fileName }` to `POST /api/videos/upload` (a few hundred bytes). That route generates Groq metadata and creates the video record.
+   5. The browser posts only `{ providerFileId, thumbnailPath, categoryId, fileName }` to `POST /api/videos/upload` (a few hundred bytes). That route generates Gemini metadata and creates the video record.
    6. If the confirmation window closes before the file appears, the admin UI shows **Re-check library** — it re-runs the same diff against the stored snapshot instead of re-uploading the bytes.
 
    Do not move `UQLOAD_API_KEY` into browser code merely to shorten this path.
@@ -416,14 +444,39 @@ in Bcon or on a blockchain explorer first — see "Rollback and recovery" below.
 
 ---
 
-## E. Groq Setup
+## E. Gemini API Setup
 
-1. Go to https://console.groq.com → **API Keys** → **Create API Key**
-2. Copy key (starts `gsk_...`) — this is `GROQ_API_KEY` (server-only, never expose to browser)
-3. Set env: `GROQ_API_KEY=gsk_...`, `GROQ_MODEL=llama-3.1-8b-instant` (or current recommended model per docs)
-4. Test: go to `/admin/videos/upload`, choose a category and source, then publish. The server must generate title, description, and tags with Groq before it creates the video record.
-5. If Groq is not configured or returns incomplete metadata, publishing stops with a clear error; title, description, and tags are intentionally not browser-editable in this workflow.
-6. **Important**: Never send video bytes, private rights docs, payment records, or personal info to Groq. Only the source filename/URL path and selected category are sent for metadata generation. AI output is not proof of rights, age, consent, or factual attributes.
+Docs: https://ai.google.dev/gemini-api/docs/generate-content —
+SDK: https://googleapis.github.io/js-genai/ — code: `lib/gemini/`,
+route: `/api/gemini/suggest`.
+
+1. Go to https://aistudio.google.com/apikey → **Create API key** (a Google
+   Cloud project may be required — follow the current AI Studio flow).
+2. Copy the key — this is `GEMINI_API_KEY` (server-only, never expose to the
+   browser, never a `NEXT_PUBLIC_*` variable).
+3. Set env: `GEMINI_API_KEY=<key>`, `GEMINI_MODEL=gemini-flash-latest` (or
+   another currently supported low-latency text model per the docs above).
+4. In Vercel → Project → **Settings** → **Environment Variables**, set both
+   for Production (and Preview if you test there), then redeploy.
+5. Test: go to `/admin/videos/upload`, choose a category and source, then
+   publish. The server must generate title, description, and tags with Gemini
+   before it creates the video record. Alternatively POST to
+   `/api/gemini/suggest` as an admin with `{ "fileName": "clip.mp4" }` and
+   expect a `{ suggestion, note }` response.
+6. If Gemini is not configured, publishing stops with a clear error; if it
+   returns incomplete metadata, times out, or hits quota, the route answers
+   503/502/429 with an actionable message and nothing is published. Title,
+   description, and tags are intentionally not browser-editable in this
+   workflow.
+7. **Important**: Never send video bytes, private rights docs, payment
+   records, or personal info to Gemini. Only the source filename/URL path,
+   working title, selected category, and existing tags are sent for metadata
+   generation. AI output is not proof of rights, age, consent, or factual
+   attributes, and suggestions require human review.
+8. Diagnose: `GEMINI_API_KEY` missing → 503 "not configured"; wrong key →
+   503; quota/rate limit → 429; malformed model output → 502. The key never
+   appears in responses, logs, or client bundles (verified in CI by the
+   client-bundle secret check).
 
 ---
 
@@ -454,7 +507,7 @@ in Bcon or on a blockchain explorer first — see "Rollback and recovery" below.
    - Sign up new advertiser — should receive verification email via Resend
    - Reset password — should receive reset email
    - Create campaign — should receive submission confirmation (if you wire `sendEmail` in campaign creation)
-   - Payment confirmation — requires a real confirmed Bcon transaction (see section C.8); a hand-made callback no longer confirms a payment, so use a genuine (smallest) payment or the automated tests instead
+   - Payment confirmation — requires a real verified NOWPayments `finished` payment (see section C.9); an unsigned or hand-made IPN never confirms a payment, so use a genuine (smallest) payment or the automated tests instead
    - Contact form — submit at `/contact`, check `support_tickets` table and email to support
    - Support ticket — similar
    - Content removal — submit at `/content-removal`, check `reports` table and ack email
@@ -499,7 +552,7 @@ in Bcon or on a blockchain explorer first — see "Rollback and recovery" below.
 **If using Fly.io:**
 ```bash
 fly launch --dockerfile Dockerfile (create Dockerfile for Next.js)
-fly secrets set NEXT_PUBLIC_SUPABASE_URL=... NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=... SUPABASE_SECRET_KEY=... BCON_API_KEY=... etc
+fly secrets set NEXT_PUBLIC_SUPABASE_URL=... NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=... SUPABASE_SECRET_KEY=... NOWPAYMENTS_API_KEY=... NOWPAYMENTS_IPN_SECRET=... etc
 fly deploy
 ```
 
@@ -516,7 +569,7 @@ fly deploy
 3. **Verify HTTPS**: Hosting should auto-provision Let's Encrypt cert — check `https://YOUR_DOMAIN` loads with valid cert
 4. **Canonical domain**: Choose `https://erobabe.com` (no www) or `https://www.erobabe.com` — set `NEXT_PUBLIC_SITE_URL` to canonical, and configure redirect from non-canonical to canonical in hosting or Next.js config
 5. **Auth redirect URLs**: Update Supabase Auth URL Configuration to use production domain (see Supabase Setup step 3)
-6. **Callback endpoints**: `https://YOUR_DOMAIN/api/bcon/callback` must be reachable via HTTPS and must answer HTTP 200 to a parameter-less GET (that is what the Bcon callback probe expects). It is public by design and excluded from the auth middleware. On the Bcon store, the same URL has to be entered in every per-chain callback field — see section C.5.
+6. **Callback endpoints**: `https://YOUR_DOMAIN/api/nowpayments/ipn` must be reachable via HTTPS and must answer HTTP 200 to a parameter-less GET (NOWPayments retries notifications that do not answer 200). It is public by design and excluded from the auth middleware, and every payment sends this URL as its `ipn_callback_url` — see section C.5.
 7. **Sitemap**: `https://YOUR_DOMAIN/sitemap.xml` and `https://YOUR_DOMAIN/video-sitemap.xml` must be accessible
 
 ---
@@ -530,20 +583,20 @@ fly deploy
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Yes | Supabase Dashboard → Project Settings → API → Project URL | Hosting env, .env.local | dev, prod | `https://xxx.supabase.co` | Yes |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key (safe for browser with RLS) | Yes | Supabase Dashboard → API → Publishable key | Hosting env | dev, prod | Starts `sb_publishable_` | Yes |
 | `SUPABASE_SECRET_KEY` | Supabase secret key (service_role, bypasses RLS) — server only | No | Supabase Dashboard → API → Secret key | Hosting env secrets, Supabase Edge Functions secrets | prod | Never in client bundle, check server logs not exposed | Yes |
-| `BCON_API_KEY` | Bcon Global API key of the store that receives the payments | No | Bcon Dashboard → Merchants → store → Store Settings → Copy Generated Keys | Hosting secrets | prod | `stores/get_store` in Admin → System Health resolves the store; also used by `/api/bcon/create` and callback verification | Yes |
-| `BCON_CALLBACK_URL` | Optional pin for the callback URL the app reports/verifies (must be an absolute URL ending in `/api/bcon/callback`) | No | Your domain | Hosting env | prod (optional) | Admin → System Health shows `URL source`: `BCON_CALLBACK_URL`; an invalid value is reported as a config warning and ignored | Yes |
-| `BCON_CHAIN` | Blockchain for payments | No | Choose: ethereum, tron, binance, bitcoin, solana | Hosting env | prod | Matches the chain enabled on the Bcon store | Yes |
-| `BCON_PAYMENT_CURRENCY` | Token ticker (USDT, USDC, BTC) | No | Bcon store currencies | Hosting env | prod | Must be enabled in the Bcon store; verified against the currency Bcon reports in the transaction record | Yes |
+| `NOWPAYMENTS_API_KEY` | NOWPayments API key (`x-api-key`) | No | NOWPayments Dashboard → Store Settings → API key | Hosting secrets | prod | Admin → System Health → NOWPayments panel shows API reachable; also used by `/api/nowpayments/create` and IPN corroboration | Yes |
+| `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional pin for the IPN callback URL the app sends with every payment (must be an absolute URL ending in `/api/nowpayments/ipn`) | No | Your domain | Hosting env | prod (optional) | Admin → System Health shows `URL source`: `NOWPAYMENTS_IPN_CALLBACK_URL`; an invalid value is reported as a config warning and ignored | Yes |
+| `NOWPAYMENTS_DEFAULT_PAY_CURRENCY` | Default NOWPayments asset identifier | No | One of: usdterc20, usdttrc20, usdtbsc, usdtsol, btc, eth, trx, bnbbsc, sol | Hosting env | prod | Must be enabled in the NOWPayments dashboard; checkout validates every selection server-side | Yes |
+| `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key for `x-nowpayments-sig` verification | No | NOWPayments Dashboard → Store Settings → IPN Secret Key | Hosting secrets | prod | Admin → System Health shows IPN secret set; every IPN is rejected without it | Yes |
 | `VIDEO_PROVIDER` | Video hosting provider | No | Choose: internal, uqload, bunny, etc. | Hosting env | prod | `internal` for fallback | Yes |
 | `UQLOAD_API_KEY` | Uqload API key | No | https://uqload.vc → Account → API key | Hosting secrets | prod (if using) | Test via `GET /api/upload/server` | Yes |
 | `UQLOAD_ADULT_CONTENT_APPROVED` | Flag confirming written approval for adult content on Uqload | No | Set to `true` only after written provider confirmation | Hosting env | prod | Must be `true` AND `UQLOAD_API_KEY` set for Uqload to be enabled | Yes |
-| `GROQ_API_KEY` | Groq API key for metadata suggestions | No | https://console.groq.com → API Keys | Hosting secrets | prod (optional) | Test via `/api/groq/suggest` | Yes |
-| `GROQ_MODEL` | Groq model name | No | Current docs, e.g., `llama-3.1-8b-instant` | Hosting env | prod (optional) | Check Groq docs | Yes |
+| `GEMINI_API_KEY` | Gemini API key for metadata suggestions | No | https://aistudio.google.com/apikey → Create API key | Hosting secrets | prod (optional) | Test via `/api/gemini/suggest` as admin | Yes |
+| `GEMINI_MODEL` | Gemini model name | No | Current docs, e.g., `gemini-flash-latest` | Hosting env | prod (optional) | Check https://ai.google.dev/gemini-api/docs for supported models | Yes |
 | `RESEND_API_KEY` | Resend API key | No | https://resend.com → API Keys | Hosting secrets, Supabase SMTP password | prod | Test via contact form | Yes |
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |
 
-**Security**: Never place `SUPABASE_SECRET_KEY`, `BCON_API_KEY`, `UQLOAD_API_KEY`, `GROQ_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
+**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `UQLOAD_API_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
 
 ---
 
@@ -573,7 +626,7 @@ npx playwright test
 **Admin:**
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
 - [ ] Video publisher at `/admin/videos/upload` → upload multiple local files, paste a public iframe source, or import one or more public direct-video URLs to Uqload
-- [ ] Choose only a category and optional thumbnail; title, description, and tags are generated server-side by Groq before publishing
+- [ ] Choose only a category and optional thumbnail; title, description, and tags are generated server-side by Gemini (`/api/gemini/suggest` contract: title, description, tags, category) before publishing
 - [ ] Publish action sets status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]` (Uqload can still be encoding)
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
@@ -589,12 +642,12 @@ npx playwright test
 - [ ] Slots at `/advertiser/slots` → shows 10 slots with real availability (checks active campaigns overlapping)
 - [ ] Try to reserve same slot overlapping period as another advertiser → 409 conflict (concurrency-safe)
 - [ ] Create campaign at `/advertiser/campaigns/new` → select one or multiple available slots, duration, destination URL, creative (JPG/PNG/GIF, ≤10 MB) → submit → one payment address returned for the selected slots
-- [ ] Payment request creation at `/api/bcon/create` → verifies session, trusted slot price, prevents overlapping, creates pending invoice and short unique Bcon external_id, returns address, amount, token, network
-- [ ] Checkout UX: shows exact amount, USD equivalent, ticker, network, address, QR, copy button, expiration, pending status, instructions for correct network
-- [ ] Callback reachability probe: `curl -i https://YOUR_DOMAIN/api/bcon/callback` → HTTP 200 `{"status":"ok",…}` and no row written to `payments` / `payment_events`
-- [ ] Synthetic confirmation attempt (must NOT confirm): `GET /api/bcon/callback?external_id=<real id>&addr=<real address>&txid=0xnotreal&value=99&status=2` → HTTP 400, payment stays `awaiting_confirmation`, `audit_logs` gains `bcon_callback_transaction_unverified`. Only a transaction Bcon itself reports as `confirmed` (`GET /api/v1/transactions/<txid>`) can move a payment to `confirmed`.
-- [ ] Genuine payment (real funds, smallest checkout): Bcon callback arrives → payment `confirmed`, invoice paid, campaign `pending_review` or `active` if the creative is approved
-- [ ] Duplicate callback with same txid → `already_processed`, no duplicate ledger entries
+- [ ] Payment request creation at `/api/nowpayments/create` → verifies session, trusted slot price, validates the asset/network against the server allowlist, prevents overlapping, creates the local payment + pending invoice, then creates the NOWPayments payment (`POST /v1/payment`) and returns address, crypto amount, asset, and network
+- [ ] Checkout UX: shows exact crypto amount, USD equivalent, asset, network, address, copy button, expiration, live status (polls `/api/nowpayments/status`, no page refresh needed), instructions for correct network
+- [ ] IPN reachability probe: `curl -i https://YOUR_DOMAIN/api/nowpayments/ipn` → HTTP 200 `{"status":"ok",…}` and no row written to `payments` / `payment_events`
+- [ ] Synthetic confirmation attempt (must NOT confirm): unsigned `POST /api/nowpayments/ipn` with `{"payment_id":"<real id>","payment_status":"finished"}` → HTTP 401, payment stays `awaiting_confirmation`, nothing written. Only a correctly signed IPN corroborated by `GET /v1/payment/{id}` as `finished` with a matching amount can move a payment to `confirmed`.
+- [ ] Genuine payment (real funds, smallest checkout): signed NOWPayments IPN arrives → payment `confirmed`, invoice paid, campaign `pending_review` or `active` if the creative is approved
+- [ ] Duplicate final IPN → `already_processed`, no duplicate ledger entries; exactly one `confirmed` event
 - [ ] Campaign approval: admin approves creative → campaign becomes active, appears on public site if slot active and schedule valid
 - [ ] Billing history at `/advertiser/payments` → real payments, no fake
 - [ ] Invoices at `/advertiser/invoices` → real invoices
@@ -602,17 +655,24 @@ npx playwright test
 - [ ] Profile at `/advertiser/profile` → real data, own only
 - [ ] Support ticket at `/advertiser/support` → persisted, email sent if Resend configured
 
-**Bcon:**
+**NOWPayments IPN:**
 - [ ] Empty/parameter-less probe → 200 `{"status":"ok"}`, nothing written
-- [ ] Malformed callback (no addr, no external_id) → 400
-- [ ] Duplicate callback → 200 `already_processed`, no duplicate ledger entries
-- [ ] Unknown payment reference → 200 `unknown_payment`, audit row written, not silently discarded
-- [ ] Callback claiming `status=2` whose txid Bcon does not report as confirmed → payment stays unconfirmed (400, audit row)
-- [ ] Callback `status=1`/`0` → recorded as `partially_confirmed`/`unconfirmed`, never paid
-- [ ] Incorrect amount → `underpaid`/`overpaid`, not confirmed, audit row
-- [ ] Wrong address, currency or network → rejected with the matching audit action
-- [ ] Bcon transaction API unreachable → HTTP 503 (Bcon retries), payment untouched
-- [ ] Repeated/duplicate transaction → idempotent, `confirmed` event exists exactly once
+- [ ] Missing signature → 401, nothing written; malformed signature → 401
+- [ ] Tampered body with a stale signature → 401, payment untouched
+- [ ] Malformed JSON body → 401
+- [ ] Missing `NOWPAYMENTS_IPN_SECRET` on the server → 503 (fails closed), payment untouched
+- [ ] Unknown payment id/order reference → 200 `unknown_payment`, audit row written, not silently discarded
+- [ ] `finished` claim the payment API does not corroborate → recorded, never fulfilled
+- [ ] Intermediate statuses (`waiting`/`confirming`/`confirmed`/`sending`) → recorded as `awaiting_confirmation`/`partially_confirmed`, never paid — including provider `confirmed`
+- [ ] `partially_paid` → `underpaid` for manual review, campaigns not activated
+- [ ] Amount mismatch on a finished payment → `underpaid`/`overpaid`, not confirmed, audit row
+- [ ] Wrong order reference, pay currency, address, or USD price → rejected with the matching audit action
+- [ ] `failed`/`expired` → payment + invoice updated, pending campaigns cancelled
+- [ ] `refunded` after completion → payment `refunded`, invoice `refunded`, campaigns paused
+- [ ] Payment API unreachable during verification → HTTP 503 (NOWPayments retries), payment untouched
+- [ ] Repeated final IPN → `already_processed`, `confirmed` event exists exactly once
+- [ ] Out-of-order/stale intermediate after completion → ignored, terminal state kept
+- [ ] No API key, IPN secret, or wallet material appears in `payment_events`, `audit_logs`, or server logs
 - [ ] No API key, secret or wallet material appears in `payment_events`, `audit_logs` or server logs
 
 **Video hosting:**
@@ -660,16 +720,19 @@ npx playwright test
 3. Verify RLS policies still enabled
 
 **Payment callback issues:**
-1. Check `payment_events` for the payment (`callback_received`, `verification_failed`, `amount_mismatch`, `confirmed`).
-2. Check `audit_logs` for `bcon_callback_unknown_payment`, `bcon_callback_transaction_unverified`,
-   `bcon_callback_address_mismatch`, `bcon_callback_currency_mismatch`,
-   `bcon_callback_amount_unverified`, `bcon_callback_underpaid`, `bcon_callback_overpaid`.
-3. Use Admin → System Health → Bcon store → **Test callback reachability** to prove the URL answers 200.
-4. Only if the transaction exists on-chain *and* Bcon reports it as confirmed
-   (`GET https://external-api.bcon.global/api/v1/transactions/<txid>` with `BCON_API_KEY`),
+1. Check `payment_events` for the payment (`ipn_received`, `verification_failed`, `verification_pending`, `amount_mismatch`, `payment_verified`, `confirmed`).
+2. Check `audit_logs` for `nowpayments_ipn_unknown_payment`, `nowpayments_ipn_unverified`,
+   `nowpayments_ipn_order_mismatch`, `nowpayments_ipn_currency_mismatch`,
+   `nowpayments_ipn_address_mismatch`, `nowpayments_ipn_price_mismatch`,
+   `nowpayments_ipn_amount_unverified`, `nowpayments_ipn_underpaid`, `nowpayments_ipn_overpaid`,
+   `nowpayments_ipn_partially_paid`.
+3. Use Admin → System Health → NOWPayments → **Test IPN reachability** to prove the URL answers 200.
+4. Only if NOWPayments itself reports the payment as `finished`
+   (`GET https://api.nowpayments.io/v1/payment/<payment_id>` with `NOWPAYMENTS_API_KEY`,
+   same address and amount),
    reconcile manually:
 ```sql
-update payments set status='confirmed', transaction_id='<txid>', confirmed_at=now() where external_id='...';
+update payments set status='confirmed', provider_status='finished', confirmed_at=now() where provider_payment_id='...';
 update invoices set status='paid', paid_at=now() where number='...';
 ```
    Record the reconciliation in `audit_logs` (action `payment_confirmed_manually`) — never
@@ -688,7 +751,7 @@ update invoices set status='paid', paid_at=now() where number='...';
 2. **Vercel Hobby**: Not suitable for commercial adult site. Hosting decision required — see `GO_LIVE_CHECKLIST.md`.
 3. **Age assurance**: Frontend gate alone not robust. Legal review required for jurisdiction-specific verification.
 4. **Legal identity**: Owner must provide real business details before publishing Terms/Privacy.
-5. **Bcon wallet**: Owner must configure authorized receiving wallet and choose token/network.
+5. **NOWPayments approval and wallet**: Owner must obtain written confirmation that NOWPayments permits this adult-entertainment business and its advertising use, then configure the payout wallet and enable the accepted coins.
 6. **Resend domain**: Must verify DNS before emails deliver reliably.
 
 A successful build does NOT imply cleared for commercial launch.

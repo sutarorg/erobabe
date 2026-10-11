@@ -1,7 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
-import { inspectBconSetup } from "@/lib/bcon/client";
+import { inspectNowpaymentsSetup } from "@/lib/nowpayments/client";
 import { getSiteUrl } from "@/lib/site";
-import BconStoreCheck from "./BconStoreCheck";
+import NowpaymentsCheck from "./NowpaymentsCheck";
 
 export default async function SystemHealthAdmin() {
   const supabase = createServiceClient();
@@ -15,42 +15,38 @@ export default async function SystemHealthAdmin() {
     const latency = Date.now() - start;
     dbStatus = error ? `Error: ${error.message}` : "Operational";
     dbLatency = `${latency} ms`;
-  } catch (e: any) {
-    dbStatus = `Failed: ${e.message}`;
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Unknown error";
+    dbStatus = `Failed: ${message}`;
   }
 
-  // Real Bcon check — reads the store over the API instead of trusting env vars.
-  let bconStatus = "Not configured";
-  let bconDetail = "Crypto payment gateway";
-  if (process.env.BCON_API_KEY) {
-    const bcon = await inspectBconSetup(getSiteUrl());
-    if (bcon.error) {
-      bconStatus = "Unreachable";
-      bconDetail = bcon.error;
-    } else if (!bcon.store) {
-      bconStatus = "No store found";
-      bconDetail = "BCON_API_KEY did not resolve to a store";
-    } else if (bcon.missingCallbackChains.length) {
-      bconStatus = "Callback incomplete";
-      bconDetail = `Empty callback field(s) on the Bcon store: ${bcon.missingCallbackChains
-        .map((code) => `callback_url.${code}`)
-        .join(", ")} — type the callback URL into those inputs (or disable those chains) before saving the store form`;
-    } else if (bcon.mismatchedCallbackChains.length) {
-      bconStatus = "Callback mismatch";
-      bconDetail = `Chains pointing somewhere else: ${bcon.mismatchedCallbackChains.join(", ")} (expected ${bcon.callbackUrl})`;
+  // Real NOWPayments check — verifies the API key against the live API.
+  let payStatus = "Not configured";
+  let payDetail = "Crypto payment gateway";
+  if (process.env.NOWPAYMENTS_API_KEY) {
+    const setup = await inspectNowpaymentsSetup(getSiteUrl());
+    if (setup.error) {
+      payStatus = "Unreachable";
+      payDetail = setup.error;
+    } else if (!setup.ipnSecretConfigured) {
+      payStatus = "IPN secret missing";
+      payDetail = "NOWPAYMENTS_IPN_SECRET is not set — incoming payment notifications will be rejected";
+    } else if (setup.configWarnings.length) {
+      payStatus = "Needs attention";
+      payDetail = setup.configWarnings[0];
     } else {
-      bconStatus = "Operational";
-      bconDetail = `Store “${bcon.store.name || bcon.store.id}” · ${bcon.chains.length} chain(s) reported by Bcon · callback URL registered on every chain Bcon reports. Delivery itself is not proven by this check — use “Test callback reachability” below.`;
+      payStatus = "Operational";
+      payDetail = `API reachable · IPN secret set · callback ${setup.ipnUrl}. Delivery itself is not proven by this check — use “Test IPN reachability” below.`;
     }
   }
 
   const checks = [
     { name: "Database", status: dbStatus, latency: dbLatency, desc: "Supabase PostgreSQL" },
     { name: "Auth", status: "Operational", latency: "—", desc: "Supabase Auth" },
-    { name: "Bcon API", status: bconStatus, latency: "—", desc: bconDetail },
+    { name: "NOWPayments API", status: payStatus, latency: "—", desc: payDetail },
     { name: "Video Provider", status: process.env.VIDEO_PROVIDER ? `${process.env.VIDEO_PROVIDER} ${process.env.UQLOAD_ADULT_CONTENT_APPROVED === "true" ? "(approved)" : "(blocked — see DEPLOYMENT.md)"}` : "Not configured", latency: "—", desc: "Uqload or replacement" },
     { name: "Resend", status: process.env.RESEND_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "Transactional email" },
-    { name: "Groq", status: process.env.GROQ_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "AI metadata assistant" },
+    { name: "Gemini", status: process.env.GEMINI_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "AI metadata assistant" },
   ];
 
   return (
@@ -71,10 +67,10 @@ export default async function SystemHealthAdmin() {
         ))}
       </div>
 
-      <BconStoreCheck />
+      <NowpaymentsCheck />
 
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
-        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the Bcon store. Never report healthy when no check performed.</p>
+        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the NOWPayments API. Never report healthy when no check performed.</p>
       </div>
     </div>
   );

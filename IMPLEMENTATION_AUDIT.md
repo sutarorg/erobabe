@@ -1,5 +1,13 @@
 # IMPLEMENTATION_AUDIT.md — Erobabe Pre-Implementation Audit (10 Oct 2026)
 
+> **Note (2026-10-11):** this is the historical pre-implementation audit of the original
+> Vite SPA. References to Bcon Global and Groq below describe the providers as they
+> existed at audit time. The active application has since migrated to NOWPayments for
+> cryptocurrency payments and Google's Gemini API for AI metadata — see
+> `IMPLEMENTATION_REPORT.md`, `DEPLOYMENT.md`, and `GO_LIVE_CHECKLIST.md` for the
+> current implementation.
+
+
 This document inventories the existing repository before transformation.
 
 ## Repository Root

@@ -11,7 +11,7 @@ import {
 } from "@/lib/video/publishing";
 import { resolveThumbnailUrl } from "@/lib/video/storage";
 
-/** Groq metadata plus a Uqload title edit can take a few seconds. */
+/** Gemini metadata plus a Uqload title edit can take a few seconds. */
 export const maxDuration = 60;
 
 /**

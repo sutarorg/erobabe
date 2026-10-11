@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { suggestVideoMetadata, type SuggestedMetadata } from "@/lib/groq/client";
+import { suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -87,7 +87,7 @@ async function generateMetadata(sourceName: string, categoryLabel: string): Prom
   const tags = normalizeTags(Array.isArray(raw.tags) ? raw.tags : []);
 
   if (!title || !description || !tags.length) {
-    throw new Error("Groq did not return complete title, description, and tags. Try again after checking GROQ_API_KEY.");
+    throw new Error("Gemini did not return complete title, description, and tags. Try again after checking GEMINI_API_KEY.");
   }
 
   return { title, description, tags, raw };
@@ -123,7 +123,7 @@ async function attachTags(service: ServiceClient, videoId: string, tags: string[
 }
 
 /**
- * Creates a private processing record after Groq generated its metadata. It
+ * Creates a private processing record after Gemini generated its metadata. It
  * becomes public only after an upload/embed operation succeeds and the admin
  * has clicked Publish in the UI.
  */

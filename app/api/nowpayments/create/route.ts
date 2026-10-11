@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { createBconExternalId, createBconPaymentAddress } from "@/lib/bcon/client";
+import {
+  createNowpaymentsPayment,
+  nowpaymentsIpnUrl,
+  resolvePayCurrency,
+} from "@/lib/nowpayments/client";
+import { getSiteUrl } from "@/lib/site";
 import { z } from "zod";
 
 const uuid = z.string().uuid();
@@ -49,6 +54,16 @@ export async function POST(req: NextRequest) {
     }
 
     const { durationMonths, paymentCurrency, chain } = parsed.data;
+
+    // Resolve the exact NOWPayments asset/network before touching the
+    // database — unsupported combinations fail fast with a clear error and
+    // are never silently substituted.
+    const resolved = resolvePayCurrency(paymentCurrency, chain);
+    if (!resolved.ok) {
+      return NextResponse.json({ error: resolved.error }, { status: 400 });
+    }
+    const choice = resolved.choice;
+
     const campaignIds: string[] = unique<string>([
       ...(parsed.data.campaignIds || []),
       ...(parsed.data.campaignId ? [parsed.data.campaignId] : []),
@@ -71,11 +86,13 @@ export async function POST(req: NextRequest) {
     if (!campaigns || campaigns.length !== campaignIds.length) {
       return NextResponse.json({ error: "One or more campaigns were not found" }, { status: 404 });
     }
-    if (campaigns.some((campaign: any) => campaign.payment_id)) {
+    if (campaigns.some((campaign: { payment_id: string | null }) => campaign.payment_id)) {
       return NextResponse.json({ error: "A selected campaign already has a payment request" }, { status: 409 });
     }
 
-    const slotIds: number[] = unique<number>(campaigns.map((campaign: any) => Number(campaign.slot_id))).sort((a, b) => a - b);
+    const slotIds: number[] = unique<number>(campaigns.map((campaign: { slot_id: number }) => Number(campaign.slot_id))).sort(
+      (a, b) => a - b
+    );
     if (
       requestedSlotIds.length &&
       (requestedSlotIds.length !== slotIds.length || requestedSlotIds.some((slotId) => !slotIds.includes(slotId)))
@@ -100,9 +117,11 @@ export async function POST(req: NextRequest) {
       .gte("end_date", startDay);
     if (overlappingError) throw overlappingError;
 
-    const conflicts = (overlapping || []).filter((campaign: any) => !campaignIds.includes(campaign.id));
+    const conflicts = (overlapping || []).filter(
+      (campaign: { id: string }) => !campaignIds.includes(campaign.id)
+    );
     if (conflicts.length) {
-      const conflictingSlots = unique(conflicts.map((campaign: any) => campaign.slot_id)).join(", ");
+      const conflictingSlots = unique(conflicts.map((campaign: { slot_id: number }) => campaign.slot_id)).join(", ");
       return NextResponse.json({ error: `Slot${conflicts.length > 1 ? "s" : ""} ${conflictingSlots} are no longer available` }, { status: 409 });
     }
 
@@ -115,28 +134,37 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "One or more selected slots were not found" }, { status: 404 });
     }
 
-    const priceBySlot = new Map<number, number>(slots.map((slot: any) => [Number(slot.id), Number(slot.price_cents)]));
+    const priceBySlot = new Map<number, number>(
+      slots.map((slot: { id: number; price_cents: number }) => [Number(slot.id), Number(slot.price_cents)])
+    );
     const priceCents: number = slotIds.reduce<number>((sum, slotId) => sum + (priceBySlot.get(slotId) || 0) * durationMonths, 0);
     if (!priceCents) return NextResponse.json({ error: "Unable to calculate a price for the selected slots" }, { status: 400 });
 
-    const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-    let payment: any = null;
-    let externalId = "";
+    if (!process.env.NOWPAYMENTS_API_KEY) {
+      return NextResponse.json(
+        { error: "Crypto payments are not configured", details: "The NOWPayments API key is missing on the server." },
+        { status: 503 }
+      );
+    }
 
-    // External ids are deliberately short for Bcon. Retrying an extremely
-    // unlikely unique collision keeps the database and Bcon in sync.
+    const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    let payment: Record<string, unknown> & { id: string; expires_at: string } | null = null;
+
+    // Invoice numbers are unique; retrying an extremely unlikely collision
+    // keeps the database and NOWPayments in sync without duplicates.
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      externalId = createBconExternalId();
+      const candidate = attempt === 0 ? invoiceNumber : `${invoiceNumber}-${attempt}`;
       const { data, error } = await service
         .from("payments")
         .insert({
           advertiser_id: user.id,
-          invoice_number: invoiceNumber,
-          external_id: externalId,
+          invoice_number: candidate,
+          provider: "nowpayments",
           amount_cents: priceCents,
           currency: "USD",
-          payment_currency: paymentCurrency.toUpperCase(),
-          chain,
+          payment_currency: choice.asset,
+          chain: choice.chain,
+          pay_currency: choice.payCurrency,
           status: "pending",
           expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
         })
@@ -144,38 +172,48 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (!error) {
-        payment = data;
+        payment = data as Record<string, unknown> & { id: string; expires_at: string };
         break;
       }
-      if (error.code !== "23505" || attempt === 2) throw error;
+      if ((error as { code?: string }).code !== "23505" || attempt === 2) throw error;
     }
 
     if (!payment) throw new Error("Could not create payment record");
+    const orderId = String(payment.invoice_number);
 
     const originAmount = (priceCents / 100).toFixed(2);
-    let bconResult;
+    let providerPayment;
     try {
-      bconResult = await createBconPaymentAddress({
-        payment_currency: paymentCurrency.toUpperCase(),
-        origin_amount: originAmount,
-        origin_currency: "USD",
-        external_id: externalId,
-        chain,
+      providerPayment = await createNowpaymentsPayment({
+        priceAmount: originAmount,
+        priceCurrency: "usd",
+        payCurrency: choice.payCurrency,
+        orderId,
+        orderDescription: `Erobabe advertising slots ${slotIds.join(", ")} — ${durationMonths} month${durationMonths > 1 ? "s" : ""}`,
+        ipnCallbackUrl: nowpaymentsIpnUrl(getSiteUrl()),
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Provider request failed";
       await service
         .from("payments")
-        .update({ status: "failed", bcon_response: { error: error.message } })
+        .update({ status: "failed", provider_response: { error: message.slice(0, 300) } })
         .eq("id", payment.id);
-      return NextResponse.json({ error: "Failed to create payment address", details: error.message }, { status: 502 });
+      await service.from("payment_events").insert({
+        payment_id: payment.id,
+        event_type: "creation_failed",
+        payload: { error: message.slice(0, 300), pay_currency: choice.payCurrency },
+      });
+      return NextResponse.json({ error: "Failed to create payment address", details: message }, { status: 502 });
     }
 
     const { error: paymentUpdateError } = await service
       .from("payments")
       .update({
-        payment_address: bconResult.address,
-        expected_amount: bconResult.amount,
-        bcon_response: bconResult.raw,
+        provider_payment_id: providerPayment.paymentId,
+        provider_status: providerPayment.providerStatus || "waiting",
+        payment_address: providerPayment.payAddress,
+        expected_amount: providerPayment.payAmount,
+        provider_response: providerPayment.raw,
         status: "awaiting_confirmation",
       })
       .eq("id", payment.id);
@@ -184,7 +222,7 @@ export async function POST(req: NextRequest) {
     const { data: invoice, error: invoiceError } = await service
       .from("invoices")
       .insert({
-        number: invoiceNumber,
+        number: orderId,
         advertiser_id: user.id,
         payment_id: payment.id,
         amount_cents: priceCents,
@@ -196,17 +234,40 @@ export async function POST(req: NextRequest) {
       .single();
     if (invoiceError) throw invoiceError;
 
-    const { error: campaignUpdateError } = await service
+    // Race-safe claim: only campaigns still without a payment are attached.
+    // If a concurrent checkout grabbed one first, this payment cannot be
+    // fulfilled for it, so fail loudly instead of double-charging a slot.
+    const { data: claimed, error: campaignUpdateError } = await service
       .from("campaigns")
-      .update({ payment_id: payment.id, invoice_id: invoice?.id })
+      .update({ payment_id: payment.id, invoice_id: (invoice as { id: string } | null)?.id })
       .in("id", campaignIds)
-      .eq("advertiser_id", user.id);
+      .eq("advertiser_id", user.id)
+      .is("payment_id", null)
+      .select("id");
     if (campaignUpdateError) throw campaignUpdateError;
+    if (!claimed || claimed.length !== campaignIds.length) {
+      await service
+        .from("payments")
+        .update({ status: "failed", provider_response: { ...providerPayment.raw, claim_error: "campaigns already claimed" } })
+        .eq("id", payment.id);
+      return NextResponse.json(
+        { error: "One or more campaigns were already claimed by another checkout. No charge was completed — please start again." },
+        { status: 409 }
+      );
+    }
 
     const { error: eventError } = await service.from("payment_events").insert({
       payment_id: payment.id,
       event_type: "address_created",
-      payload: { address: bconResult.address, amount: bconResult.amount, external_id: externalId, slot_ids: slotIds },
+      payload: {
+        provider: "nowpayments",
+        provider_payment_id: providerPayment.paymentId,
+        address: providerPayment.payAddress,
+        pay_amount: providerPayment.payAmount,
+        pay_currency: choice.payCurrency,
+        order_id: orderId,
+        slot_ids: slotIds,
+      },
     });
     if (eventError) throw eventError;
 
@@ -216,25 +277,30 @@ export async function POST(req: NextRequest) {
       target_type: "payment",
       target_id: payment.id,
       level: "info",
-      metadata: { slotIds, campaignIds, durationMonths, priceCents },
+      metadata: { provider: "nowpayments", slotIds, campaignIds, durationMonths, priceCents, pay_currency: choice.payCurrency },
     });
 
     return NextResponse.json({
       paymentId: payment.id,
-      invoiceNumber,
-      externalId,
-      address: bconResult.address,
-      amount: bconResult.amount,
-      paymentCurrency: paymentCurrency.toUpperCase(),
-      chain,
+      invoiceNumber: orderId,
+      orderId,
+      providerPaymentId: providerPayment.paymentId,
+      provider: "nowpayments",
+      address: providerPayment.payAddress,
+      amount: providerPayment.payAmount,
+      payCurrency: choice.payCurrency,
+      paymentCurrency: choice.asset,
+      network: choice.network,
+      chain: choice.chain,
       priceCents,
       priceUSD: priceCents / 100,
       expiresAt: payment.expires_at,
       slotIds,
       campaignIds,
     });
-  } catch (error: any) {
-    console.error("bcon/create error", error);
-    return NextResponse.json({ error: "Internal server error", details: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("nowpayments/create error", message);
+    return NextResponse.json({ error: "Internal server error", details: message }, { status: 500 });
   }
 }
