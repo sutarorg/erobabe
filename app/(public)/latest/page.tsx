@@ -15,8 +15,14 @@ export default async function LatestPage() {
 
   return (
     <div className="pt-4">
-      <h1 className="text-[22px] font-semibold tracking-tight">Latest Videos</h1>
-      <p className="mt-1 text-[12.5px] text-ink-3">Fresh uploads first</p>
+      <p className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">Fresh This Week</p>
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h1 className="text-[22px] font-semibold tracking-tight">Latest Videos</h1>
+        <span className="text-[12px] tabular-nums text-ink-3">{videos.length} videos</span>
+      </div>
+      <p className="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">
+        New scenes land every day, here is everything uploaded most recently.
+      </p>
 
       {videos.length === 0 ? (
         <div className="mt-8 rounded-lg border border-dashed border-line bg-card p-12 text-center">
