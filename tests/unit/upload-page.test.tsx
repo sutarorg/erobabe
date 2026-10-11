@@ -113,6 +113,44 @@ describe("admin publish videos page", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shows the provider reason when metadata fell back to file-name suggestions", async () => {
+    const warning = "AI metadata unavailable (Gemini API key was rejected). File-name metadata was used instead.";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                status: "published",
+                title: "Clip",
+                metadataSource: "fallback",
+                metadataWarning: warning,
+              },
+            ],
+            succeeded: 1,
+            failed: 0,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+      )
+    );
+
+    render(<UploadPage />);
+    fireEvent.click(await screen.findByText("Upload by link"));
+    fireEvent.change(screen.getByPlaceholderText(/cdn\.example\.com\/video-one\.mp4/), {
+      target: { value: "https://cdn.example/video.mp4" },
+    });
+    fireEvent.click(screen.getByText("Add link"));
+    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
+
+    const form = screen.getByText("Add link").closest("form") as HTMLFormElement;
+    fireEvent.submit(form);
+
+    expect(await screen.findByText(warning)).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
   it("keeps the category link working", async () => {
     render(<UploadPage />);
     const link = (await screen.findByText("Manage categories")).closest("a");
