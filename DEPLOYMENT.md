@@ -185,11 +185,12 @@ update public.profiles set role='admin' where email='admin@erobabe.com';
 3. This is `BCON_API_KEY` (server-only)
 
 ### 5. Configure real callback endpoint
-1. In Store Settings → **Callback URL** (or **Webhook**), set:
-   - `https://YOUR_DOMAIN/api/bcon/callback`
-   - Example: `https://erobabe.com/api/bcon/callback`
-2. Bcon docs show callback example uses query params: `addr`, `txid`, `value`, `status`, `external_id`
-3. Save
+1. In Store Settings → **Callback URL** (or **Webhook**), enter the callback as a **plain URL string** for every enabled chain. For the deployed Vercel app use:
+   - `https://erobabe.vercel.app/api/bcon/callback`
+2. Do **not** paste Markdown (`[label](url)`), JSON, an array, or a quoted object into a chain field. In particular, `callback_url.btc` must be the raw string above (and the equivalent `callback_url.eth`, `callback_url.bnb`, etc. must also each be a string if those chains are enabled).
+3. If the Bcon form says `callback_url.btc must be a string`, clear the field and paste only the URL with no leading/trailing spaces; it is a dashboard validation error, not an API-key error in this application.
+4. Bcon docs show callback parameters: `addr`, `txid`, `value`, `status`, `external_id`. This route accepts GET and POST callbacks and returns HTTP 200 to a reachability probe with no transaction values.
+5. Save
 
 ### 6. Configure callback behavior
 - Bcon does NOT document cryptographic signature for callback (as of 10 Oct 2026). Do NOT invent one.
@@ -256,9 +257,9 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
    - `POST https://sX.myvideo.com/upload/01` with FormData: `key`, `file`, `file_title`, `file_descr`, `tags`, `file_public=1`, `file_adult=1`
    - Response: `{ status:200, files:[{ filecode, filename, status }] }`
    - `GET https://uqload.vc/api/file/info?key=...&file_code=...` → check processing status, thumbnail
-4. **Upload worker**: For large files, do NOT route multi-GB through Vercel Function (request body limit ~4.5MB). Use direct upload to provider server returned by `/api/upload/server` (our code does this server-side). If still hitting limits, deploy dedicated upload worker on infrastructure that permits adult content (e.g., Fly.io with streaming).
-5. **Thumbnail behavior**: Uqload returns `player_img` in file info — we store as `thumbnail_url`
-6. **Processing status**: `canplay=1` means ready — our `/api/videos/status` checks this and updates DB from `processing` to `pending_review`
+4. **Upload worker**: For large local files, do **not** route multi-GB requests through a Vercel Function (request bodies are limited). This app relays the authenticated admin upload to Uqload so its API key remains server-only; deploy that route on an upload-capable worker/runtime that permits the intended content. Do not move `UQLOAD_API_KEY` into browser code merely to bypass the limit.
+5. **Thumbnail behavior**: An optional custom thumbnail is stored in the public `video-thumbnails` bucket; Uqload's `player_img` is used as a fallback once it is available.
+6. **Processing status**: A publish click makes the video public immediately. `canplay=1` lets `/api/videos/status` refresh duration/player details and mark its upload job complete.
 
 ### If using replacement provider
 
@@ -268,13 +269,13 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
 4. Ensure embed/playable URLs are returned correctly and are not blocked by robots.txt
 5. Test: upload via `/admin/videos/upload`, check status via `/api/videos/status`, verify playback on `/video/[slug]`
 
-### Supabase Storage for internal/fallback
+### Supabase Storage
 
 1. Go to **Storage** → **New bucket** → `ad-creatives` (public, for advertiser creatives)
-2. Create bucket `video-thumbnails` (public)
-3. Create bucket `videos` (private, if using internal provider for small files)
-4. Set policies: allow authenticated upload to own folder, public read for thumbnails/creatives
-5. Our code uses `supabase.storage.from("ad-creatives").upload(...)` — ensure bucket exists or upload will warn but not fail campaign creation
+2. Create bucket `video-thumbnails` (public, for admin-selected video thumbnails)
+3. Create bucket `videos` (private, only if you later implement an internal provider)
+4. Set policies: allow authenticated advertisers to upload/delete only within their own `ad-creatives/<user-id>/` folder; public read is needed for creative and thumbnail display.
+5. The campaign and publisher flows now fail clearly if their required bucket is missing. Verify both bucket names before accepting uploads.
 
 ---
 
@@ -283,9 +284,9 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
 1. Go to https://console.groq.com → **API Keys** → **Create API Key**
 2. Copy key (starts `gsk_...`) — this is `GROQ_API_KEY` (server-only, never expose to browser)
 3. Set env: `GROQ_API_KEY=gsk_...`, `GROQ_MODEL=llama-3.1-8b-instant` (or current recommended model per docs)
-4. Test: go to `/admin/videos/upload` → upload file, click **Suggest with Groq** → should return title, description, tags, category JSON
-5. If not configured, rest of app must continue to work without AI suggestions — our code returns 503 with clear message
-6. **Important**: Never send video bytes, private rights docs, payment records, or personal info to Groq. Only send file name, title, category, tags for metadata suggestion. AI output must be editable, reviewed, approved by admin before publication. Not proof of rights, age, consent, or factual attributes.
+4. Test: go to `/admin/videos/upload`, choose a category and source, then publish. The server must generate title, description, and tags with Groq before it creates the video record.
+5. If Groq is not configured or returns incomplete metadata, publishing stops with a clear error; title, description, and tags are intentionally not browser-editable in this workflow.
+6. **Important**: Never send video bytes, private rights docs, payment records, or personal info to Groq. Only the source filename/URL path and selected category are sent for metadata generation. AI output is not proof of rights, age, consent, or factual attributes.
 
 ---
 
@@ -327,7 +328,7 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
 
 ### GitHub
 1. Ensure repo https://github.com/sutarorg/erobabe is up to date
-2. Branch for this session: `arena/2ee39806-erobabe` — push changes: `git push origin arena/2ee39806-erobabe`
+2. Branch for this session: `arena/d8fa6809-erobabe` — push changes: `git push origin arena/d8fa6809-erobabe`
 3. Open PR from that branch to `main` if needed
 4. CI: add GitHub Actions workflow (`.github/workflows/ci.yml`) that runs `npm ci`, `npm run type-check`, `npm run test`, `npm run build`
 
@@ -433,26 +434,24 @@ npx playwright test
 
 **Admin:**
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
-- [ ] Upload video at `/admin/videos/upload` → select file, title, category, rights=cleared → upload → check `/api/videos/status?videoId=...` → status moves from uploading → processing → pending_review
-- [ ] Edit video metadata (if you implement edit UI) → changes persisted
-- [ ] Publish video: set status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]`
-- [ ] Unpublish video → disappears from public sitemap and listings, watch page returns 404
-- [ ] Category management at `/admin/categories` → list 12 fixed categories, add new category, prevent delete if videos reference it
+- [ ] Video publisher at `/admin/videos/upload` → upload multiple local files, paste a public iframe source, or import one or more public direct-video URLs to Uqload
+- [ ] Choose only a category and optional thumbnail; title, description, and tags are generated server-side by Groq before publishing
+- [ ] Publish action sets status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]` (Uqload can still be encoding)
+- [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
 - [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject
 - [ ] Campaigns at `/admin/campaigns` → list real campaigns
 - [ ] Payments at `/admin/payments` → list real payments, no fake
 - [ ] Reports at `/admin/reports` → list real reports, resolve
 - [ ] Users at `/admin/users` → list real profiles
-- [ ] Settings at `/admin/settings` → shows real site_settings
 - [ ] Logs at `/admin/logs` → shows real audit_logs
 - [ ] System health at `/admin/system-health` → shows real checks, Unknown if not configured, not hardcoded green
 
 **Advertiser:**
 - [ ] Slots at `/advertiser/slots` → shows 10 slots with real availability (checks active campaigns overlapping)
 - [ ] Try to reserve same slot overlapping period as another advertiser → 409 conflict (concurrency-safe)
-- [ ] Create campaign at `/advertiser/campaigns/new` → select slot, duration, destination URL, creative (16:9, JPG/PNG/WebP, <5MB) → submit → payment address returned
-- [ ] Payment request creation at `/api/bcon/create` → verifies session, trusted price, prevents overlapping, creates pending invoice and unique external_id, returns address, amount, token, network
+- [ ] Create campaign at `/advertiser/campaigns/new` → select one or multiple available slots, duration, destination URL, creative (JPG/PNG/GIF, ≤10 MB) → submit → one payment address returned for the selected slots
+- [ ] Payment request creation at `/api/bcon/create` → verifies session, trusted slot price, prevents overlapping, creates pending invoice and short unique Bcon external_id, returns address, amount, token, network
 - [ ] Checkout UX: shows exact amount, USD equivalent, ticker, network, address, QR, copy button, expiration, pending status, instructions for correct network
 - [ ] Simulate Bcon callback: `GET /api/bcon/callback?external_id=...&addr=...&txid=0x...&value=...&status=confirmed` → payment becomes confirmed, invoice paid, campaign pending_review or active if creative approved
 - [ ] Duplicate callback with same txid → idempotent, no duplicate ledger entries

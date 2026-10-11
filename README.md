@@ -27,7 +27,7 @@ Open http://localhost:3000
 - Supabase (Auth, Postgres, Storage, RLS)
 - Bcon Global (crypto payments)
 - Resend (transactional email)
-- Groq (AI metadata suggestions)
+- Groq (server-generated video metadata)
 - Tailwind CSS 4
 
 ## Routes
@@ -36,7 +36,7 @@ Public: `/`, `/categories`, `/category/[slug]`, `/latest`, `/popular`, `/video/[
 
 Advertiser: `/advertiser`, `/advertiser/slots`, `/advertiser/campaigns`, `/advertiser/campaigns/new`, `/advertiser/payments`, `/advertiser/invoices`, `/advertiser/analytics`, `/advertiser/profile`, `/advertiser/support`
 
-Admin: `/admin`, `/admin/videos`, `/admin/videos/upload`, `/admin/categories`, `/admin/playlists`, `/admin/advertisements`, `/admin/ad-slots`, `/admin/advertisers`, `/admin/campaigns`, `/admin/payments`, `/admin/reports`, `/admin/users`, `/admin/settings`, `/admin/logs`, `/admin/system-health`
+Admin: `/admin`, `/admin/videos`, `/admin/videos/upload`, `/admin/categories`, `/admin/advertisements`, `/admin/ad-slots`, `/admin/advertisers`, `/admin/campaigns`, `/admin/payments`, `/admin/reports`, `/admin/users`, `/admin/logs`, `/admin/system-health`
 
 SEO: `/sitemap.xml`, `/video-sitemap.xml`, `/robots.txt`
 

@@ -1,5 +1,14 @@
 import { createServiceClient } from "@/lib/supabase/server";
 
+function paymentAddressesMatch(chain: string | null | undefined, expected: string, received: string) {
+  // EVM-family addresses are case-insensitive. Bitcoin, TRON, and Solana
+  // encodings are case-sensitive and must match exactly.
+  if (["ethereum", "binance"].includes(String(chain).toLowerCase())) {
+    return expected.toLowerCase() === received.toLowerCase();
+  }
+  return expected === received;
+}
+
 /**
  * Verify Bcon callback against trusted DB records.
  * Idempotent — repeated callbacks with same txid must not duplicate.
@@ -48,6 +57,20 @@ export async function verifyAndProcessBconPayment(
     return { ok: false, error: "Payment not found", unknown: true };
   }
 
+  // A callback must identify the payment's actual receiving address. Looking
+  // up by external_id is useful, but is not sufficient authentication by
+  // itself because an external_id can be guessed.
+  if (!paymentAddress || !payment.payment_address || !paymentAddressesMatch(payment.chain, payment.payment_address, paymentAddress)) {
+    await supabase.from("audit_logs").insert({
+      action: "bcon_callback_address_mismatch",
+      target_type: "payment",
+      target_id: payment.id,
+      level: "warning",
+      metadata: { external_id: externalId, has_address: Boolean(paymentAddress) },
+    });
+    return { ok: false, error: "Callback address does not match payment" };
+  }
+
   // Idempotency: check if txid already processed
   if (txid) {
     const { data: existingEvents } = await supabase
@@ -73,10 +96,17 @@ export async function verifyAndProcessBconPayment(
   // We cannot strictly validate USD vs crypto without rate, but we check if value exists
   // For safety, we log under/over payment cases
   let status: string = "awaiting_confirmation";
-  const callbackAmount = value ? parseFloat(value) : null;
-  const expectedCrypto = payment.expected_amount ? parseFloat(payment.expected_amount) : null;
+  let callbackAmount = value ? parseFloat(value) : null;
+  let expectedCrypto = payment.expected_amount ? parseFloat(payment.expected_amount) : null;
 
-  if (callbackAmount !== null && expectedCrypto !== null) {
+  // Bcon documents BTC callback values in satoshis while a Bcon address
+  // response uses BTC units. Compare like-for-like before deciding whether a
+  // payment is under/over the expected amount.
+  if (payment.chain === "bitcoin" && callbackAmount !== null && expectedCrypto !== null) {
+    expectedCrypto *= 100_000_000;
+  }
+
+  if (callbackAmount !== null && expectedCrypto !== null && Number.isFinite(callbackAmount) && Number.isFinite(expectedCrypto)) {
     const diff = Math.abs(callbackAmount - expectedCrypto);
     const tolerance = expectedCrypto * 0.02; // 2% tolerance
     if (diff > tolerance) {
@@ -151,33 +181,28 @@ export async function confirmPayment(paymentId: string, txid: string) {
       .eq("number", payment.invoice_number);
   }
 
-  // Find and activate campaign if exists
+  // A single checkout can cover multiple slots, so move every linked
+  // campaign forward independently after the payment is confirmed.
   const { data: campaigns } = await supabase
     .from("campaigns")
-    .select("*")
-    .eq("payment_id", paymentId)
-    .limit(1);
+    .select("id, creative_id")
+    .eq("payment_id", paymentId);
 
-  if (campaigns && campaigns[0]) {
-    const campaign = campaigns[0];
-    // Only activate if creative approved and slot valid
-    const { data: creative } = await supabase
-      .from("ad_creatives")
-      .select("status")
-      .eq("id", campaign.creative_id)
-      .single();
+  if (campaigns?.length) {
+    const creativeIds = campaigns.map((campaign: any) => campaign.creative_id).filter(Boolean);
+    const { data: creatives } = creativeIds.length
+      ? await supabase.from("ad_creatives").select("id, status").in("id", creativeIds)
+      : { data: [] as any[] };
+    const creativeStatus = new Map((creatives || []).map((creative: any) => [creative.id, creative.status]));
 
-    if (creative?.status === "approved") {
-      await supabase
-        .from("campaigns")
-        .update({ status: "active" })
-        .eq("id", campaign.id);
-    } else {
-      await supabase
-        .from("campaigns")
-        .update({ status: "pending_review" })
-        .eq("id", campaign.id);
-    }
+    await Promise.all(
+      campaigns.map((campaign: any) =>
+        supabase
+          .from("campaigns")
+          .update({ status: creativeStatus.get(campaign.creative_id) === "approved" ? "active" : "pending_review" })
+          .eq("id", campaign.id)
+      )
+    );
   }
 
   // Audit log

@@ -3,7 +3,7 @@ import Link from "next/link";
 
 export default async function AdminVideosPage() {
   const supabase = createServiceClient();
-  const { data: videos } = await supabase.from("videos").select("id, slug, title, status, visibility, rights_status, moderation_status, view_count, created_at, category:categories(label)").order("created_at", { ascending: false }).limit(100);
+  const { data: videos } = await supabase.from("videos").select("id, slug, title, status, visibility, moderation_status, view_count, created_at, category:categories(label)").order("created_at", { ascending: false }).limit(100);
 
   return (
     <div>
@@ -25,7 +25,6 @@ export default async function AdminVideosPage() {
               <tr>
                 <th className="px-4 py-3">Title</th>
                 <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Rights</th>
                 <th className="px-4 py-3">Views</th>
                 <th className="px-4 py-3">Created</th>
                 <th className="px-4 py-3">Actions</th>
@@ -39,7 +38,6 @@ export default async function AdminVideosPage() {
                     <p className="text-[11px] text-ink-3">{v.category?.label || "—"}</p>
                   </td>
                   <td className="px-4 py-3"><span className="rounded-full bg-white/5 px-2 py-1 text-[10px] uppercase">{v.status}</span></td>
-                  <td className="px-4 py-3 text-[11px]">{v.rights_status}</td>
                   <td className="px-4 py-3 tabular-nums">{v.view_count || 0}</td>
                   <td className="px-4 py-3 text-[11px] text-ink-3">{new Date(v.created_at).toLocaleDateString()}</td>
                   <td className="px-4 py-3">

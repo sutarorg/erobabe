@@ -1,16 +1,43 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import {
+  ArrowLeft,
+  BarChart3,
+  CircleHelp,
+  CreditCard,
+  FileText,
+  LayoutDashboard,
+  LogOut,
+  Megaphone,
+  PlusCircle,
+  Radio,
+  UserRound,
+  type LucideIcon,
+} from "lucide-react";
+
+const advertiserNavigation: { href: string; label: string; icon: LucideIcon }[] = [
+  { href: "/advertiser", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/advertiser/slots", label: "Ad Slots", icon: Megaphone },
+  { href: "/advertiser/campaigns", label: "My Campaigns", icon: Radio },
+  { href: "/advertiser/campaigns/new", label: "New Campaign", icon: PlusCircle },
+  { href: "/advertiser/payments", label: "Payments", icon: CreditCard },
+  { href: "/advertiser/invoices", label: "Invoices", icon: FileText },
+  { href: "/advertiser/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/advertiser/profile", label: "Profile", icon: UserRound },
+  { href: "/advertiser/support", label: "Support", icon: CircleHelp },
+];
 
 export default async function AdvertiserLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   if (!user) redirect("/auth/sign-in?next=/advertiser");
 
   const { data: profile } = await supabase.from("profiles").select("role, status").eq("id", user.id).single();
   if (!profile || profile.role !== "advertiser") {
-    // If admin, allow? No, redirect to admin
     if (profile?.role === "admin") redirect("/admin");
     redirect("/auth/sign-in?next=/advertiser");
   }
@@ -28,34 +55,38 @@ export default async function AdvertiserLayout({ children }: { children: React.R
   return (
     <div className="flex h-screen bg-void text-ink">
       <aside className="hidden w-60 shrink-0 border-r border-line bg-psidebar lg:block">
-        <div className="flex h-full flex-col">
-          <div className="flex h-14 items-center gap-2 border-b border-line px-4">
+        <div className="flex h-full flex-col overflow-hidden">
+          <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-4">
             <img src="https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png" alt="erobabe" className="h-6 w-auto" />
             <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Advertiser</span>
           </div>
-          <nav className="flex-1 overflow-y-auto p-3">
+          <nav aria-label="Advertiser navigation" className="no-scrollbar flex-1 overflow-y-auto p-3">
             <div className="space-y-1">
-              {[
-                { href: "/advertiser", label: "Dashboard" },
-                { href: "/advertiser/slots", label: "Ad Slots" },
-                { href: "/advertiser/campaigns", label: "My Campaigns" },
-                { href: "/advertiser/campaigns/new", label: "New Campaign" },
-                { href: "/advertiser/payments", label: "Payments" },
-                { href: "/advertiser/invoices", label: "Invoices" },
-                { href: "/advertiser/analytics", label: "Analytics" },
-                { href: "/advertiser/profile", label: "Profile" },
-                { href: "/advertiser/support", label: "Support" },
-              ].map((item) => (
-                <Link key={item.href} href={item.href} className="block rounded-md px-3 py-2 text-[12.5px] font-medium text-ink-2 hover:bg-white/5 hover:text-ink">
-                  {item.label}
-                </Link>
-              ))}
+              {advertiserNavigation.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className="flex items-center gap-2.5 rounded-md px-3 py-2 text-[12.5px] font-medium text-ink-2 hover:bg-white/5 hover:text-ink"
+                  >
+                    <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-ink-3" strokeWidth={1.8} />
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
             </div>
           </nav>
-          <div className="border-t border-line p-3">
-            <Link href="/" className="block rounded-md px-3 py-2 text-[12px] text-ink-3 hover:text-ink">← Public site</Link>
+          <div className="shrink-0 border-t border-line p-3">
+            <Link href="/" className="flex items-center gap-2 rounded-md px-3 py-2 text-[12px] text-ink-3 hover:text-ink">
+              <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5" />
+              Public site
+            </Link>
             <form action="/auth/sign-out" method="post">
-              <button type="submit" className="mt-1 w-full rounded-md px-3 py-2 text-left text-[12px] text-ink-3 hover:text-ink">Sign out</button>
+              <button type="submit" className="mt-1 flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-[12px] text-ink-3 hover:text-ink">
+                <LogOut aria-hidden="true" className="h-3.5 w-3.5" />
+                Sign out
+              </button>
             </form>
           </div>
         </div>

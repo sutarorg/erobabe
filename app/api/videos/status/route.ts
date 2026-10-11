@@ -5,7 +5,9 @@ import { getVideoProvider } from "@/lib/video/provider";
 export async function GET(req: NextRequest) {
   try {
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
@@ -14,11 +16,9 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const videoId = url.searchParams.get("videoId");
     const jobId = url.searchParams.get("jobId");
-
     if (!videoId && !jobId) return NextResponse.json({ error: "videoId or jobId required" }, { status: 400 });
 
     const service = createServiceClient();
-
     let video: any = null;
     let job: any = null;
 
@@ -30,40 +30,50 @@ export async function GET(req: NextRequest) {
       const { data } = await service.from("upload_jobs").select("*").eq("id", jobId).single();
       job = data;
       if (!video && job?.video_id) {
-        const { data: v } = await service.from("videos").select("*").eq("id", job.video_id).single();
-        video = v;
+        const { data: relatedVideo } = await service.from("videos").select("*").eq("id", job.video_id).single();
+        video = relatedVideo;
       }
     }
 
     if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
 
-    // If provider is uqload and we have provider_file_id, check real processing status
     if (video.provider_file_id && video.provider === "uqload") {
       try {
         const provider = getVideoProvider("uqload");
         if (provider.isEnabled()) {
-          const info = await provider.getFileInfo(video.provider_file_id);
-          // Update DB if canPlay
-          if (info.canPlay && video.status === "processing") {
-            await service.from("videos").update({
-              status: "pending_review",
-              thumbnail_url: info.thumbnailUrl || video.thumbnail_url,
-              duration_seconds: info.durationSeconds || video.duration_seconds,
-            }).eq("id", video.id);
-
-            if (job) {
-              await service.from("upload_jobs").update({ status: "completed" }).eq("id", job.id);
+          const providerInfo = await provider.getFileInfo(video.provider_file_id);
+          if (providerInfo.canPlay) {
+            const updates: Record<string, unknown> = {
+              thumbnail_url: video.thumbnail_url || providerInfo.thumbnailUrl || null,
+              duration_seconds: providerInfo.durationSeconds || video.duration_seconds || null,
+              playable_url: provider.getPlayableUrl(video.provider_file_id),
+              embed_url: provider.getEmbedUrl(video.provider_file_id),
+            };
+            if (video.status !== "published") {
+              updates.status = "published";
+              updates.visibility = "public";
+              updates.rights_status = "cleared";
+              updates.moderation_status = "approved";
+              updates.published_at = video.published_at || new Date().toISOString();
             }
+            const { data: updatedVideo } = await service
+              .from("videos")
+              .update(updates)
+              .eq("id", video.id)
+              .select("*")
+              .single();
+            video = updatedVideo || video;
+            if (job) await service.from("upload_jobs").update({ status: "completed" }).eq("id", job.id);
           }
-          return NextResponse.json({ video, job, providerInfo: info });
+          return NextResponse.json({ video, job, providerInfo });
         }
-      } catch (e: any) {
-        console.warn("provider status check failed", e);
+      } catch (error) {
+        console.warn("provider status check failed", error);
       }
     }
 
     return NextResponse.json({ video, job });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

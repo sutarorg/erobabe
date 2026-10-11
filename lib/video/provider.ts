@@ -1,10 +1,7 @@
 /**
- * Video hosting provider abstraction
- * Keep provider-specific logic out of React components.
- *
- * Supported providers:
- * - uqload (blocked for adult content per TOS — adapter present but disabled in prod)
- * - bunny, cloudflare, s3, internal (future)
+ * Video hosting provider abstraction.
+ * Keep provider-specific logic out of React components and never expose a
+ * provider API key to the browser.
  */
 
 export interface UploadRequest {
@@ -15,6 +12,8 @@ export interface UploadRequest {
   categoryId?: string;
   tags?: string;
   mimeType?: string;
+  snapshot?: Blob;
+  snapshotFileName?: string;
 }
 
 export interface UploadResult {
@@ -24,7 +23,7 @@ export interface UploadResult {
   thumbnailUrl?: string;
   durationSeconds?: number;
   status: "processing" | "completed" | "failed";
-  rawResponse?: any;
+  rawResponse?: unknown;
 }
 
 export interface FileInfo {
@@ -49,6 +48,24 @@ export interface VideoProvider {
   getPlayableUrl(fileId: string): string;
 }
 
+function isProviderSuccess(status: unknown): boolean {
+  return status === 200 || status === "200";
+}
+
+async function readJson(response: Response, operation: string): Promise<any> {
+  const text = await response.text();
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`${operation} returned an invalid response`);
+  }
+  if (!response.ok) {
+    throw new Error(`${operation} failed (${response.status})${json?.msg ? `: ${json.msg}` : ""}`);
+  }
+  return json;
+}
+
 // Factory
 export function getVideoProvider(name: string = process.env.VIDEO_PROVIDER || "uqload"): VideoProvider {
   switch (name) {
@@ -62,113 +79,123 @@ export function getVideoProvider(name: string = process.env.VIDEO_PROVIDER || "u
 }
 
 /**
- * Uqload provider
- * Docs: https://uqload.vc/api.html
- * TOS: https://uqload.vc/tos — prohibits pornography, nudity, sexual content.
- * Therefore this provider MUST NOT be enabled for adult content without written approval.
+ * Uqload server-side provider.
+ *
+ * The approval flag is intentionally retained: Uqload's content policy must
+ * explicitly permit the platform's intended lawful adult-content use before
+ * an operator enables uploads. The key and all provider requests stay on the
+ * server.
  */
 export class UqloadProvider implements VideoProvider {
   name = "uqload";
 
   isEnabled(): boolean {
-    // Check if explicitly allowed via env flag and written approval documented
-    const allowed = process.env.UQLOAD_ADULT_CONTENT_APPROVED === "true";
-    const keyExists = !!process.env.UQLOAD_API_KEY;
-    return allowed && keyExists;
+    return process.env.UQLOAD_ADULT_CONTENT_APPROVED === "true" && Boolean(process.env.UQLOAD_API_KEY);
+  }
+
+  private getApiKey(): string {
+    const apiKey = process.env.UQLOAD_API_KEY;
+    if (!apiKey) throw new Error("Missing UQLOAD_API_KEY");
+    return apiKey;
+  }
+
+  private apiUrl(path: string, parameters: Record<string, string | number | undefined> = {}) {
+    const url = new URL(`https://uqload.vc/api/${path}`);
+    url.searchParams.set("key", this.getApiKey());
+    for (const [key, value] of Object.entries(parameters)) {
+      if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
+    }
+    return url;
   }
 
   async getUploadServer(): Promise<string> {
-    const apiKey = process.env.UQLOAD_API_KEY;
-    if (!apiKey) throw new Error("Missing UQLOAD_API_KEY");
-
-    const res = await fetch(`https://uqload.vc/api/upload/server?key=${apiKey}`);
-    const json = await res.json();
-    if (json.status !== 200 || !json.result) {
-      throw new Error(`Uqload getUploadServer failed: ${JSON.stringify(json)}`);
+    const response = await fetch(this.apiUrl("upload/server"), { cache: "no-store" });
+    const json = await readJson(response, "Uqload upload-server request");
+    if (!isProviderSuccess(json.status) || typeof json.result !== "string") {
+      throw new Error(`Uqload could not provide an upload server${json?.msg ? `: ${json.msg}` : ""}`);
     }
-    return json.result as string; // e.g. https://s1.myvideo.com/upload/01
+    return json.result;
   }
 
   async uploadFile(serverUrl: string, file: File | Blob, meta: UploadRequest): Promise<UploadResult> {
-    const apiKey = process.env.UQLOAD_API_KEY;
-    if (!apiKey) throw new Error("Missing UQLOAD_API_KEY");
-
     const form = new FormData();
-    form.append("key", apiKey);
+    form.append("key", this.getApiKey());
     form.append("file", file, meta.fileName);
     if (meta.title) form.append("file_title", meta.title);
     if (meta.description) form.append("file_descr", meta.description);
     if (meta.tags) form.append("tags", meta.tags);
+    if (meta.snapshot) form.append("snapshot", meta.snapshot, meta.snapshotFileName || "thumbnail.jpg");
     form.append("file_public", "1");
     form.append("file_adult", "1");
 
-    const res = await fetch(serverUrl, {
-      method: "POST",
-      body: form,
-    });
-
-    const json = await res.json().catch(async () => {
-      // Uqload sometimes returns HTML redirect if html_redirect=1, but we didn't set it
-      const text = await res.text();
-      throw new Error(`Uqload upload non-JSON response: ${text.slice(0, 500)}`);
-    });
-
-    if (json.status !== 200 || !json.files?.[0]) {
-      throw new Error(`Uqload upload failed: ${JSON.stringify(json)}`);
+    const response = await fetch(serverUrl, { method: "POST", body: form, cache: "no-store" });
+    const json = await readJson(response, "Uqload file upload");
+    const uploaded = json?.files?.[0];
+    if (!isProviderSuccess(json.status) || !uploaded?.filecode) {
+      throw new Error(`Uqload file upload failed${json?.msg ? `: ${json.msg}` : ""}`);
     }
 
-    const uploaded = json.files[0];
     return {
-      providerFileId: uploaded.filecode,
+      providerFileId: String(uploaded.filecode),
       status: "processing",
       rawResponse: json,
     };
   }
 
-  async getFileInfo(fileId: string): Promise<FileInfo> {
-    const apiKey = process.env.UQLOAD_API_KEY;
-    if (!apiKey) throw new Error("Missing UQLOAD_API_KEY");
-
-    const res = await fetch(`https://uqload.vc/api/file/info?key=${apiKey}&file_code=${fileId}`);
-    const json = await res.json();
-    if (json.status !== 200 || !json.result?.[0]) {
-      throw new Error(`Uqload file info failed: ${JSON.stringify(json)}`);
+  /** Queue a remote video URL with Uqload's documented /upload/url endpoint. */
+  async uploadByUrl(remoteUrl: string, meta: Pick<UploadRequest, "tags"> = {}): Promise<UploadResult> {
+    const response = await fetch(
+      this.apiUrl("upload/url", {
+        url: remoteUrl,
+        file_public: 1,
+        file_adult: 1,
+        tags: meta.tags,
+      }),
+      { cache: "no-store" }
+    );
+    const json = await readJson(response, "Uqload URL upload");
+    const fileCode = json?.result?.filecode || json?.result?.file_code;
+    if (!isProviderSuccess(json.status) || typeof fileCode !== "string") {
+      throw new Error(`Uqload URL upload failed${json?.msg ? `: ${json.msg}` : ""}`);
     }
-    const info = json.result[0];
+
+    return { providerFileId: fileCode, status: "processing", rawResponse: json };
+  }
+
+  async getFileInfo(fileId: string): Promise<FileInfo> {
+    const response = await fetch(this.apiUrl("file/info", { file_code: fileId }), { cache: "no-store" });
+    const json = await readJson(response, "Uqload file-info request");
+    const info = json?.result?.[0];
+    if (!isProviderSuccess(json.status) || !info) {
+      throw new Error(`Uqload file-info request failed${json?.msg ? `: ${json.msg}` : ""}`);
+    }
     return {
-      fileId: info.file_code,
-      title: info.file_title,
-      status: info.status,
-      canPlay: info.canplay === 1,
-      thumbnailUrl: info.player_img,
-      durationSeconds: info.file_length ? parseInt(info.file_length) : undefined,
-      views: info.file_views ? parseInt(info.file_views) : 0,
+      fileId: String(info.file_code || fileId),
+      title: typeof info.file_title === "string" ? info.file_title : undefined,
+      status: Number(info.status || 0),
+      canPlay: info.canplay === 1 || info.canplay === "1" || info.canplay === true,
+      thumbnailUrl: typeof info.player_img === "string" ? info.player_img : undefined,
+      durationSeconds: info.file_length ? Number.parseInt(String(info.file_length), 10) : undefined,
+      views: info.file_views ? Number.parseInt(String(info.file_views), 10) : 0,
     };
   }
 
   async deleteFile(fileId: string): Promise<boolean> {
-    const apiKey = process.env.UQLOAD_API_KEY;
-    if (!apiKey) throw new Error("Missing UQLOAD_API_KEY");
-    const res = await fetch(`https://uqload.vc/api/file/delete?key=${apiKey}&file_code=${fileId}`);
-    const json = await res.json();
-    return json.status === 200;
+    const response = await fetch(this.apiUrl("file/delete", { file_code: fileId }), { cache: "no-store" });
+    const json = await readJson(response, "Uqload file deletion");
+    return isProviderSuccess(json.status);
   }
 
   getEmbedUrl(fileId: string): string {
-    // Uqload embed pattern (from docs)
-    return `https://uqload.vc/embed-${fileId}.html`;
+    return `https://uqload.vc/embed-${encodeURIComponent(fileId)}.html`;
   }
 
   getPlayableUrl(fileId: string): string {
-    // Direct file URL would be via player; for SEO we use embed
-    return `https://uqload.vc/${fileId}.html`;
+    return `https://uqload.vc/${encodeURIComponent(fileId)}.html`;
   }
 }
 
-/**
- * Internal provider — stores files locally or in Supabase Storage for development
- * and as fallback when external provider is blocked.
- */
+/** Internal provider remains available for local development only. */
 export class InternalProvider implements VideoProvider {
   name = "internal";
 
@@ -177,24 +204,15 @@ export class InternalProvider implements VideoProvider {
   }
 
   async getUploadServer(): Promise<string> {
-    // For internal, upload server is our own API route
     return "/api/videos/upload";
   }
 
-  async uploadFile(_serverUrl: string, _file: File | Blob, meta: UploadRequest): Promise<UploadResult> {
-    // This method won't be called directly for internal — handled by API route streaming to Supabase Storage
-    // Return placeholder
+  async uploadFile(_serverUrl: string, _file: File | Blob, _meta: UploadRequest): Promise<UploadResult> {
     throw new Error("Internal provider upload should go through /api/videos/upload route");
   }
 
   async getFileInfo(fileId: string): Promise<FileInfo> {
-    // In internal mode, fileId is our video id, info from DB
-    // This is stub; real implementation queries Supabase
-    return {
-      fileId,
-      status: 200,
-      canPlay: true,
-    };
+    return { fileId, status: 200, canPlay: true };
   }
 
   async deleteFile(_fileId: string): Promise<boolean> {
@@ -202,7 +220,6 @@ export class InternalProvider implements VideoProvider {
   }
 
   getEmbedUrl(fileId: string): string {
-    // For internal, embed is our own player page
     return `/video/${fileId}`;
   }
 

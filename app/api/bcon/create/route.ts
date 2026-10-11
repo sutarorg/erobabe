@@ -1,104 +1,176 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { createBconPaymentAddress } from "@/lib/bcon/client";
+import { createBconExternalId, createBconPaymentAddress } from "@/lib/bcon/client";
 import { z } from "zod";
 
-const schema = z.object({
-  campaignId: z.string().uuid().optional(),
-  slotId: z.number().int().min(1).max(10),
-  creativeId: z.string().uuid().optional(),
-  durationMonths: z.number().int().min(1).max(12).default(1),
-  paymentCurrency: z.string().default("USDT"),
-  chain: z.string().default("ethereum"),
-});
+const uuid = z.string().uuid();
+const schema = z
+  .object({
+    // Singular fields remain supported for a campaign created before this
+    // multi-slot checkout flow was introduced.
+    campaignId: uuid.optional(),
+    campaignIds: z.array(uuid).min(1).max(10).optional(),
+    slotId: z.number().int().min(1).max(10).optional(),
+    slotIds: z.array(z.number().int().min(1).max(10)).min(1).max(10).optional(),
+    durationMonths: z.number().int().min(1).max(12).default(1),
+    paymentCurrency: z.string().trim().min(2).max(16).default("USDT"),
+    chain: z.enum(["bitcoin", "binance", "ethereum", "tron", "solana"]).default("ethereum"),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.campaignId && !value.campaignIds?.length) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["campaignIds"], message: "At least one campaign is required" });
+    }
+  });
+
+function unique<T>(values: T[]): T[] {
+  return Array.from(new Set(values));
+}
 
 export async function POST(req: NextRequest) {
   try {
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    // Check advertiser role
-    const { data: profile } = await supabase.from("profiles").select("role, status").eq("id", user.id).single();
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role, status")
+      .eq("id", user.id)
+      .single();
     if (!profile || profile.role !== "advertiser" || profile.status !== "active") {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const body = await req.json();
-    const parsed = schema.safeParse(body);
+    const parsed = schema.safeParse(await req.json());
     if (!parsed.success) {
       return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
     }
 
-    const { slotId, durationMonths, paymentCurrency, chain, campaignId } = parsed.data;
-
-    // Verify slot exists and check overlapping reservations using service client for transaction safety
+    const { durationMonths, paymentCurrency, chain } = parsed.data;
+    const campaignIds: string[] = unique<string>([
+      ...(parsed.data.campaignIds || []),
+      ...(parsed.data.campaignId ? [parsed.data.campaignId] : []),
+    ]);
+    const requestedSlotIds: number[] = unique<number>([
+      ...(parsed.data.slotIds || []),
+      ...(parsed.data.slotId ? [parsed.data.slotId] : []),
+    ]);
     const service = createServiceClient();
 
-    // Check slot availability with transaction-like logic
-    // Look for active campaigns overlapping now + duration
+    // Never trust a browser-provided slot or price. Campaigns must belong to
+    // this advertiser and must not already be tied to a payment.
+    const { data: campaigns, error: campaignsError } = await service
+      .from("campaigns")
+      .select("id, slot_id, payment_id")
+      .in("id", campaignIds)
+      .eq("advertiser_id", user.id);
+
+    if (campaignsError) throw campaignsError;
+    if (!campaigns || campaigns.length !== campaignIds.length) {
+      return NextResponse.json({ error: "One or more campaigns were not found" }, { status: 404 });
+    }
+    if (campaigns.some((campaign: any) => campaign.payment_id)) {
+      return NextResponse.json({ error: "A selected campaign already has a payment request" }, { status: 409 });
+    }
+
+    const slotIds: number[] = unique<number>(campaigns.map((campaign: any) => Number(campaign.slot_id))).sort((a, b) => a - b);
+    if (
+      requestedSlotIds.length &&
+      (requestedSlotIds.length !== slotIds.length || requestedSlotIds.some((slotId) => !slotIds.includes(slotId)))
+    ) {
+      return NextResponse.json({ error: "Campaign slots do not match the requested slots" }, { status: 400 });
+    }
+
     const startDate = new Date();
     const endDate = new Date();
     endDate.setDate(endDate.getDate() + durationMonths * 30);
+    const startDay = startDate.toISOString().split("T")[0];
+    const endDay = endDate.toISOString().split("T")[0];
 
-    const { data: overlapping } = await service
+    // A campaign is created immediately before this request, so explicitly
+    // exclude this checkout's own campaigns from the overlap check.
+    const { data: overlapping, error: overlappingError } = await service
       .from("campaigns")
-      .select("id")
-      .eq("slot_id", slotId)
+      .select("id, slot_id")
+      .in("slot_id", slotIds)
       .in("status", ["active", "pending_review", "pending_payment"])
-      .lte("start_date", endDate.toISOString().split("T")[0])
-      .gte("end_date", startDate.toISOString().split("T")[0])
-      .limit(1);
+      .lte("start_date", endDay)
+      .gte("end_date", startDay);
+    if (overlappingError) throw overlappingError;
 
-    if (overlapping && overlapping.length > 0) {
-      return NextResponse.json({ error: "Slot not available for selected period" }, { status: 409 });
+    const conflicts = (overlapping || []).filter((campaign: any) => !campaignIds.includes(campaign.id));
+    if (conflicts.length) {
+      const conflictingSlots = unique(conflicts.map((campaign: any) => campaign.slot_id)).join(", ");
+      return NextResponse.json({ error: `Slot${conflicts.length > 1 ? "s" : ""} ${conflictingSlots} are no longer available` }, { status: 409 });
     }
 
-    // Calculate price: $99 per month = 9900 cents
-    const priceCents = 9900 * durationMonths;
-    const originAmount = (priceCents / 100).toString(); // USD
+    const { data: slots, error: slotsError } = await service
+      .from("ad_slots")
+      .select("id, price_cents")
+      .in("id", slotIds);
+    if (slotsError) throw slotsError;
+    if (!slots || slots.length !== slotIds.length) {
+      return NextResponse.json({ error: "One or more selected slots were not found" }, { status: 404 });
+    }
 
-    // Create invoice number and external_id
+    const priceBySlot = new Map<number, number>(slots.map((slot: any) => [Number(slot.id), Number(slot.price_cents)]));
+    const priceCents: number = slotIds.reduce<number>((sum, slotId) => sum + (priceBySlot.get(slotId) || 0) * durationMonths, 0);
+    if (!priceCents) return NextResponse.json({ error: "Unable to calculate a price for the selected slots" }, { status: 400 });
+
     const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-    const externalId = `erobabe-${user.id.slice(0, 8)}-${Date.now()}`;
+    let payment: any = null;
+    let externalId = "";
 
-    // Create payment record pending
-    const { data: payment, error: paymentError } = await service
-      .from("payments")
-      .insert({
-        advertiser_id: user.id,
-        invoice_number: invoiceNumber,
-        external_id: externalId,
-        amount_cents: priceCents,
-        currency: "USD",
-        payment_currency: paymentCurrency,
-        chain,
-        status: "pending",
-        expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour expiry
-      })
-      .select()
-      .single();
+    // External ids are deliberately short for Bcon. Retrying an extremely
+    // unlikely unique collision keeps the database and Bcon in sync.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      externalId = createBconExternalId();
+      const { data, error } = await service
+        .from("payments")
+        .insert({
+          advertiser_id: user.id,
+          invoice_number: invoiceNumber,
+          external_id: externalId,
+          amount_cents: priceCents,
+          currency: "USD",
+          payment_currency: paymentCurrency.toUpperCase(),
+          chain,
+          status: "pending",
+          expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        })
+        .select()
+        .single();
 
-    if (paymentError) throw paymentError;
+      if (!error) {
+        payment = data;
+        break;
+      }
+      if (error.code !== "23505" || attempt === 2) throw error;
+    }
 
-    // Create Bcon address
+    if (!payment) throw new Error("Could not create payment record");
+
+    const originAmount = (priceCents / 100).toFixed(2);
     let bconResult;
     try {
       bconResult = await createBconPaymentAddress({
-        payment_currency: paymentCurrency,
+        payment_currency: paymentCurrency.toUpperCase(),
         origin_amount: originAmount,
         origin_currency: "USD",
         external_id: externalId,
         chain,
       });
-    } catch (e: any) {
-      // Update payment to failed and return error
-      await service.from("payments").update({ status: "failed", bcon_response: { error: e.message } }).eq("id", payment.id);
-      return NextResponse.json({ error: "Failed to create payment address", details: e.message }, { status: 502 });
+    } catch (error: any) {
+      await service
+        .from("payments")
+        .update({ status: "failed", bcon_response: { error: error.message } })
+        .eq("id", payment.id);
+      return NextResponse.json({ error: "Failed to create payment address", details: error.message }, { status: 502 });
     }
 
-    // Update payment with address
-    await service
+    const { error: paymentUpdateError } = await service
       .from("payments")
       .update({
         payment_address: bconResult.address,
@@ -107,42 +179,44 @@ export async function POST(req: NextRequest) {
         status: "awaiting_confirmation",
       })
       .eq("id", payment.id);
+    if (paymentUpdateError) throw paymentUpdateError;
 
-    // Create invoice
-    const { data: invoice } = await service
+    const { data: invoice, error: invoiceError } = await service
       .from("invoices")
       .insert({
         number: invoiceNumber,
         advertiser_id: user.id,
         payment_id: payment.id,
         amount_cents: priceCents,
-        description: `Slot ${slotId} reservation — ${durationMonths} month${durationMonths > 1 ? "s" : ""}`,
+        description: `Slots ${slotIds.join(", ")} reservation — ${durationMonths} month${durationMonths > 1 ? "s" : ""}`,
         status: "pending",
-        due_date: endDate.toISOString().split("T")[0],
+        due_date: endDay,
       })
       .select()
       .single();
+    if (invoiceError) throw invoiceError;
 
-    // If campaignId provided, link payment to campaign
-    if (campaignId) {
-      await service.from("campaigns").update({ payment_id: payment.id, invoice_id: invoice?.id }).eq("id", campaignId).eq("advertiser_id", user.id);
-    }
+    const { error: campaignUpdateError } = await service
+      .from("campaigns")
+      .update({ payment_id: payment.id, invoice_id: invoice?.id })
+      .in("id", campaignIds)
+      .eq("advertiser_id", user.id);
+    if (campaignUpdateError) throw campaignUpdateError;
 
-    // Record payment event
-    await service.from("payment_events").insert({
+    const { error: eventError } = await service.from("payment_events").insert({
       payment_id: payment.id,
       event_type: "address_created",
-      payload: { address: bconResult.address, amount: bconResult.amount, external_id: externalId },
+      payload: { address: bconResult.address, amount: bconResult.amount, external_id: externalId, slot_ids: slotIds },
     });
+    if (eventError) throw eventError;
 
-    // Audit log
     await service.from("audit_logs").insert({
       actor_id: user.id,
       action: "payment_request_created",
       target_type: "payment",
       target_id: payment.id,
       level: "info",
-      metadata: { slotId, durationMonths, priceCents },
+      metadata: { slotIds, campaignIds, durationMonths, priceCents },
     });
 
     return NextResponse.json({
@@ -151,14 +225,16 @@ export async function POST(req: NextRequest) {
       externalId,
       address: bconResult.address,
       amount: bconResult.amount,
-      paymentCurrency,
+      paymentCurrency: paymentCurrency.toUpperCase(),
       chain,
       priceCents,
       priceUSD: priceCents / 100,
       expiresAt: payment.expires_at,
+      slotIds,
+      campaignIds,
     });
-  } catch (e: any) {
-    console.error("bcon/create error", e);
-    return NextResponse.json({ error: "Internal server error", details: e.message }, { status: 500 });
+  } catch (error: any) {
+    console.error("bcon/create error", error);
+    return NextResponse.json({ error: "Internal server error", details: error.message }, { status: 500 });
   }
 }

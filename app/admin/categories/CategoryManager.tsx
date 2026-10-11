@@ -1,0 +1,187 @@
+"use client";
+
+import { FormEvent, useMemo, useState } from "react";
+import { Pencil, Plus, X } from "lucide-react";
+
+type Category = {
+  id: string;
+  label: string;
+  slug: string;
+  icon: string | null;
+  description: string | null;
+  video_count: number;
+};
+
+type CategoryForm = {
+  label: string;
+  slug: string;
+  icon: string;
+  description: string;
+};
+
+const emptyForm: CategoryForm = { label: "", slug: "", icon: "", description: "" };
+
+function toForm(category: Category): CategoryForm {
+  return {
+    label: category.label,
+    slug: category.slug,
+    icon: category.icon || "",
+    description: category.description || "",
+  };
+}
+
+export default function CategoryManager({ initialCategories }: { initialCategories: Category[] }) {
+  const [categories, setCategories] = useState(initialCategories);
+  const [editing, setEditing] = useState<Category | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState<CategoryForm>(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const sortedCategories = useMemo(() => [...categories].sort((a, b) => a.label.localeCompare(b.label)), [categories]);
+  const formOpen = creating || Boolean(editing);
+
+  function openCreate() {
+    setCreating(true);
+    setEditing(null);
+    setForm(emptyForm);
+    setError("");
+    setNotice("");
+  }
+
+  function openEdit(category: Category) {
+    setCreating(false);
+    setEditing(category);
+    setForm(toForm(category));
+    setError("");
+    setNotice("");
+  }
+
+  function closeForm() {
+    setCreating(false);
+    setEditing(null);
+    setForm(emptyForm);
+    setError("");
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const response = await fetch("/api/admin/categories", {
+        method: editing ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(editing ? { id: editing.id } : {}),
+          label: form.label,
+          slug: form.slug || undefined,
+          icon: form.icon || null,
+          description: form.description || null,
+        }),
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error || "Unable to save category");
+
+      const category = json.category as Category;
+      setCategories((current) => {
+        const index = current.findIndex((item) => item.id === category.id);
+        if (index === -1) return [...current, category];
+        return current.map((item) => (item.id === category.id ? category : item));
+      });
+      setNotice(editing ? "Category updated." : "Category added.");
+      closeForm();
+    } catch (saveError: any) {
+      setError(saveError.message || "Unable to save category");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-[20px] font-semibold">Categories</h1>
+          <p className="mt-1 text-[12px] text-ink-3">Create and maintain the taxonomy used by the video publisher.</p>
+        </div>
+        <button type="button" onClick={openCreate} className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-soft">
+          <Plus aria-hidden="true" className="h-4 w-4" />
+          Add category
+        </button>
+      </div>
+
+      {notice && <p className="mt-4 rounded-md bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-300">{notice}</p>}
+
+      {formOpen && (
+        <form onSubmit={save} className="mt-6 rounded-lg border border-accent/30 bg-pcard p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-[14px] font-semibold">{editing ? `Edit ${editing.label}` : "Add category"}</h2>
+              <p className="mt-1 text-[11px] text-ink-3">The slug is used in public category URLs.</p>
+            </div>
+            <button type="button" onClick={closeForm} aria-label="Close category form" className="rounded-md p-1.5 text-ink-3 hover:bg-white/5 hover:text-ink">
+              <X aria-hidden="true" className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-medium">Name *</span>
+              <input value={form.label} onChange={(event) => setForm((current) => ({ ...current, label: event.target.value }))} required maxLength={80} className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]" placeholder="e.g. Behind the scenes" />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-medium">Slug {creating ? "(optional)" : ""}</span>
+              <input value={form.slug} onChange={(event) => setForm((current) => ({ ...current, slug: event.target.value }))} maxLength={100} className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]" placeholder="behind-the-scenes" />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-medium">Icon name (optional)</span>
+              <input value={form.icon} onChange={(event) => setForm((current) => ({ ...current, icon: event.target.value }))} maxLength={80} className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]" placeholder="camera" />
+            </label>
+            <label className="block md:col-span-2">
+              <span className="mb-1 block text-[11px] font-medium">Description (optional)</span>
+              <textarea value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} maxLength={500} rows={3} className="w-full rounded-md border border-line bg-void px-3 py-2 text-[13px]" placeholder="A short public-facing description." />
+            </label>
+          </div>
+          {error && <p className="mt-4 rounded-md bg-red-500/10 p-3 text-[12px] text-red-400">{error}</p>}
+          <div className="mt-4 flex gap-3">
+            <button type="submit" disabled={saving} className="inline-flex h-9 items-center rounded-md bg-accent px-4 text-[12px] font-semibold text-white disabled:opacity-50">
+              {saving ? "Saving..." : editing ? "Save changes" : "Create category"}
+            </button>
+            <button type="button" onClick={closeForm} className="h-9 rounded-md border border-line px-4 text-[12px] text-ink-2 hover:text-ink">Cancel</button>
+          </div>
+        </form>
+      )}
+
+      <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {sortedCategories.map((category) => (
+          <article key={category.id} className="rounded-lg border border-line bg-pcard p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[13px] font-medium">{category.label}</p>
+                <p className="mt-1 font-mono text-[10.5px] text-ink-3">/{category.slug}</p>
+              </div>
+              <button type="button" onClick={() => openEdit(category)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line px-2.5 text-[11px] text-ink-2 hover:bg-white/5 hover:text-ink">
+                <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
+                Edit
+              </button>
+            </div>
+            {category.description && <p className="mt-3 line-clamp-2 text-[11px] leading-relaxed text-ink-3">{category.description}</p>}
+            <div className="mt-3 flex gap-3 text-[10.5px] text-ink-3">
+              <span>Icon: {category.icon || "—"}</span>
+              <span>{category.video_count || 0} videos</span>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      {!sortedCategories.length && (
+        <div className="mt-6 rounded-lg border border-dashed border-line bg-pcard p-8 text-center">
+          <p className="text-[13px]">No categories yet. Add your first category to publish videos.</p>
+        </div>
+      )}
+    </div>
+  );
+}
