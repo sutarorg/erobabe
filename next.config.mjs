@@ -19,12 +19,6 @@ const nextConfig = {
       { protocol: 'https', hostname: '**.resend.com' },
     ],
   },
-  async redirects() {
-    return [
-      { source: '/browse', destination: '/browser', permanent: false },
-      { source: '/browse/:path*', destination: '/browser', permanent: false },
-    ];
-  },
   async headers() {
     return [
       {

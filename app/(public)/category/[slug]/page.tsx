@@ -32,8 +32,8 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
         <div className="mt-8 rounded-lg border border-dashed border-line bg-card p-12 text-center">
           <p className="text-[14px] font-medium">No videos in this category yet</p>
           <p className="mt-1 text-[12.5px] text-ink-3">Check back later for new content.</p>
-          <Link href="/browser" prefetch className="mt-4 inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white">
-            Browse all videos
+          <Link href="/categories" prefetch className="mt-4 inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white">
+            View all categories
           </Link>
         </div>
       ) : (

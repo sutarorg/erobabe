@@ -37,7 +37,6 @@ export default function PublicLayoutClient({
     if (pathname.startsWith("/categories") || pathname.startsWith("/category")) return "categories";
     if (pathname.startsWith("/latest")) return "latest";
     if (pathname.startsWith("/popular")) return "toprated";
-    if (pathname.startsWith("/browser") || pathname.startsWith("/browse")) return "browse";
     return "home";
   };
 
@@ -55,9 +54,6 @@ export default function PublicLayoutClient({
         break;
       case "toprated":
         router.push("/popular");
-        break;
-      case "browse":
-        router.push("/browser");
         break;
     }
   };

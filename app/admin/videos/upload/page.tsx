@@ -42,6 +42,12 @@ type Item = {
   error?: string;
   title?: string;
   slug?: string;
+  /**
+   * Uqload library file codes captured right before this item's upload — the
+   * diff base the confirmation (and the "Re-check library" action) works from.
+   * `null` means the snapshot failed, so the confirmation must not guess.
+   */
+  knownCodes?: string[] | null;
 };
 
 const THUMBNAIL_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
@@ -64,9 +70,26 @@ function newId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-/** How often to poll the Uqload library for a just-sent upload. */
-const UQLOAD_CONFIRM_ATTEMPTS = 10;
-const UQLOAD_CONFIRM_INTERVAL_MS = 3000;
+/**
+ * How often to poll the Uqload library for a just-sent upload. Polls back off
+ * because Uqload meters `file/list` requests — one request per poll, plus a
+ * single pre-upload snapshot per file.
+ */
+const UQLOAD_CONFIRM_ATTEMPTS = 11;
+const UQLOAD_CONFIRM_BACKOFF_MS = [2000, 2500, 3000, 3500, 4000, 4500, 5000, 5000, 5000, 5000];
+
+/**
+ * Uqload serves its upload servers over HTTPS. An `http://` endpoint on an
+ * `https://` admin page is blocked as mixed content before a single byte
+ * leaves, which looks exactly like the CORS-hidden response the confirmation
+ * step exists for. Upgrade it instead of failing silently.
+ */
+function secureUploadServerUrl(serverUrl: string): string {
+  if (typeof window !== "undefined" && window.location.protocol === "https:" && serverUrl.startsWith("http://")) {
+    return `https://${serverUrl.slice("http://".length)}`;
+  }
+  return serverUrl;
+}
 
 /** Sleeps until the abort signal fires (rejecting with UploadAbortedError) or the delay elapses. */
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -271,35 +294,64 @@ export default function UploadPage() {
     return target.storagePath;
   }
 
+  /** A snapshot of the account's file codes, taken before the bytes are sent. */
+  async function snapshotUqloadLibrary(): Promise<string[] | null> {
+    try {
+      const result = await postJson<{ fileCodes?: string[] }>("/api/videos/uqload-confirm", { mode: "snapshot" });
+      return Array.isArray(result?.fileCodes) ? result.fileCodes : null;
+    } catch {
+      // Without a snapshot the confirmation can still match by title — it just
+      // refuses to fall back to "the newest new file" at the deadline.
+      return null;
+    }
+  }
+
   /**
    * Confirms a video the browser just POSTed straight to Uqload and returns
-   * its filecode.
+   * its file code.
    *
    * Uqload's upload server does not send CORS headers, so the browser cannot
-   * read the JSON response that carries the filecode. Instead the upload is
-   * confirmed by polling the account library (a server-side `file/list`
-   * lookup). The file lands in the library as soon as the upload server
-   * accepts it, so the first or second poll normally finds it.
+   * read the JSON response that carries the file code. Instead the upload is
+   * confirmed server-side by diffing the account library against the
+   * pre-upload snapshot. Uqload ignores multipart fields sent after the `file`
+   * part, so the stored title is derived from the file name — the title can
+   * rank candidates, but it never identifies the file on its own.
    */
-  async function confirmUqloadUpload(opts: { fileTitle: string; fileName: string; controller: AbortController }): Promise<string> {
+  async function confirmUqloadUpload(opts: {
+    fileTitle: string;
+    fileName: string;
+    knownCodes: string[] | null;
+    controller: AbortController;
+  }): Promise<string> {
+    let lastPollError: unknown = null;
     for (let attempt = 0; attempt < UQLOAD_CONFIRM_ATTEMPTS; attempt++) {
       if (opts.controller.signal.aborted) throw new UploadAbortedError();
-      if (attempt > 0) await abortableSleep(UQLOAD_CONFIRM_INTERVAL_MS, opts.controller.signal);
+      if (attempt > 0) {
+        const delay = UQLOAD_CONFIRM_BACKOFF_MS[Math.min(attempt - 1, UQLOAD_CONFIRM_BACKOFF_MS.length - 1)];
+        await abortableSleep(delay, opts.controller.signal);
+      }
 
       try {
-        const result = await postJson<{ found: boolean; fileCode?: string }>(
-          "/api/videos/uqload-confirm",
-          { fileTitle: opts.fileTitle, fileName: opts.fileName }
-        );
+        const result = await postJson<{ found: boolean; fileCode?: string }>("/api/videos/uqload-confirm", {
+          fileTitle: opts.fileTitle,
+          fileName: opts.fileName,
+          knownFileCodes: opts.knownCodes,
+          finalAttempt: attempt === UQLOAD_CONFIRM_ATTEMPTS - 1,
+        });
         if (result?.found && result.fileCode) return String(result.fileCode);
       } catch (pollError) {
         if (pollError instanceof UploadAbortedError) throw pollError;
-        // Transient failure (network blip, cold function) — retry below.
+        // Transient failure (network blip, cold function) — retry below, but
+        // remember it: if every check failed the message must say so instead
+        // of blaming the upload (e.g. a metered/API error on file/list).
+        lastPollError = pollError;
         continue;
       }
     }
+    const pollNote =
+      lastPollError instanceof Error && lastPollError.message ? ` Last library check failed: ${lastPollError.message}` : "";
     throw new Error(
-      "The video was sent to Uqload, but it did not appear in the Uqload library yet. Check your Uqload account — the file may still show up there shortly."
+      `Uqload has not confirmed this file in your library. Use “Re-check library” — if it never shows up there, the upload did not reach your Uqload account.${pollNote}`
     );
   }
 
@@ -331,10 +383,20 @@ export default function UploadPage() {
 
     const fileTitle = item.file.name.replace(/\.[^.]+$/, "").slice(0, 160) || item.file.name;
 
+    // Snapshot the account's file codes *before* the bytes leave, so the
+    // confirmation can identify the upload by diff — the stored title is only
+    // a ranking hint (Uqload derives it from the file name).
+    const knownCodes = await snapshotUqloadLibrary();
+    patchItem(item.id, { knownCodes });
+
+    // ⚠️ Scalars must be appended BEFORE the file part: Uqload ignores every
+    // multipart field that arrives after `file` — a `file_title` sent behind
+    // the file is dropped and the stored title falls back to the file name.
+    // `snapshot` stays last, exactly like Uqload's own curl sample.
     const form = new FormData();
     for (const [name, value] of Object.entries(session.fields || {})) form.append(name, value);
-    form.append("file", item.file, item.file.name);
     form.append("file_title", fileTitle);
+    form.append("file", item.file, item.file.name);
     if (item.thumbnail && item.thumbnail.size <= MAX_UQLOAD_SNAPSHOT) {
       form.append("snapshot", item.thumbnail, item.thumbnail.name);
     }
@@ -343,7 +405,7 @@ export default function UploadPage() {
     // upload progress listener would force a CORS preflight that Uqload does
     // not answer, cancelling the request before a single byte is sent.
     patchItem(item.id, { phase: "processing", detail: "Uploading directly to Uqload…" });
-    const outcome = await uploadFormDirect(session.serverUrl, form, { signal: controller.signal });
+    const outcome = await uploadFormDirect(secureUploadServerUrl(session.serverUrl), form, { signal: controller.signal });
 
     let fileCode: string;
     if (outcome.responseText) {
@@ -351,19 +413,23 @@ export default function UploadPage() {
       fileCode = parseUqloadUploadResponse(outcome.responseText).filecode;
     } else {
       // The bytes left the browser but the response is unreadable (Uqload
-      // omits CORS headers) — confirm the upload by finding the file in the
-      // account library.
+      // omits CORS headers) — confirm the upload against the library snapshot.
       patchItem(item.id, { phase: "processing", detail: "Confirming upload on Uqload…" });
-      fileCode = await confirmUqloadUpload({ fileTitle, fileName: item.file.name, controller });
+      fileCode = await confirmUqloadUpload({ fileTitle, fileName: item.file.name, knownCodes, controller });
     }
 
+    await publishKnownFile(item, fileCode, thumbnailPath);
+  }
+
+  /** Publishes an item whose file code is already known (fresh or re-checked). */
+  async function publishKnownFile(item: Item, fileCode: string, thumbnailPath: string | null) {
     patchItem(item.id, { phase: "processing", percent: 90, detail: "Generating AI metadata…" });
     const json = await postJson<any>("/api/videos/upload", {
       providerFileId: fileCode,
       thumbnailPath: thumbnailPath || null,
       categoryId,
-      fileName: item.file.name,
-      fileSize: item.file.size,
+      fileName: item.file?.name || item.source,
+      fileSize: item.file?.size,
     });
 
     patchItem(item.id, {
@@ -373,6 +439,33 @@ export default function UploadPage() {
       title: json.metadata?.title,
       slug: json.video?.slug,
     });
+  }
+
+  /**
+   * Claims a file that landed in the Uqload library after the confirmation
+   * window closed — without re-uploading the bytes.
+   */
+  async function recheckLibrary(item: Item) {
+    if (!item.file) return;
+    const fileTitle = item.file.name.replace(/\.[^.]+$/, "").slice(0, 160) || item.file.name;
+    setError("");
+    patchItem(item.id, { phase: "processing", percent: 90, detail: "Re-checking the Uqload library…", error: undefined });
+    try {
+      const fileCode = await confirmUqloadUpload({
+        fileTitle,
+        fileName: item.file.name,
+        knownCodes: item.knownCodes ?? null,
+        controller: new AbortController(),
+      });
+      await publishKnownFile(item, fileCode, item.thumbnailPath);
+    } catch (recheckError: any) {
+      patchItem(item.id, {
+        phase: "failed",
+        percent: 100,
+        detail: "Failed",
+        error: recheckError.message || "Still not in the Uqload library",
+      });
+    }
   }
 
   async function publishSourceItem(item: Item, controller: AbortController) {
@@ -663,7 +756,21 @@ export default function UploadPage() {
                         )}
                       </p>
                     )}
-                    {item.phase === "failed" && <p className="mt-1.5 text-[10.5px] text-red-300">{item.error}</p>}
+                    {item.phase === "failed" && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <p className="text-[10.5px] text-red-300">{item.error}</p>
+                        {item.kind === "file" && (
+                          <button
+                            type="button"
+                            onClick={() => recheckLibrary(item)}
+                            disabled={running}
+                            className="rounded-md border border-line px-2 py-0.5 text-[10.5px] font-medium hover:bg-white/5 disabled:opacity-40"
+                          >
+                            Re-check library
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     {item.phase !== "idle" && <ProgressBar percent={item.percent} phase={item.phase} />}
                   </div>

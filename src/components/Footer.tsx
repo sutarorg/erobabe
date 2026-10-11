@@ -15,7 +15,6 @@ const EXPLORE_LINKS: { label: string; key: NavKey }[] = [
   { label: "Categories", key: "categories" },
   { label: "Latest Videos", key: "latest" },
   { label: "Top Rated", key: "toprated" },
-  { label: "Browse All", key: "browse" },
 ];
 
 const INFO_LINKS: { label: string; path: string; href: string }[] = [

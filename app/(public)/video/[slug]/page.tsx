@@ -109,7 +109,7 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
       />
 
       <Link href="/" className="inline-flex items-center gap-1.5 text-[12px] font-medium text-ink-3 hover:text-accent">
-        ← Back to browse
+        ← Back to home
       </Link>
 
       {/* Real player */}
