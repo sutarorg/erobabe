@@ -108,7 +108,13 @@ export async function POST(req: NextRequest) {
         target_type: "video",
         target_id: generated.video.id,
         level: "info",
-        metadata: { provider: "uqload", file_name: fileName, file_size: fileSize, provider_file_id: providerFileId },
+        metadata: {
+          provider: "uqload",
+          file_name: fileName,
+          file_size: fileSize,
+          provider_file_id: providerFileId,
+          metadata_source: generated.metadata.source,
+        },
       });
 
       return NextResponse.json({
@@ -118,6 +124,8 @@ export async function POST(req: NextRequest) {
         status: video.status,
         video,
         metadata: generated.metadata,
+        metadataSource: generated.metadata.source,
+        ...(generated.metadata.warning ? { metadataWarning: generated.metadata.warning } : {}),
         processing: true,
       });
     } catch (uploadError: any) {

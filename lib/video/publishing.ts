@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
+import { fallbackSuggestion, suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -75,22 +75,63 @@ async function getCategory(service: ServiceClient, categoryId: string) {
   return category as { id: string; label: string };
 }
 
-async function generateMetadata(sourceName: string, categoryLabel: string): Promise<{
+/** Where the metadata for a generated video came from. */
+export type MetadataSource = "ai" | "fallback";
+
+export type GeneratedMetadata = {
   title: string;
   description: string;
   tags: string[];
-  raw: SuggestedMetadata;
-}> {
-  const raw = await suggestVideoMetadata({ fileName: sourceName, category: categoryLabel });
-  const title = raw.title?.replace(/\s+/g, " ").trim().slice(0, 160);
-  const description = raw.description?.replace(/\s+/g, " ").trim().slice(0, 1000);
-  const tags = normalizeTags(Array.isArray(raw.tags) ? raw.tags : []);
+  /** `fallback` when Gemini could not be used — the admin must review it. */
+  source: MetadataSource;
+  /** Human-readable reason the AI suggestion was unavailable. */
+  warning?: string;
+};
 
-  if (!title || !description || !tags.length) {
-    throw new Error("Gemini did not return complete title, description, and tags. Try again after checking GEMINI_API_KEY.");
+function cleanMetadata(raw: SuggestedMetadata): { title: string; description: string; tags: string[] } {
+  return {
+    title: raw.title?.replace(/\s+/g, " ").trim().slice(0, 160),
+    description: raw.description?.replace(/\s+/g, " ").trim().slice(0, 1000),
+    tags: normalizeTags(Array.isArray(raw.tags) ? raw.tags : []),
+  };
+}
+
+/**
+ * Asks Gemini for a title, description, and tags.
+ *
+ * Gemini is an enhancement, not a gate: when it is unavailable, misconfigured,
+ * or returns output that cannot be parsed, the upload continues with
+ * deterministic metadata built from the file name and category, and the reason
+ * is reported back so the admin can review and edit before publishing.
+ */
+async function generateMetadata(
+  sourceName: string,
+  categoryLabel: string
+): Promise<GeneratedMetadata & { raw: SuggestedMetadata }> {
+  try {
+    const raw = await suggestVideoMetadata({ fileName: sourceName, category: categoryLabel });
+    const cleaned = cleanMetadata(raw);
+    if (cleaned.title && cleaned.description && cleaned.tags.length) {
+      return { ...cleaned, source: "ai", raw };
+    }
+    throw new Error("Gemini returned an incomplete title, description, or tag list");
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : "Gemini metadata generation failed";
+    console.warn(`[video-publishing] AI metadata unavailable for "${sourceName}": ${reason}`);
+
+    const raw = fallbackSuggestion(sourceName, categoryLabel);
+    const cleaned = cleanMetadata(raw);
+    if (!cleaned.title || !cleaned.description || !cleaned.tags.length) {
+      throw new Error("Unable to build video metadata — check the file name and category, then try again.");
+    }
+
+    return {
+      ...cleaned,
+      source: "fallback",
+      warning: `AI metadata unavailable (${reason.slice(0, 200)}). File-name metadata was used instead — review the title and description before publishing.`,
+      raw,
+    };
   }
-
-  return { title, description, tags, raw };
 }
 
 async function attachTags(service: ServiceClient, videoId: string, tags: string[]) {
@@ -141,7 +182,7 @@ export async function createGeneratedVideo({
   categoryId: string;
   provider: "uqload" | "embed";
   thumbnailUrl?: string | null;
-}): Promise<{ video: GeneratedVideo; metadata: { title: string; description: string; tags: string[] } }> {
+}): Promise<{ video: GeneratedVideo; metadata: GeneratedMetadata }> {
   const category = await getCategory(service, categoryId);
   const metadata = await generateMetadata(sourceName, category.label);
   const slugBase = slugify(metadata.title) || "video";
@@ -174,7 +215,10 @@ export async function createGeneratedVideo({
     throw error;
   }
 
-  return { video: video as GeneratedVideo, metadata };
+  return {
+    video: video as GeneratedVideo,
+    metadata: { title: metadata.title, description: metadata.description, tags: metadata.tags, source: metadata.source, ...(metadata.warning ? { warning: metadata.warning } : {}) },
+  };
 }
 
 export async function publishVideo({

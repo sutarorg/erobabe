@@ -35,6 +35,10 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   GeminiError,
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  fallbackSuggestion,
+  humanizeFileName,
+  parseLooseJson,
   resetGeminiClientForTests,
   suggestVideoMetadata,
 } from "@/lib/gemini/client";
@@ -202,6 +206,92 @@ describe("suggestVideoMetadata", () => {
     expect(error.status).toBe(503);
   });
 
+  it("parses a fenced JSON block instead of failing", async () => {
+    // Models that ignore `responseMimeType` wrap the payload in ```json fences.
+    const payload = JSON.stringify({
+      title: "Evening in Velvet",
+      description: "An elegant portrait in soft light.",
+      tags: ["mature", "boudoir"],
+      category: "Boudoir",
+    });
+    genaiState.generateContent = async () => ({ text: `Sure!\n\`\`\`json\n${payload}\n\`\`\`\n` });
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(suggestion.title).toBe("Evening in Velvet");
+    expect(suggestion.tags).toEqual(["mature", "boudoir"]);
+  });
+
+  it("salvages a payload cut off by the output token limit", async () => {
+    // The regression that produced "Gemini returned malformed JSON": thinking
+    // tokens ate the 500-token budget and the JSON stopped mid-object.
+    const truncated =
+      '{"title":"Evening in Velvet","description":"An elegant portrait in soft light.","tags":["mature","4k"],"category":"Bou';
+    genaiState.generateContent = async () => ({
+      text: truncated,
+      candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: truncated }] } }],
+    });
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
+    expect(suggestion.title).toBe("Evening in Velvet");
+    expect(suggestion.description).toMatch(/soft light/);
+    expect(suggestion.tags).toEqual(["mature", "4k"]);
+  });
+
+  it("retries once and succeeds when the first response is unparseable", async () => {
+    let calls = 0;
+    genaiState.generateContent = async () => {
+      calls += 1;
+      return { text: calls === 1 ? "Here is the metadata (sorry, no JSON): title unknown" : modelOutput() };
+    };
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(calls).toBe(2);
+    expect(suggestion.title).toBe("Evening in Velvet");
+  });
+
+  it("gives the payload a real token budget and keeps thoughts out of it", async () => {
+    genaiState.generateContent = async () => ({ text: modelOutput() });
+    await suggestVideoMetadata({ fileName: "clip.mp4" });
+    const config = genaiState.lastArgs?.config as Record<string, unknown>;
+    expect(config.maxOutputTokens).toBe(DEFAULT_MAX_OUTPUT_TOKENS);
+    expect(config.thinkingConfig).toEqual({ thinkingBudget: 0 });
+  });
+
+  it("drops the thinking config for models that reject it", async () => {
+    let calls = 0;
+    genaiState.generateContent = async () => {
+      calls += 1;
+      if (calls === 1) {
+        const rejected = new Error("Unknown name \"thinking_budget\": Cannot find field.");
+        (rejected as unknown as Record<string, unknown>).status = 400;
+        throw rejected;
+      }
+      return { text: modelOutput() };
+    };
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(calls).toBe(2);
+    expect(suggestion.title).toBe("Evening in Velvet");
+    const config = genaiState.lastArgs?.config as Record<string, unknown>;
+    expect(config.thinkingConfig).toBeUndefined();
+  });
+
+  it("does not retry quota errors", async () => {
+    let calls = 0;
+    const quota = new Error("quota exceeded");
+    (quota as unknown as Record<string, unknown>).status = 429;
+    genaiState.generateContent = async () => {
+      calls += 1;
+      throw quota;
+    };
+    const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
+    expect(error).toBeInstanceOf(GeminiError);
+    expect(error.status).toBe(429);
+    expect(calls).toBe(1);
+  });
+
+  it("accepts tags sent as a comma-separated string", async () => {
+    genaiState.generateContent = async () => ({ text: modelOutput({ tags: "mature, 4k" }) });
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(suggestion.tags).toEqual(["mature", "4k"]);
+  });
+
   it("redacts key material from provider errors", async () => {
     genaiState.generateContent = async () => {
       throw new Error("upstream said api_key: AIzaFakeKeyMaterial1234567890 nope");
@@ -211,6 +301,82 @@ describe("suggestVideoMetadata", () => {
     expect(error.status).toBe(502);
     expect(error.message).not.toContain("AIzaFakeKeyMaterial");
     expect(error.message).toMatch(/redacted/);
+  });
+});
+
+describe("parseLooseJson", () => {
+  const payload = {
+    title: "Evening in Velvet",
+    description: "An elegant portrait.",
+    tags: ["mature", "4k"],
+    category: "Boudoir",
+  };
+
+  it("parses a plain JSON object", () => {
+    expect(parseLooseJson(JSON.stringify(payload))?.value).toEqual(payload);
+  });
+
+  it("unwraps markdown fences", () => {
+    const raw = "```json\n" + JSON.stringify(payload) + "\n```";
+    expect(parseLooseJson(raw)?.value).toEqual(payload);
+  });
+
+  it("ignores prose before and after the payload", () => {
+    const raw = `Here is your metadata:\n${JSON.stringify(payload)}\nLet me know if you want changes!`;
+    expect(parseLooseJson(raw)?.value).toEqual(payload);
+  });
+
+  it("repairs raw newlines inside strings", () => {
+    const raw = '{"title":"Velvet","description":"line one\nline two","tags":["mature"],"category":"Mature"}';
+    const parsed = parseLooseJson(raw)?.value as Record<string, unknown>;
+    expect(parsed.description).toBe("line one\nline two");
+  });
+
+  it("repairs smart quotes and trailing commas", () => {
+    const raw = '{"title":"“Velvet”","description":"soft light","tags":["mature",],"category":"Mature"}';
+    const parsed = parseLooseJson(raw)?.value as Record<string, unknown>;
+    expect(parsed.title).toBe('"Velvet"');
+    expect(parsed.tags).toEqual(["mature"]);
+  });
+
+  it("strips a byte-order mark and zero-width characters", () => {
+    const raw = "﻿​" + JSON.stringify(payload);
+    expect(parseLooseJson(raw)?.value).toEqual(payload);
+  });
+
+  it("recovers the fields that completed from a truncated object", () => {
+    const raw = '{"title":"Evening in Velvet","description":"An elegant portrait.","tags":["mature","4k"],"category":"Bou';
+    const result = parseLooseJson(raw);
+    expect(result?.strategy).toBe("truncated-salvage");
+    expect(result?.value).toMatchObject({ title: "Evening in Velvet", tags: ["mature", "4k"] });
+  });
+
+  it("returns null when there is no JSON to recover", () => {
+    expect(parseLooseJson("I am not able to help with that request.")).toBeNull();
+    expect(parseLooseJson("{not json")).toBeNull();
+    expect(parseLooseJson("")).toBeNull();
+  });
+});
+
+describe("fallbackSuggestion", () => {
+  it("builds reviewable metadata from the file name and category", () => {
+    const suggestion = fallbackSuggestion("evening_in_velvet-4k.mov", "Boudoir");
+    expect(suggestion.title).toBe("Evening In Velvet 4k");
+    expect(suggestion.category).toBe("Boudoir");
+    expect(suggestion.tags).toContain("boudoir");
+    expect(suggestion.tags.length).toBeGreaterThan(0);
+    expect(suggestion.description).toMatch(/review|replace/i);
+  });
+
+  it("always lands on a known category and a permitted tag", () => {
+    const suggestion = fallbackSuggestion("clip.mp4", "Not A Category");
+    expect(suggestion.category).toBe("Mature");
+    expect(suggestion.tags.length).toBeGreaterThan(0);
+  });
+
+  it("drops long id runs and falls back to the category for empty names", () => {
+    expect(fallbackSuggestion("", "Solo").title).toBe("Solo video");
+    expect(humanizeFileName("evening_in_velvet_20240512_1080p.mov")).toBe("Evening In Velvet 1080p");
   });
 });
 

@@ -141,6 +141,8 @@ export default function UploadPage() {
   const itemsRef = useRef<Item[]>([]);
   itemsRef.current = items;
   const abortRef = useRef<AbortController | null>(null);
+  /** Items published with file-name metadata because Gemini was unavailable. */
+  const fallbackRef = useRef(0);
 
   useEffect(() => {
     const supabase = createClient();
@@ -432,10 +434,17 @@ export default function UploadPage() {
       fileSize: item.file?.size,
     });
 
+    if (json.metadataSource === "fallback") fallbackRef.current += 1;
+
     patchItem(item.id, {
       phase: "published",
       percent: 100,
-      detail: json.processing ? "Published · provider is still encoding" : "Published",
+      detail:
+        json.metadataSource === "fallback"
+          ? "Published · AI metadata unavailable — file-name metadata used, please review"
+          : json.processing
+            ? "Published · provider is still encoding"
+            : "Published",
       title: json.metadata?.title,
       slug: json.video?.slug,
     });
@@ -491,10 +500,15 @@ export default function UploadPage() {
       throw new Error(result?.error || json.error || "Unable to publish");
     }
 
+    if (result.metadataSource === "fallback") fallbackRef.current += 1;
+
     patchItem(item.id, {
       phase: "published",
       percent: 100,
-      detail: "Published",
+      detail:
+        result.metadataSource === "fallback"
+          ? "Published · AI metadata unavailable — file-name metadata used, please review"
+          : "Published",
       title: result.title,
       slug: result.slug,
     });
@@ -523,6 +537,7 @@ export default function UploadPage() {
     setRunning(true);
     const controller = new AbortController();
     abortRef.current = controller;
+    fallbackRef.current = 0;
 
     // Reset anything that failed on a previous attempt.
     for (const item of pending) patchItem(item.id, { phase: "idle", percent: 0, detail: "Queued", error: undefined });
@@ -547,8 +562,12 @@ export default function UploadPage() {
 
     setRunning(false);
     abortRef.current = null;
-    if (failures) setError(`${failures} item${failures > 1 ? "s" : ""} could not be published. See the inline messages.`);
-    else setNotice("All videos were published.");
+    const fallbacks = fallbackRef.current;
+    const fallbackNote = fallbacks
+      ? ` ${fallbacks} used file-name metadata because the AI was unavailable — review those titles and descriptions.`
+      : "";
+    if (failures) setError(`${failures} item${failures > 1 ? "s" : ""} could not be published. See the inline messages.${fallbackNote}`);
+    else setNotice(`All videos were published.${fallbackNote}`);
   }
 
   function cancelPublish() {

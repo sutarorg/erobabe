@@ -103,6 +103,8 @@ export async function POST(req: NextRequest) {
           providerFileId: result.providerFileId,
           title: video.title,
           status: "published",
+          metadataSource: generated.metadata.source,
+          ...(generated.metadata.warning ? { metadataWarning: generated.metadata.warning } : {}),
           processing: true,
         });
       } catch (error: any) {

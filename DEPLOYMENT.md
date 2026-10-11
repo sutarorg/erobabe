@@ -463,20 +463,36 @@ route: `/api/gemini/suggest`.
    before it creates the video record. Alternatively POST to
    `/api/gemini/suggest` as an admin with `{ "fileName": "clip.mp4" }` and
    expect a `{ suggestion, note }` response.
-6. If Gemini is not configured, publishing stops with a clear error; if it
-   returns incomplete metadata, times out, or hits quota, the route answers
-   503/502/429 with an actionable message and nothing is published. Title,
-   description, and tags are intentionally not browser-editable in this
-   workflow.
-7. **Important**: Never send video bytes, private rights docs, payment
+6. Optional tuning: `GEMINI_MAX_OUTPUT_TOKENS` (default `2048`) is the
+   per-suggestion output budget — thinking tokens are counted against it, so
+   keep it well above the ~150 tokens the JSON payload needs.
+   `GEMINI_THINKING_BUDGET` (default `0`) turns thinking off so the whole
+   budget goes to the JSON; set it to `off` to send no thinking config at all
+   for models that reject the field.
+7. Gemini is an enhancement, not a gate. If it is not configured, returns
+   malformed output, or hits quota, the upload still completes: the video is
+   created with deterministic metadata built from the file name and category
+   (`/api/videos/upload*` answers with `metadataSource: "fallback"` and a
+   `metadataWarning`, and the admin UI flags the item for review). The
+   `/api/gemini/suggest` endpoint still answers 503/502/429 with an actionable
+   message so the AI path can be diagnosed. Title, description, and tags are
+   intentionally not browser-editable in this workflow.
+8. **Important**: Never send video bytes, private rights docs, payment
    records, or personal info to Gemini. Only the source filename/URL path,
    working title, selected category, and existing tags are sent for metadata
    generation. AI output is not proof of rights, age, consent, or factual
    attributes, and suggestions require human review.
-8. Diagnose: `GEMINI_API_KEY` missing → 503 "not configured"; wrong key →
+9. Diagnose: `GEMINI_API_KEY` missing → 503 "not configured"; wrong key →
    503; quota/rate limit → 429; malformed model output → 502. The key never
    appears in responses, logs, or client bundles (verified in CI by the
    client-bundle secret check).
+10. "Gemini returned malformed JSON" means the model's text could not be parsed
+    even after the built-in clean-up (markdown fences, prose around the
+    payload, raw newlines inside strings, smart quotes, trailing commas, and
+    truncated output are all handled) and a retry. Check the model in
+    `GEMINI_MODEL` supports structured output, raise
+    `GEMINI_MAX_OUTPUT_TOKENS`, and retry. Uploads are unaffected — they fall
+    back to file-name metadata.
 
 ---
 
@@ -592,6 +608,8 @@ fly deploy
 | `UQLOAD_ADULT_CONTENT_APPROVED` | Flag confirming written approval for adult content on Uqload | No | Set to `true` only after written provider confirmation | Hosting env | prod | Must be `true` AND `UQLOAD_API_KEY` set for Uqload to be enabled | Yes |
 | `GEMINI_API_KEY` | Gemini API key for metadata suggestions | No | https://aistudio.google.com/apikey → Create API key | Hosting secrets | prod (optional) | Test via `/api/gemini/suggest` as admin | Yes |
 | `GEMINI_MODEL` | Gemini model name | No | Current docs, e.g., `gemini-flash-latest` | Hosting env | prod (optional) | Check https://ai.google.dev/gemini-api/docs for supported models | Yes |
+| `GEMINI_MAX_OUTPUT_TOKENS` | Output-token budget for one metadata suggestion | No | `2048` (default); thinking tokens count against it | Hosting env | prod (optional) | Raise it if suggestions are truncated | Yes |
+| `GEMINI_THINKING_BUDGET` | Thinking budget sent with each suggestion | No | `0` (default, thinking off) or `off` to omit the field | Hosting env | prod (optional) | Set `off` for models that reject `thinkingBudget` | Yes |
 | `RESEND_API_KEY` | Resend API key | No | https://resend.com → API Keys | Hosting secrets, Supabase SMTP password | prod | Test via contact form | Yes |
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |
