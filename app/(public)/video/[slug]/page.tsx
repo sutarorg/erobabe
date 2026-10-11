@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
-import { SITE_URL, formatDuration } from "@/lib/site";
+import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
+import VideoActions from "@/src/components/VideoActions";
+import { Eye } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
@@ -147,28 +149,34 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
 
       <h1 className="mt-4 text-[19px] font-semibold tracking-tight text-ink">{video.title}</h1>
       <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-3">
-        <span>{video.view_count || 0} views</span>
-        <span>•</span>
-        <span>{video.published_at ? new Date(video.published_at).toLocaleDateString() : "Recently"}</span>
+        <span className="flex items-center gap-1.5">
+          <Eye className="h-3.5 w-3.5" aria-hidden />
+          <span className="tabular-nums">{(video.view_count || 0).toLocaleString("en-US")} views</span>
+        </span>
+        <span aria-hidden>•</span>
+        <span>{formatTimeAgo(video.published_at)}</span>
         {video.duration_seconds && (
           <>
-            <span>•</span>
+            <span aria-hidden>•</span>
             <span>{formatDuration(video.duration_seconds)}</span>
           </>
         )}
       </p>
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        {video.category && (
-          <Link href={`/category/${(video.category as any).slug}`} className="rounded-full border border-accent/45 bg-accent/8 px-2.5 py-[3px] text-[10.5px] font-semibold text-accent">
-            {(video.category as any).label}
-          </Link>
-        )}
-        {video.quality && (
-          <span className="rounded-full border border-white/10 bg-card px-2.5 py-[3px] text-[10.5px] font-semibold text-ink-2">
-            {video.quality}
-          </span>
-        )}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <VideoActions title={video.title} />
+        <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
+          {video.category && (
+            <Link href={`/category/${(video.category as any).slug}`} className="rounded-full border border-accent/45 bg-accent/8 px-2.5 py-[3px] text-[10.5px] font-semibold text-accent">
+              {(video.category as any).label}
+            </Link>
+          )}
+          {video.quality && (
+            <span className="rounded-full border border-white/10 bg-card px-2.5 py-[3px] text-[10.5px] font-semibold text-ink-2">
+              {video.quality}
+            </span>
+          )}
+        </span>
       </div>
 
       {video.description && (

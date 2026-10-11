@@ -37,13 +37,18 @@ describe("/categories page", () => {
     expect(html).toContain("Mature");
     expect(html).toContain("Amateur");
     expect(html).toContain("/category/mature");
-    expect(html).toContain("grid-cols-3");
+
+    // 12 cards ÷ 3 columns = four even rows.
+    const grid = html.match(/<div class="([^"]*grid[^"]*)"/);
+    expect(grid?.[1]).toContain("grid-cols-3");
+    expect(grid?.[1]).toContain("auto-rows-fr");
     expect(html.split('href="/category/').length - 1).toBe(12);
   });
 
   it("shows the requested eyebrow, introduction, and per-category video counts", async () => {
     const html = await render();
-    expect(html).toContain(">Browser</p>");
+    expect(html).toContain(">Browse</p>");
+    expect(html).not.toContain(">Browser</p>");
     expect(html).toContain("Explore the library by what you love — every category is hand-curated and updated daily.");
     expect(html).toContain(">5 videos</span>");
     expect(html).toContain("Browse Mature, 5 videos");

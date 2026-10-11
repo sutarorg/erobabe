@@ -50,15 +50,20 @@ export default function Categories({ activeCategory = null, onSelect, onMore, ca
         <h2 className="text-[15px] font-semibold tracking-tight text-ink">Top Categories</h2>
       </div>
 
-      <div className="category-grid mt-3.5 grid grid-cols-2 gap-2.5 @md:grid-cols-3 @2xl:grid-cols-4">
+      {/*
+        Exactly one row: all seven cards (six featured + More) share a single
+        seven-column track at every container width, and the cards are compact
+        enough — icon above label — to fit without horizontal scrolling.
+      */}
+      <div className="category-grid mt-3.5 grid grid-cols-7 gap-1 @md:gap-1.5 @2xl:gap-2.5">
         {list.map((cat) => {
           const isMore = cat.label.trim().toLowerCase() === "more";
           const Icon = resolveCategoryIcon(cat.icon, cat.slug || cat.label);
           const active = !isMore && activeCategory === cat.label;
           const className = cn(
-            // Cards wrap into a compact, responsive grid so every category is
-            // visible without horizontal scrolling in the center content panel.
-            "group flex min-h-[64px] min-w-0 items-center justify-center gap-2.5 rounded-lg border px-3 py-3 transition-colors duration-150",
+            // Compact vertical cards keep all seven categories on one row
+            // without horizontal scrolling in the center content panel.
+            "group flex min-h-[58px] min-w-0 flex-col items-center justify-center gap-1.5 rounded-lg border px-0 py-1.5 text-center transition-colors duration-150 @sm:min-h-[68px] @sm:gap-2 @sm:px-0.5 @sm:py-2 @md:px-1 @2xl:min-h-[76px]",
             active
               ? "border-accent/70 bg-accent/8"
               : "border-line bg-card hover:border-accent/45 hover:bg-card-hover"
@@ -66,11 +71,14 @@ export default function Categories({ activeCategory = null, onSelect, onMore, ca
           const inner = (
             <>
               <Icon
-                className="h-5 w-5 shrink-0 text-accent transition-transform duration-200 group-hover:scale-110"
+                className="h-4 w-4 shrink-0 text-accent transition-transform duration-200 group-hover:scale-110 @sm:h-5 @sm:w-5"
                 strokeWidth={1.8}
                 aria-hidden
               />
-              <span className="truncate text-[12px] font-medium leading-none text-zinc-200" title={cat.label}>
+              <span
+                className="line-clamp-2 w-full break-words text-[8px] font-medium leading-[1.25] text-zinc-200 @sm:text-[9px] @md:text-[11px] @2xl:text-[12px]"
+                title={cat.label}
+              >
                 {cat.label}
               </span>
             </>

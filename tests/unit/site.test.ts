@@ -18,6 +18,37 @@ describe("site helpers", () => {
   });
 });
 
+describe("formatTimeAgo", () => {
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+
+  it("renders the requested relative wording", async () => {
+    const { formatTimeAgo } = await import("@/lib/site");
+    expect(formatTimeAgo(ago(2 * DAY))).toBe("2 days ago");
+    expect(formatTimeAgo(ago(1 * DAY))).toBe("1 day ago");
+    expect(formatTimeAgo(ago(3 * HOUR))).toBe("3 hours ago");
+    expect(formatTimeAgo(ago(5 * MINUTE))).toBe("5 minutes ago");
+    expect(formatTimeAgo(ago(10 * 1000))).toBe("Just now");
+  });
+
+  it("scales up through weeks, months and years", async () => {
+    const { formatTimeAgo } = await import("@/lib/site");
+    expect(formatTimeAgo(ago(10 * DAY))).toBe("1 week ago");
+    expect(formatTimeAgo(ago(60 * DAY))).toBe("2 months ago");
+    expect(formatTimeAgo(ago(800 * DAY))).toBe("2 years ago");
+  });
+
+  it("never prints an invalid date", async () => {
+    const { formatTimeAgo } = await import("@/lib/site");
+    expect(formatTimeAgo(null)).toBe("Recently");
+    expect(formatTimeAgo(undefined)).toBe("Recently");
+    expect(formatTimeAgo("not-a-date")).toBe("Recently");
+    expect(formatTimeAgo(new Date(Date.now() + DAY))).toBe("Just now");
+  });
+});
+
 describe("getSiteUrl", () => {
   const KEY = "NEXT_PUBLIC_SITE_URL";
   const original = process.env[KEY];

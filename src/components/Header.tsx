@@ -67,7 +67,7 @@ export default function Header({
 
   return (
     <header className="sticky top-0 z-40 border-b border-line bg-panel/95 backdrop-blur-md">
-      <div className="relative mx-auto flex h-14 w-full max-w-[1200px] items-center gap-4 px-4 @sm:px-5 @2xl:px-7">
+      <div className="relative mx-auto flex h-14 w-full max-w-[1200px] items-center gap-5 px-4 @sm:px-5 @2xl:px-7">
         {/* Brand */}
         {useLinks ? (
           <Link href="/" prefetch className="flex shrink-0 items-center gap-2" aria-label="erobabe — home">
@@ -96,11 +96,14 @@ export default function Header({
         )}
 
         {/* Desktop / wide-container navigation */}
-        <nav aria-label="Primary" className="hidden h-full items-stretch gap-1 min-[1000px]:flex">
+        <nav
+          aria-label="Primary"
+          className="hidden h-full items-stretch gap-2 min-[1000px]:flex min-[1200px]:gap-3"
+        >
           {NAV_ITEMS.map((item) => {
             const active = navActive === item.key;
             const className = cn(
-              "relative flex items-center px-2 text-[13px] font-medium transition-colors duration-150 min-[1000px]:px-1",
+              "relative flex items-center px-2 text-[13px] font-medium transition-colors duration-150 min-[1000px]:px-1.5",
               active ? "text-accent" : "text-ink-2 hover:text-ink"
             );
             const inner = (
@@ -134,7 +137,7 @@ export default function Header({
         </nav>
 
         {/* Right controls */}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-3">
           {searchOpen ? (
             <form
               onSubmit={submitSearch}

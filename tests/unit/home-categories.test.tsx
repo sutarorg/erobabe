@@ -18,15 +18,16 @@ const DATABASE_CATEGORIES = [
 ];
 
 describe("homepage categories", () => {
-  it("shows all seven featured cards in a responsive grid without horizontal scrolling", () => {
+  it("shows all seven featured cards in one horizontal row without horizontal scrolling", () => {
     const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
     const grid = container.querySelector(".category-grid");
     expect(grid).toBeTruthy();
     expect(grid?.className).toMatch(/\bgrid\b/);
-    expect(grid?.className).toContain("grid-cols-2");
-    expect(grid?.className).toContain("@md:grid-cols-3");
-    expect(grid?.className).toContain("@2xl:grid-cols-4");
+    // Seven columns for seven cards (six featured + More) — a single row.
+    expect(grid?.className).toContain("grid-cols-7");
+    expect(grid?.className).not.toMatch(/grid-cols-[1-6]\b|grid-cols-8|grid-cols-9|grid-cols-10|grid-cols-11|grid-cols-12/);
     expect(grid?.className).not.toMatch(/overflow-x-auto|snap-x/);
+    expect(grid?.children).toHaveLength(7);
 
     const links = within(grid as HTMLElement).getAllByRole("link");
     expect(links).toHaveLength(7);
