@@ -162,98 +162,187 @@ update public.profiles set role='admin' where email='admin@erobabe.com';
 
 ## C. Bcon Global Setup
 
-### 1. Create/configure provider account
-1. Go to https://bcon.global → **Sign Up**
-2. Complete KYC if required
-3. Create a **Store** per blockchain (Bitcoin, Ethereum, Tron, Binance, Solana)
-4. For this launch, create one store for chosen chain (e.g., Ethereum for USDT)
+Everything in this section is verified against Bcon's published API documentation
+(https://bcon.global/integrations/api/, checked 2026-10-11) and the code in `lib/bcon/`.
+Bcon publishes **no store-write endpoint**, so callback URLs are configured by hand in the
+Bcon dashboard; the application can only read the store back and report what it finds.
 
-### 2. Configure authorized receiving wallet
-1. In Bcon Dashboard → **Stores** → Select store → **Settings**
-2. Under **Wallet**, enter your authorized receiving wallet address (e.g., Ethereum address for USDT-ERC20)
-3. For Bitcoin, you may need xPub
-4. Save
+### 1. Create/configure the provider account
+1. Go to https://bcon.global → **Sign Up**.
+2. Complete KYC if required.
+3. Create a **Store** (the dashboard calls stores "Merchants" / "merchant-platforms").
+   One store can serve several blockchains — you do not need one store per chain. For this
+   launch create a single store for the token/network you actually want to accept
+   (e.g. USDT on Ethereum).
+4. The store's generated API keys appear under **Created Store Settings → Copy Generated
+   Keys** (step 4 below).
 
-### 3. Choose enabled token and network
-1. In Store Settings → **Currencies**, enable token you want customers to pay with (e.g., USDT, USDC, BTC)
-2. Choose chain: `ethereum`, `tron`, `binance`, `bitcoin`, `solana` — must match `BCON_CHAIN` env var
-3. Set **Payment Currency** = token ticker, e.g., `USDT`
+### 2. Configure the authorized receiving wallet
+1. Bcon dashboard → **Merchants** (Stores) → select the store → **Settings**.
+2. Under **Wallet**, enter the receiving wallet address for the chain you will accept
+   (e.g. an Ethereum address for USDT-ERC20).
+3. Bitcoin requires a receiving address or an xpub — fill it only if you intend to accept BTC.
+4. Click **Save**.
 
-### 4. Find API credentials
-1. In Store Settings → **API Keys** → **Copy Generated Keys**
-2. Each chain store has its own API key — copy the key for your chosen chain
-3. This is `BCON_API_KEY` (server-only)
+### 3. Choose the enabled token and network
+1. Store Settings → **Currencies**: enable only the token(s) you will accept (e.g. USDT on Ethereum).
+2. Set `BCON_CHAIN` to the matching chain name — one of `ethereum`, `tron`, `binance`,
+   `bitcoin`, `solana`.
+3. Set `BCON_PAYMENT_CURRENCY` to the token ticker, e.g. `USDT`.
 
-### 5. Configure the callback endpoint — one URL per blockchain
+### 4. Find the API credentials
+1. Store Settings → **Copy Generated Keys**.
+2. Copy the key belonging to the chain you are enabling (each configured chain has its own key).
+3. Set it as `BCON_API_KEY` — server-side only, never a `NEXT_PUBLIC_*` variable.
+4. Optional: set `BCON_CALLBACK_URL` to pin the exact callback URL the app reports
+   (`https://erobabe.vercel.app/api/bcon/callback`). It is only honoured when it is an
+   absolute URL ending in `/api/bcon/callback`; otherwise it is ignored and the URL is
+   derived from `NEXT_PUBLIC_SITE_URL`.
 
-A Bcon store does **not** have a single "HTTP Callback URL". It stores one callback
-URL per blockchain: `callback_url` for BTC, `callback_url_bnb` for BNB, and a
-`callback_url_<code>` entry for every other chain on the store (`eth`, `trx`,
-`sol`). Bcon's own docs state that a store "by default returns information on BTC
-and BNB even if they are empty", so those two fields are validated on every save
-regardless of what you intend to accept.
+### 5. Configure the callback URL — one URL per blockchain (click-by-click)
 
-1. In Bcon Dashboard → **Merchants** → your store → **Settings**, find the
-   Callback URL field(s). For the deployed Vercel app the value is always:
+A Bcon store stores **one callback URL per blockchain**, not a single shared one. The store
+payload exposes them as `callback_url` (BTC), `callback_url_bnb` (BNB) and
+`callback_url_<code>` for every other configured chain, and Bcon's validation messages use
+the form paths `callback_url.btc`, `callback_url.bnb`, and so on.
+
+1. Sign in at https://bcon.global and open **Merchants** (Stores) in the dashboard menu.
+2. Click the store you created, then open its **Settings**.
+3. Scroll to the callback section. It contains one callback input per blockchain the form
+   knows about. Bcon's docs state a store "by default returns information on BTC and BNB
+   even if they are empty", so expect BTC and BNB callback inputs plus one per chain you
+   enabled — the exact set is shown by the form (and named by its validation errors).
+4. Type the raw URL below into **every** callback input the form shows, exactly as written
+   — no quotes, no Markdown (`[label](url)`), no JSON, no arrays, no trailing spaces, no
+   line breaks:
+
    ```
    https://erobabe.vercel.app/api/bcon/callback
    ```
-2. Paste that **raw** URL into **every** callback field the form renders —
-   including the BTC and BNB fields for chains you do not intend to use. If a
-   chain field cannot be filled, unselect that blockchain so Bcon stops
-   validating it.
-3. Never paste Markdown (`[label](url)`), quotes, JSON, an array, or a trailing
-   space. The field must be a bare URL string.
-4. Save.
 
-#### Fixing `The callback_url.btc must be a string. (and 2 more errors)`
+   On a different domain, use `https://YOUR_DOMAIN/api/bcon/callback` — the exact value the
+   app shows at the top of Admin → System Health → **Bcon store — per-chain callback URLs**.
+5. Leave a callback input empty **only** if you also disable that blockchain in the same
+   form (disabling removes the input and its validation). Never save the form with a
+   rendered callback input left blank.
+6. Scroll down and click **Save**.
+7. If validation fails, read the field names in the message and fill exactly those inputs.
 
-That is Laravel validation from Bcon's own store form, not an error in this
-application. It means one or more `callback_url.<chain>` entries were submitted
-as `null` — i.e. the form rendered a callback field for a chain and it was left
-blank. BTC and BNB are always present, so a store that also enables Ethereum
-validates exactly three fields: `callback_url.btc`, `callback_url.bnb`, and
-`callback_url.eth` — which is the "and 2 more errors" you see.
+#### Understanding `The callback_url.btc must be a string. (and 2 more errors)`
 
-Fix: fill all three (or unselect the chains you do not use) and save again.
+This message comes from **Bcon's own dashboard form validation, not from this application**.
+It is the standard Laravel "value is present but not a string" wording: the input was
+submitted as `null` — i.e. it was left empty. `callback_url.btc` is the BTC callback input,
+and "(and 2 more errors)" means two further inputs (typically `bnb` and one more chain the
+form rendered) were empty in the same submission.
 
-You can verify the result without leaving this app: **Admin → System Health**
-calls `GET https://external-api.bcon.global/api/v1/stores/get_store` with
-`BCON_API_KEY` and lists every chain on the store with its registered
-`callback_url`, flagging the ones that are still empty.
+* Which inputs the form renders is not exposed by the Bcon API — read the field names off
+  the error output itself (`callback_url.btc` plus the "2 more errors" it mentions) and fill
+  exactly those inputs.
+* Note: Bcon also returns BTC/BNB entries with `callback_url: null` for stores that simply
+  do not accept those chains (its own docs show such a store). An empty value therefore
+  means "not configured"; it only becomes a blocker when the form renders that input and
+  refuses to save it empty.
+* Fix: type the URL into every callback input the form renders (step 4 above), or disable
+  the chain so its input disappears, then save again.
+* Do **not** paste a JSON object, an array, or quote-wrapped text into these inputs, and do
+  not paste the URL into unrelated fields (wallet, tag, name). Each callback input accepts a
+  plain URL string only.
+* No code change can fix this: Bcon exposes no endpoint that writes store configuration, so
+  the empty dashboard field can only be corrected in the dashboard.
 
-5. Bcon docs show callback parameters: `addr`, `txid`, `value`, `status`,
-   `external_id` (0 = unconfirmed, 1 = partially confirmed, 2 = confirmed). The
-   Test Payment endpoint posts `transaction_id` and `sum` instead — this route
-   accepts both spellings, handles GET and POST, and returns HTTP 200 to a
-   reachability probe with no transaction values.
+#### Verify what Bcon has actually stored
 
-### 6. Configure callback behavior
-- Bcon does NOT document cryptographic signature for callback (as of 10 Oct 2026). Do NOT invent one.
-- Our implementation verifies: `external_id` exists, `payment_address` matches, `transaction_id` not already processed, amount within tolerance, status = confirmed (2 confirmations) required before marking paid.
-- Callback must be idempotent — repeated callbacks must not duplicate ledger entries.
+Admin → System Health → **Bcon store — per-chain callback URLs** calls
+`GET https://external-api.bcon.global/api/v1/stores/get_store` with `BCON_API_KEY` and, for
+every chain Bcon returns, shows the registered callback URL (`empty — this is the field
+Bcon rejects`, `matches this deployment`, or the wrong value). A chain Bcon does not return
+at all is labelled **unverified** — never "working".
 
-### 7. Run test payments
-- Bcon docs mention **Test Payment** endpoint — use it if available in dashboard
-- Create a test payment request via our `/api/bcon/create` endpoint with small amount (e.g., $1) in development
-- Simulate callback via curl:
-```bash
-curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TEST_ADDR&txid=0xabc...&value=1&status=confirmed"
-```
-- Check `payments` table status should become `confirmed` only if status=confirmed and verification passes
-- Check `payment_events` table has immutable records
-- Check invoice becomes `paid`
+Reference: verified API shape (https://bcon.global/integrations/api/, 2026-10-11)
+* Store fields: `callback_url` (BTC), `callback_url_bnb` (BNB), `callback_url_<code>` for
+  each other configured chain, plus a `chains[]` array whose entries each carry `chain`,
+  `code`, `api_key`, `callback_url`, `address`/`xpub`.
+* Callback request: `status` (0 = unconfirmed, 1 = partially confirmed, 2 = confirmed),
+  `addr`, `value` (satoshis for BTC), `txid`, `external_id` (plus `memo` on BNB).
+* "A callback succeeds when the server returns 200 HTTP status."
 
-### 8. Verify transaction status
-- Bcon API: `GET https://external-api.bcon.global/api/v1/transactions/<txid>` with Bearer key
-- Our `confirmPayment` function marks confirmed only after 2 confirmations per Bcon docs
-- Monitor `audit_logs` for `payment_confirmed` actions
+### 6. What the application does with a callback
 
-### 9. Troubleshoot pending and failed
-- Pending: callback not yet received or only unconfirmed — wait for confirmations
-- Failed: check `bcon_response` JSON in `payments` table, check `payment_events`
-- Underpaid/Overpaid: logged for admin review, never silently discard funds — see `payments` status `underpaid`/`overpaid`
-- Expired: invoice expired after 1 hour (configurable) — generate new invoice
+Bcon documents no callback signature, so none is invented. `/api/bcon/callback` treats every
+parameter as untrusted and:
+
+1. Answers a parameter-less probe with HTTP 200 without touching any payment record.
+2. Finds the payment by `external_id`, then requires the callback `addr` to equal that
+   payment's stored `payment_address` (EVM chains compared case-insensitively).
+3. Treats only `status=2` / `confirmed` as a confirmation claim; `0` and `1` are recorded as
+   `unconfirmed` / `partially_confirmed` and never mark a payment paid.
+4. Re-checks the claim against Bcon's own record —
+   `GET https://external-api.bcon.global/api/v1/transactions/<txid>` — and requires the
+   transaction to exist, to be `confirmed`, to point at the same payment address, to use the
+   same currency, and its `sum` to match `expected_amount` within 2%.
+5. Stays idempotent: a payment already `confirmed` is never confirmed twice, and a non-200
+   answer makes Bcon retry.
+6. Fails closed. Unknown txid, address or currency mismatch, a missing amount, or an
+   unreachable Bcon API leave the payment unconfirmed and write an audit entry
+   (`bcon_callback_transaction_unverified`, `bcon_callback_address_mismatch`,
+   `bcon_callback_currency_mismatch`, `bcon_callback_amount_unverified`,
+   `bcon_callback_underpaid`, `bcon_callback_overpaid`).
+7. Answers HTTP 200 for everything it has fully processed — including under/over payments,
+   which stay unpaid for human review — and a non-200 status only when a retry of the same
+   callback could still change the outcome: 400 for invalid/unverifiable notifications
+   (including a txid Bcon does not yet report) and 503 while Bcon's API is unreachable.
+
+Consequence: a hand-crafted callback URL typed into a browser cannot confirm a payment any
+more. Confirmation requires a transaction that Bcon itself reports as confirmed for that
+address and amount.
+
+### 7. Test callback reachability safely (no money, no payment records touched)
+
+1. Admin → System Health → **Bcon store** → **Test callback reachability**: performs a real
+   HTTPS GET of the callback URL from the deployment and reports the status code. Bcon
+   treats HTTP 200 as a successful callback.
+2. Or from any machine:
+   ```bash
+   curl -i https://erobabe.vercel.app/api/bcon/callback
+   ```
+   Expect `HTTP/2 200` and `{"status":"ok","message":"Bcon callback endpoint is reachable"}`.
+3. Bcon's dashboard **Merchants → Test Payments** page (API equivalent
+   `POST https://external-api.bcon.global/api/v1/test`) can generate a fake transaction for
+   the store. It proves Bcon can reach the URL and is recorded as `unknown_payment` (or
+   rejected by verification) for review — it does **not** confirm a real payment, because no
+   matching payment row/address exists. Never treat a test payment as money received.
+
+### 8. Process a genuine test payment end to end
+
+1. Sign in to the deployed site with a test advertiser account and create the smallest
+   checkout you are willing to pay for (the current minimum is one $99 slot for one month —
+   there is no fabricated sandbox amount).
+2. The checkout shows the exact amount, token, network and receiving address. Send exactly
+   that amount from your own wallet on the matching network; a different token or network
+   will not confirm.
+3. Wait for confirmations (Bcon reports `confirmed` after 2 confirmations).
+4. Expected result: Bcon calls `/api/bcon/callback` → the route verifies the payment row and
+   Bcon's transaction record → `payments.status = 'confirmed'` with `confirmed_at` set, the
+   invoice becomes `paid`, `payment_events` gains `callback_received`, `transaction_verified`
+   and `confirmed`, and the campaign becomes `active` (creative approved) or `pending_review`.
+5. Verify: Admin → System Health shows the store healthy, Admin → Logs shows
+   `payment_confirmed`, and the advertiser's campaign page shows the activated campaign.
+
+### 9. Diagnose missing callbacks, unconfirmed payments and wrong callback values
+
+| Symptom | Where to look | What to do |
+|---|---|---|
+| Bcon form still says `callback_url.btc must be a string` | The Bcon dashboard form | One or more callback inputs were submitted empty. Fill every rendered callback input (step 5) or disable the chain, then save. |
+| System Health shows **Callback incomplete** | System Health → Bcon store table | The `Registered value` column says `empty`; paste the URL shown at the top of that panel into that chain's field in Bcon and save. |
+| System Health shows **Callback mismatch** | Same table | The chain points at another deployment (often an old preview URL). Replace it with the URL shown at the top of the panel. |
+| System Health shows **Unreachable** | Same panel | `BCON_API_KEY` missing/invalid or the Bcon API cannot be reached; the panel prints the HTTP status. |
+| Payment stays `awaiting_confirmation` after a real payment | `payment_events` and `audit_logs` for that payment | `callback_received` = Bcon reached us. `verification_pending` + HTTP 503 = Bcon's API was unreachable, Bcon retries. `verification_failed` / `bcon_callback_transaction_unverified` = Bcon has no such txid. `amount_unverified` / `amount_mismatch` = amount evidence missing or mismatched (`underpaid`/`overpaid`). |
+| `unknown_payment` | `audit_logs.action = 'bcon_callback_unknown_payment'` | The callback matched no `external_id`/address — usually a Bcon **Test Payment** (expected) or a callback from another/older store. |
+| Nothing arrives at all | Bcon dashboard callback field(s) | Bcon never called us: the URL is missing or wrong on the store, or the payment has not reached the confirmation threshold. Confirm with steps 5 and 7. |
+
+Never mark a payment `confirmed` by hand unless you independently verified the transaction
+in Bcon or on a blockchain explorer first — see "Rollback and recovery" below.
 
 ---
 
@@ -365,7 +454,7 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
    - Sign up new advertiser — should receive verification email via Resend
    - Reset password — should receive reset email
    - Create campaign — should receive submission confirmation (if you wire `sendEmail` in campaign creation)
-   - Payment confirmation — test Bcon callback with confirmed status, check if email sent
+   - Payment confirmation — requires a real confirmed Bcon transaction (see section C.8); a hand-made callback no longer confirms a payment, so use a genuine (smallest) payment or the automated tests instead
    - Contact form — submit at `/contact`, check `support_tickets` table and email to support
    - Support ticket — similar
    - Content removal — submit at `/content-removal`, check `reports` table and ack email
@@ -427,7 +516,7 @@ fly deploy
 3. **Verify HTTPS**: Hosting should auto-provision Let's Encrypt cert — check `https://YOUR_DOMAIN` loads with valid cert
 4. **Canonical domain**: Choose `https://erobabe.com` (no www) or `https://www.erobabe.com` — set `NEXT_PUBLIC_SITE_URL` to canonical, and configure redirect from non-canonical to canonical in hosting or Next.js config
 5. **Auth redirect URLs**: Update Supabase Auth URL Configuration to use production domain (see Supabase Setup step 3)
-6. **Callback endpoints**: Bcon callback `https://YOUR_DOMAIN/api/bcon/callback` must be reachable via HTTPS, no auth
+6. **Callback endpoints**: `https://YOUR_DOMAIN/api/bcon/callback` must be reachable via HTTPS and must answer HTTP 200 to a parameter-less GET (that is what the Bcon callback probe expects). It is public by design and excluded from the auth middleware. On the Bcon store, the same URL has to be entered in every per-chain callback field — see section C.5.
 7. **Sitemap**: `https://YOUR_DOMAIN/sitemap.xml` and `https://YOUR_DOMAIN/video-sitemap.xml` must be accessible
 
 ---
@@ -441,9 +530,10 @@ fly deploy
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Yes | Supabase Dashboard → Project Settings → API → Project URL | Hosting env, .env.local | dev, prod | `https://xxx.supabase.co` | Yes |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key (safe for browser with RLS) | Yes | Supabase Dashboard → API → Publishable key | Hosting env | dev, prod | Starts `sb_publishable_` | Yes |
 | `SUPABASE_SECRET_KEY` | Supabase secret key (service_role, bypasses RLS) — server only | No | Supabase Dashboard → API → Secret key | Hosting env secrets, Supabase Edge Functions secrets | prod | Never in client bundle, check server logs not exposed | Yes |
-| `BCON_API_KEY` | Bcon Global API key per chain store | No | Bcon Dashboard → Store Settings → API Keys | Hosting secrets | prod | Test via `/api/bcon/create` | Yes |
-| `BCON_CHAIN` | Blockchain for payments | No | Choose: ethereum, tron, binance, bitcoin, solana | Hosting env | prod | Matches Bcon store chain | Yes |
-| `BCON_PAYMENT_CURRENCY` | Token ticker (USDT, USDC, BTC) | No | Bcon store currencies | Hosting env | prod | Must be enabled in Bcon store | Yes |
+| `BCON_API_KEY` | Bcon Global API key of the store that receives the payments | No | Bcon Dashboard → Merchants → store → Store Settings → Copy Generated Keys | Hosting secrets | prod | `stores/get_store` in Admin → System Health resolves the store; also used by `/api/bcon/create` and callback verification | Yes |
+| `BCON_CALLBACK_URL` | Optional pin for the callback URL the app reports/verifies (must be an absolute URL ending in `/api/bcon/callback`) | No | Your domain | Hosting env | prod (optional) | Admin → System Health shows `URL source`: `BCON_CALLBACK_URL`; an invalid value is reported as a config warning and ignored | Yes |
+| `BCON_CHAIN` | Blockchain for payments | No | Choose: ethereum, tron, binance, bitcoin, solana | Hosting env | prod | Matches the chain enabled on the Bcon store | Yes |
+| `BCON_PAYMENT_CURRENCY` | Token ticker (USDT, USDC, BTC) | No | Bcon store currencies | Hosting env | prod | Must be enabled in the Bcon store; verified against the currency Bcon reports in the transaction record | Yes |
 | `VIDEO_PROVIDER` | Video hosting provider | No | Choose: internal, uqload, bunny, etc. | Hosting env | prod | `internal` for fallback | Yes |
 | `UQLOAD_API_KEY` | Uqload API key | No | https://uqload.vc → Account → API key | Hosting secrets | prod (if using) | Test via `GET /api/upload/server` | Yes |
 | `UQLOAD_ADULT_CONTENT_APPROVED` | Flag confirming written approval for adult content on Uqload | No | Set to `true` only after written provider confirmation | Hosting env | prod | Must be `true` AND `UQLOAD_API_KEY` set for Uqload to be enabled | Yes |
@@ -501,8 +591,10 @@ npx playwright test
 - [ ] Create campaign at `/advertiser/campaigns/new` → select one or multiple available slots, duration, destination URL, creative (JPG/PNG/GIF, ≤10 MB) → submit → one payment address returned for the selected slots
 - [ ] Payment request creation at `/api/bcon/create` → verifies session, trusted slot price, prevents overlapping, creates pending invoice and short unique Bcon external_id, returns address, amount, token, network
 - [ ] Checkout UX: shows exact amount, USD equivalent, ticker, network, address, QR, copy button, expiration, pending status, instructions for correct network
-- [ ] Simulate Bcon callback: `GET /api/bcon/callback?external_id=...&addr=...&txid=0x...&value=...&status=confirmed` → payment becomes confirmed, invoice paid, campaign pending_review or active if creative approved
-- [ ] Duplicate callback with same txid → idempotent, no duplicate ledger entries
+- [ ] Callback reachability probe: `curl -i https://YOUR_DOMAIN/api/bcon/callback` → HTTP 200 `{"status":"ok",…}` and no row written to `payments` / `payment_events`
+- [ ] Synthetic confirmation attempt (must NOT confirm): `GET /api/bcon/callback?external_id=<real id>&addr=<real address>&txid=0xnotreal&value=99&status=2` → HTTP 400, payment stays `awaiting_confirmation`, `audit_logs` gains `bcon_callback_transaction_unverified`. Only a transaction Bcon itself reports as `confirmed` (`GET /api/v1/transactions/<txid>`) can move a payment to `confirmed`.
+- [ ] Genuine payment (real funds, smallest checkout): Bcon callback arrives → payment `confirmed`, invoice paid, campaign `pending_review` or `active` if the creative is approved
+- [ ] Duplicate callback with same txid → `already_processed`, no duplicate ledger entries
 - [ ] Campaign approval: admin approves creative → campaign becomes active, appears on public site if slot active and schedule valid
 - [ ] Billing history at `/advertiser/payments` → real payments, no fake
 - [ ] Invoices at `/advertiser/invoices` → real invoices
@@ -511,13 +603,17 @@ npx playwright test
 - [ ] Support ticket at `/advertiser/support` → persisted, email sent if Resend configured
 
 **Bcon:**
-- [ ] Malformed callback (missing addr and external_id) → 400
-- [ ] Duplicate callback → 200 already_processed, no duplicate
-- [ ] Incorrect payment reference → 200 unknown_payment logged for admin review, not silently discarded
-- [ ] Incorrect amount → status underpaid/overpaid, admin review
-- [ ] Wrong network/token → admin review
-- [ ] Delayed confirmation → remains awaiting_confirmation until confirmed
-- [ ] Already processed transaction → idempotent
+- [ ] Empty/parameter-less probe → 200 `{"status":"ok"}`, nothing written
+- [ ] Malformed callback (no addr, no external_id) → 400
+- [ ] Duplicate callback → 200 `already_processed`, no duplicate ledger entries
+- [ ] Unknown payment reference → 200 `unknown_payment`, audit row written, not silently discarded
+- [ ] Callback claiming `status=2` whose txid Bcon does not report as confirmed → payment stays unconfirmed (400, audit row)
+- [ ] Callback `status=1`/`0` → recorded as `partially_confirmed`/`unconfirmed`, never paid
+- [ ] Incorrect amount → `underpaid`/`overpaid`, not confirmed, audit row
+- [ ] Wrong address, currency or network → rejected with the matching audit action
+- [ ] Bcon transaction API unreachable → HTTP 503 (Bcon retries), payment untouched
+- [ ] Repeated/duplicate transaction → idempotent, `confirmed` event exists exactly once
+- [ ] No API key, secret or wallet material appears in `payment_events`, `audit_logs` or server logs
 
 **Video hosting:**
 - [ ] Provider adapter abstraction exists in `lib/video/provider.ts`
@@ -564,13 +660,20 @@ npx playwright test
 3. Verify RLS policies still enabled
 
 **Payment callback issues:**
-1. Check `payment_events` table for payloads
-2. Check `audit_logs` for `bcon_callback_unknown_payment`
-3. Manually confirm payment via SQL if verified on blockchain but callback failed:
+1. Check `payment_events` for the payment (`callback_received`, `verification_failed`, `amount_mismatch`, `confirmed`).
+2. Check `audit_logs` for `bcon_callback_unknown_payment`, `bcon_callback_transaction_unverified`,
+   `bcon_callback_address_mismatch`, `bcon_callback_currency_mismatch`,
+   `bcon_callback_amount_unverified`, `bcon_callback_underpaid`, `bcon_callback_overpaid`.
+3. Use Admin → System Health → Bcon store → **Test callback reachability** to prove the URL answers 200.
+4. Only if the transaction exists on-chain *and* Bcon reports it as confirmed
+   (`GET https://external-api.bcon.global/api/v1/transactions/<txid>` with `BCON_API_KEY`),
+   reconcile manually:
 ```sql
-update payments set status='confirmed', confirmed_at=now() where external_id='...';
+update payments set status='confirmed', transaction_id='<txid>', confirmed_at=now() where external_id='...';
 update invoices set status='paid', paid_at=now() where number='...';
 ```
+   Record the reconciliation in `audit_logs` (action `payment_confirmed_manually`) — never
+   flip a payment to `confirmed` without that evidence.
 
 **Video hosting outage:**
 1. Check provider status page
