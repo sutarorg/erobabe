@@ -1,8 +1,9 @@
 import type { MetadataRoute } from "next";
+import { getSiteUrl } from "@/lib/site";
 import { tryCreateServiceClient } from "@/lib/supabase/server";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://erobabe.com";
+  const siteUrl = getSiteUrl();
 
   const staticPages: MetadataRoute.Sitemap = [
     { url: `${siteUrl}/`, lastModified: new Date(), changeFrequency: "daily", priority: 1 },

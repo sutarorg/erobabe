@@ -1,14 +1,25 @@
 import { createClient } from "@/lib/supabase/server";
-import { NextResponse } from "next/server";
+import { getSiteUrl } from "@/lib/site";
+import { NextRequest, NextResponse } from "next/server";
 
-export async function POST() {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
-  return NextResponse.redirect(new URL("/", process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"));
+function redirectHome(request: NextRequest) {
+  // Prefer the request origin so preview deployments redirect to themselves.
+  const base = getSiteUrl() || request.nextUrl.origin;
+  try {
+    return NextResponse.redirect(new URL("/", base));
+  } catch {
+    return NextResponse.redirect(new URL("/", request.nextUrl.origin));
+  }
 }
 
-export async function GET() {
+export async function POST(request: NextRequest) {
   const supabase = await createClient();
   await supabase.auth.signOut();
-  return NextResponse.redirect(new URL("/", process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"));
+  return redirectHome(request);
+}
+
+export async function GET(request: NextRequest) {
+  const supabase = await createClient();
+  await supabase.auth.signOut();
+  return redirectHome(request);
 }

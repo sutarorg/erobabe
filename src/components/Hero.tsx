@@ -1,18 +1,36 @@
 "use client";
 import { ChevronLeft, ChevronRight, LayoutGrid, Play } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { HERO_SLIDES } from "../data/content";
 import { cn } from "../utils/cn";
 
+/**
+ * Callbacks are optional so the hero can be rendered from Server Components.
+ * When no handler is supplied we fall back to client-side navigation, which
+ * keeps the buttons functional without passing functions across the
+ * server/client boundary.
+ */
 interface HeroProps {
-  onExplore: () => void;
-  onBrowseCategories: () => void;
+  onExplore?: () => void;
+  onBrowseCategories?: () => void;
 }
 
-export default function Hero({ onExplore, onBrowseCategories }: HeroProps) {
+export default function Hero({ onExplore, onBrowseCategories }: HeroProps = {}) {
+  const router = useRouter();
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const total = HERO_SLIDES.length;
+
+  const handleExplore = useCallback(() => {
+    if (onExplore) onExplore();
+    else router.push("/latest");
+  }, [onExplore, router]);
+
+  const handleBrowseCategories = useCallback(() => {
+    if (onBrowseCategories) onBrowseCategories();
+    else router.push("/categories");
+  }, [onBrowseCategories, router]);
 
   const go = useCallback(
     (next: number) => setIndex(((next % total) + total) % total),
@@ -68,7 +86,7 @@ export default function Hero({ onExplore, onBrowseCategories }: HeroProps) {
                 <div className="mt-4 flex flex-wrap items-center gap-2.5">
                   <button
                     type="button"
-                    onClick={onExplore}
+                    onClick={handleExplore}
                     tabIndex={active ? 0 : -1}
                     className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white shadow-[0_4px_18px_rgba(245,22,85,0.28)] transition-colors hover:bg-accent-soft"
                   >
@@ -77,7 +95,7 @@ export default function Hero({ onExplore, onBrowseCategories }: HeroProps) {
                   </button>
                   <button
                     type="button"
-                    onClick={onBrowseCategories}
+                    onClick={handleBrowseCategories}
                     tabIndex={active ? 0 : -1}
                     className="flex h-9 items-center gap-1.5 rounded-md border border-white/15 bg-black/25 px-4 text-[13px] font-medium text-zinc-200 backdrop-blur-sm transition-colors hover:border-white/30 hover:bg-white/5"
                   >

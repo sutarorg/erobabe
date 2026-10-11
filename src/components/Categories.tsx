@@ -1,24 +1,73 @@
 "use client";
-import { CATEGORIES as MOCK_CATEGORIES } from "../data/content";
+import { useRouter } from "next/navigation";
+import { CATEGORIES as MOCK_CATEGORIES, categorySlug } from "../data/content";
 import { cn } from "../utils/cn";
 import type { LucideIcon } from "lucide-react";
-import { Flame } from "lucide-react";
+import {
+  Camera,
+  Drama,
+  Eye,
+  Flame,
+  Flower2,
+  Heart,
+  HeartHandshake,
+  LayoutGrid,
+  Sparkles,
+  UserRound,
+  Users,
+  VenetianMask,
+  Wine,
+} from "lucide-react";
 
 interface CategoryInput {
   id: string;
   label: string;
   slug?: string;
-  icon?: LucideIcon;
+  /** Lucide component (client-only data) or the icon name stored in Supabase. */
+  icon?: LucideIcon | string;
 }
 
 interface CategoriesProps {
-  activeCategory: string | null;
-  onSelect: (label: string) => void;
+  activeCategory?: string | null;
+  /** Optional — falls back to client-side navigation to /category/[slug]. */
+  onSelect?: (label: string) => void;
   categories?: CategoryInput[];
 }
 
-export default function Categories({ activeCategory, onSelect, categories }: CategoriesProps) {
+/** Maps the `categories.icon` column (text) to a concrete Lucide icon. */
+const ICON_BY_NAME: Record<string, LucideIcon> = {
+  flame: Flame,
+  camera: Camera,
+  eye: Eye,
+  users: Users,
+  mask: VenetianMask,
+  wine: Wine,
+  heart: HeartHandshake,
+  "heart-handshake": HeartHandshake,
+  sparkles: Sparkles,
+  user: UserRound,
+  drama: Drama,
+  flower: Flower2,
+  grid: LayoutGrid,
+};
+
+function resolveIcon(icon: CategoryInput["icon"]): LucideIcon {
+  if (typeof icon === "function") return icon as LucideIcon;
+  if (typeof icon === "string") return ICON_BY_NAME[icon.toLowerCase()] ?? Flame;
+  return Flame;
+}
+
+export default function Categories({ activeCategory = null, onSelect, categories }: CategoriesProps = {}) {
+  const router = useRouter();
   const list = categories && categories.length > 0 ? categories : MOCK_CATEGORIES;
+
+  const select = (cat: CategoryInput) => {
+    if (onSelect) {
+      onSelect(cat.label);
+      return;
+    }
+    router.push(`/category/${cat.slug || categorySlug(cat.label)}`);
+  };
 
   return (
     <div>
@@ -28,13 +77,13 @@ export default function Categories({ activeCategory, onSelect, categories }: Cat
 
       <div className="mt-3.5 grid grid-cols-4 gap-2.5 @2xl:grid-cols-8">
         {list.map((cat) => {
-          const Icon = (cat as any).icon || Flame;
+          const Icon = resolveIcon(cat.icon);
           const active = activeCategory === cat.label;
           return (
             <button
               key={cat.id}
               type="button"
-              onClick={() => onSelect(cat.label)}
+              onClick={() => select(cat)}
               aria-pressed={active}
               className={cn(
                 "group flex h-[82px] flex-col items-center justify-center gap-2 rounded-lg border bg-card transition-colors duration-150",

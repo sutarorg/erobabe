@@ -1,13 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
 import { SITE_URL } from "@/lib/site";
 import Link from "next/link";
-import VideoCard from "@/src/components/VideoCard";
 import VideoGrid from "@/src/components/VideoGrid";
 import Categories from "@/src/components/Categories";
 import Hero from "@/src/components/Hero";
 import VideoSection from "@/src/components/VideoSection";
 import InlineAd from "@/src/components/InlineAd";
-import { categorySlug } from "@/src/data/content";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -25,10 +23,18 @@ export default async function HomePage({
   const supabase = await createClient();
 
   // Fetch categories
-  const { data: categories } = await supabase
+  const { data: categoriesData } = await supabase
     .from("categories")
-    .select("*")
+    .select("id, label, slug, icon")
     .order("label");
+
+  // Only serializable primitives may cross the server/client boundary.
+  const categories = (categoriesData || []).map((c: any) => ({
+    id: String(c.id),
+    label: String(c.label),
+    slug: c.slug ? String(c.slug) : undefined,
+    icon: c.icon ? String(c.icon) : undefined,
+  }));
 
   // Fetch published videos
   let query = supabase
@@ -95,7 +101,7 @@ export default async function HomePage({
             </Link>
           </div>
         ) : (
-          <VideoGrid videos={mappedVideos} onOpen={(v) => {}} maxColumns={5} className="video-grid mt-3.5" />
+          <VideoGrid videos={mappedVideos} maxColumns={5} className="video-grid mt-3.5" />
         )}
       </div>
     );
@@ -104,7 +110,7 @@ export default async function HomePage({
   if (mappedVideos.length === 0) {
     return (
       <div className="pt-4">
-        <Hero onExplore={() => {}} onBrowseCategories={() => {}} />
+        <Hero />
         <div className="mt-12 rounded-lg border border-dashed border-line bg-card p-12 text-center">
           <p className="text-[16px] font-semibold">No videos published yet</p>
           <p className="mt-2 text-[13px] text-ink-3">The library is being prepared. Check back soon for premium content.</p>
@@ -115,10 +121,10 @@ export default async function HomePage({
 
   return (
     <div className="pt-4">
-      <Hero onExplore={() => {}} onBrowseCategories={() => {}} />
+      <Hero />
 
       <section className="mt-7">
-        <Categories activeCategory={null} onSelect={(label) => {}} />
+        <Categories activeCategory={null} categories={categories} />
       </section>
 
       <section className="mt-8">
@@ -140,7 +146,7 @@ export default async function HomePage({
       </section>
 
       <div className="mt-8">
-        <InlineAd onAdvertise={() => {}} />
+        <InlineAd />
       </div>
 
       <section className="mt-8">
