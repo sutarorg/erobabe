@@ -144,6 +144,75 @@ export class UqloadProvider implements VideoProvider {
     };
   }
 
+  /**
+   * Confirms a file that the browser just POSTed straight to Uqload.
+   *
+   * The browser can never read the upload server's JSON response (no CORS
+   * headers), so the filecode has to be recovered from the account library via
+   * the documented `file/list` endpoint — filtered by the `created` parameter
+   * (a number means "uploaded within the last X minutes") and matched against
+   * the title we sent with the upload.
+   *
+   * Uqload rewrites duplicate titles by appending a suffix (e.g. uploading
+   * "My Video" twice yields "My Video" and "My Video_1_"), so a candidate also
+   * matches when the expected title is a prefix of the stored title followed by
+   * a separator.
+   *
+   * Returns null when nothing matching is in the window yet (the caller may
+   * retry) or when the window holds several files but none matches the
+   * expected title (ambiguous — never guess a filecode).
+   */
+  async findRecentUpload(
+    meta: { title?: string; fileName?: string },
+    windowMinutes = 5
+  ): Promise<{ fileCode: string; uploaded?: string; matchedBy: "title" | "recent" } | null> {
+    const files = await this.listLibraryFiles({ created: windowMinutes });
+    const withCode = files.filter((file) => typeof file?.file_code === "string" && file.file_code.trim() !== "");
+    if (!withCode.length) return null;
+
+    const normalize = (value: unknown) => String(value ?? "").trim().toLowerCase();
+    const expectedTitles = [meta.title, meta.fileName, meta.fileName?.replace(/\.[^.]+$/, "")]
+      .map(normalize)
+      .filter(Boolean);
+
+    const matchesTitle = (candidateTitle: string) =>
+      expectedTitles.some(
+        (expected) =>
+          candidateTitle === expected ||
+          candidateTitle.startsWith(`${expected}_`) ||
+          candidateTitle.startsWith(`${expected} `)
+      );
+
+    const matches = withCode.filter((file) => {
+      const candidateTitle = normalize(file.title);
+      return Boolean(candidateTitle) && matchesTitle(candidateTitle);
+    });
+    if (matches.length) {
+      // Several matches in the window (e.g. a retry of the same file) — the
+      // most recently uploaded one is the one we just sent.
+      const newest = matches.reduce((latest, file) =>
+        String(file.uploaded ?? "") > String(latest.uploaded ?? "") ? file : latest
+      );
+      return { fileCode: String(newest.file_code), uploaded: newest.uploaded, matchedBy: "title" };
+    }
+
+    // No expected title to match (pathological file name like ".mp4"): fall
+    // back to the only file in the recent window, if there is one — so we
+    // can't mis-attribute someone else's video. If we did send a title and
+    // nothing matched, a lone file is just as likely to be someone else's
+    // (or the upload genuinely failed) — the client retries, then reports it.
+    if (!expectedTitles.length && withCode.length === 1) {
+      return { fileCode: String(withCode[0].file_code), uploaded: withCode[0].uploaded, matchedBy: "recent" };
+    }
+    return null;
+  }
+
+  private async listLibraryFiles(parameters: Record<string, string | number> = {}): Promise<any[]> {
+    const response = await fetch(this.apiUrl("file/list", { per_page: 50, ...parameters }), { cache: "no-store" });
+    const json = await readJson(response, "Uqload file-list request");
+    return Array.isArray(json?.result?.files) ? json.result.files : [];
+  }
+
   async uploadFile(serverUrl: string, file: File | Blob, meta: UploadRequest): Promise<UploadResult> {
     const form = new FormData();
     form.append("key", this.getApiKey());
