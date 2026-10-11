@@ -69,7 +69,7 @@ export default function PublicLayoutClient({
     <div className="grid h-screen grid-cols-1 bg-void text-ink min-[1000px]:grid-cols-[minmax(0,1fr)_minmax(0,3fr)_minmax(0,1fr)]">
       <AdRail side="left" start={1} onAdvertise={() => router.push("/advertiser")} activeCampaigns={activeCampaigns} />
 
-      <main className="no-scrollbar relative h-screen min-h-0 min-w-0 overflow-y-auto bg-panel">
+      <main className="no-scrollbar @container relative h-screen min-h-0 min-w-0 overflow-y-auto bg-panel">
         <Header
           navActive={navForPath()}
           onNavigate={navigate}

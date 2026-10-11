@@ -20,7 +20,7 @@ export default function CategoriesPage({ onSelect }: CategoriesPageProps) {
         Explore the library by what you love — every category is hand-curated and updated daily.
       </p>
 
-      <div className="mt-5 grid grid-cols-2 gap-3 @sm:grid-cols-3 @2xl:grid-cols-4">
+      <div className="mt-5 grid grid-cols-3 gap-3">
         {tiles.map((cat) => {
           const Icon = cat.icon;
           const name = cat.label;

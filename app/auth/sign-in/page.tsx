@@ -37,10 +37,10 @@ function SignInForm() {
   };
 
   return (
-    <div className="w-full max-w-sm rounded-xl border border-line bg-pcard p-6">
+    <div className="w-full max-w-sm rounded-xl border border-white/10 bg-pcard/90 p-6 shadow-[0_24px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl">
       <img src="https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png" alt="erobabe" className="h-8 w-auto" />
       <h1 className="mt-4 text-[18px] font-semibold">Sign in</h1>
-      <p className="mt-1 text-[12px] text-ink-3">Access advertiser or admin portal</p>
+      <p className="mt-1 text-[12px] text-ink-3">Access advertiser portal</p>
 
       <form onSubmit={handleSignIn} className="mt-6 space-y-4">
         <label className="block">
@@ -94,12 +94,24 @@ function SignInForm() {
 
 export default function SignInPage() {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-void px-4">
-      <Suspense fallback={<div className="text-[12px] text-ink-3">Loading...</div>}>
-        <SignInForm />
-      </Suspense>
-      <div className="mt-5">
-        <BackToHome />
+    <div className="relative isolate flex min-h-screen flex-col items-center justify-center overflow-hidden bg-void px-4">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0">
+        <div
+          className="absolute -inset-16 opacity-95 blur-3xl"
+          style={{
+            backgroundImage:
+              "radial-gradient(ellipse at 18% 24%, rgba(245,22,85,0.55) 0%, transparent 42%), radial-gradient(ellipse at 82% 32%, rgba(124,58,151,0.42) 0%, transparent 40%), radial-gradient(ellipse at 50% 88%, rgba(213,30,84,0.32) 0%, transparent 45%)",
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-br from-black/10 via-black/20 to-black/45" />
+      </div>
+      <div className="relative z-10 flex w-full flex-col items-center">
+        <Suspense fallback={<div className="text-[12px] text-ink-3">Loading...</div>}>
+          <SignInForm />
+        </Suspense>
+        <div className="mt-5">
+          <BackToHome />
+        </div>
       </div>
     </div>
   );
