@@ -1,9 +1,10 @@
 import { tryCreateServiceClient } from "@/lib/supabase/server";
+import { getSiteUrl } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://erobabe.com";
+  const siteUrl = getSiteUrl();
 
   let videos: any[] = [];
   try {

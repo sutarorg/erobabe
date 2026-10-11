@@ -6,7 +6,11 @@ import VideoCard from "./VideoCard";
 
 interface VideoGridProps {
   videos: Video[];
-  onOpen: (video: Video) => void;
+  /**
+   * Optional — omit when rendering from a Server Component. Cards then
+   * navigate to /video/[slug] on their own.
+   */
+  onOpen?: (video: Video) => void;
   /** Widest column count the section may use. */
   maxColumns?: 4 | 5;
   className?: string;

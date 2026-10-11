@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { getSiteUrl } from "@/lib/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -7,7 +8,7 @@ export const metadata: Metadata = {
     template: "%s | erobabe",
   },
   description: "erobabe — your destination for discovering premium adult entertainment. 18+ adults only.",
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://erobabe.com"),
+  metadataBase: new URL(getSiteUrl()),
   openGraph: {
     type: "website",
     siteName: "erobabe",

@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { Eye, Play } from "lucide-react";
 import type { Video } from "../data/content";
 import { cn } from "../utils/cn";
@@ -87,9 +88,11 @@ export default function VideoCard({ video, onOpen, dense = false }: VideoCardPro
     );
   }
 
+  // Default (no custom handler): client-side navigation keeps the card usable
+  // when rendered from a Server Component.
   return (
-    <a href={href} className="group block w-full text-left" aria-label={`${video.title} — ${video.duration}`}>
+    <Link href={href} className="group block w-full text-left" aria-label={`${video.title} — ${video.duration}`}>
       {content}
-    </a>
+    </Link>
   );
 }
