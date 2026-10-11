@@ -63,6 +63,8 @@ export async function POST(req: NextRequest) {
           slug: video.slug,
           title: video.title,
           status: "published",
+          metadataSource: generated.metadata.source,
+          ...(generated.metadata.warning ? { metadataWarning: generated.metadata.warning } : {}),
         });
       } catch (publishError: any) {
         if (videoId) {

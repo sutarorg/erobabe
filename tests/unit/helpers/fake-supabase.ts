@@ -71,7 +71,7 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
   private limitCount: number | null = null;
   private singleRow = false;
   private action: "select" | "insert" | "update" | "delete" = "select";
-  private payload: Row | null = null;
+  private payload: Row | Row[] | null = null;
 
   constructor(private db: FakeDb, private table: string) {}
 
@@ -79,7 +79,14 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
     return this;
   }
 
-  insert(payload: Row) {
+  insert(payload: Row | Row[]) {
+    this.action = "insert";
+    this.payload = payload;
+    return this;
+  }
+
+  /** Treated as an insert for test purposes — conflicts are not modelled. */
+  upsert(payload: Row | Row[], _options?: { onConflict?: string }) {
     this.action = "insert";
     this.payload = payload;
     return this;
@@ -161,10 +168,14 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
     const rows = (this.db[this.table] ||= []);
 
     if (this.action === "insert") {
-      const row = { id: `fake-${this.table}-${rows.length + 1}`, created_at: new Date().toISOString(), ...(this.payload || {}) };
-      rows.push(row);
-      if (this.singleRow) return { data: row, error: null };
-      return { data: [row], error: null };
+      const payloads = Array.isArray(this.payload) ? this.payload : [this.payload || {}];
+      const inserted = payloads.map((entry) => {
+        const row = { id: `fake-${this.table}-${rows.length + 1}`, created_at: new Date().toISOString(), ...entry };
+        rows.push(row);
+        return row;
+      });
+      if (this.singleRow) return { data: inserted[0] ?? null, error: null };
+      return { data: inserted, error: null };
     }
 
     const matching = rows.filter((row) => matchesFilters(row, this.filters, this.containsFilters));
