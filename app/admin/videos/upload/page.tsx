@@ -40,6 +40,7 @@ type Item = {
   percent: number;
   detail: string;
   error?: string;
+  metadataWarning?: string;
   title?: string;
   slug?: string;
   /**
@@ -447,6 +448,7 @@ export default function UploadPage() {
             : "Published",
       title: json.metadata?.title,
       slug: json.video?.slug,
+      metadataWarning: json.metadataWarning || undefined,
     });
   }
 
@@ -511,6 +513,7 @@ export default function UploadPage() {
           : "Published",
       title: result.title,
       slug: result.slug,
+      metadataWarning: result.metadataWarning || undefined,
     });
   }
 
@@ -756,6 +759,11 @@ export default function UploadPage() {
                     )}
 
                     {item.title && <p className="mt-1 text-[11px] text-ink-2">Title: {item.title}</p>}
+                    {item.metadataWarning && (
+                      <p role="status" aria-live="polite" className="mt-1.5 text-[10.5px] leading-relaxed text-amber-300">
+                        {item.metadataWarning}
+                      </p>
+                    )}
 
                     {item.phase === "idle" && <p className="mt-1.5 text-[10.5px] text-ink-3">{item.detail}</p>}
                     {(item.phase === "uploading" || item.phase === "processing") && (

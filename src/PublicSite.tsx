@@ -334,7 +334,11 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
             />
 
             <section ref={categoriesRef} className="mt-7 scroll-mt-[68px]">
-              <Categories activeCategory={null} onSelect={selectCategory} />
+              <Categories
+                activeCategory={null}
+                onSelect={selectCategory}
+                onMore={() => onRoute("categories")}
+              />
             </section>
 
             {/* Featured — 20 scenes in 4 rows × 5 columns, no horizontal scroll */}

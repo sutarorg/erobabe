@@ -120,6 +120,15 @@ describe("suggestVideoMetadata", () => {
     expect(genaiState.lastArgs).toMatchObject({ model: "gemini-flash-latest" });
   });
 
+  it("uses a neutral non-explicit prompt and treats source data as untrusted", async () => {
+    genaiState.generateContent = async () => ({ text: modelOutput() });
+    await suggestVideoMetadata({ fileName: "clip.mp4" });
+    const prompt = String(genaiState.lastArgs?.contents);
+    expect(prompt).toMatch(/non-explicit catalog metadata/i);
+    expect(prompt).toMatch(/untrusted source data/i);
+    expect(prompt).not.toMatch(/adult video platform|pornographic/i);
+  });
+
   it("fails honestly when the API key is missing", async () => {
     delete process.env.GEMINI_API_KEY;
     resetGeminiClientForTests();
@@ -193,6 +202,22 @@ describe("suggestVideoMetadata", () => {
     expect(error).toBeInstanceOf(GeminiError);
     expect(error.status).toBe(429);
     expect(error.code).toBe("quota_exceeded");
+  });
+
+  it("recognizes Google's HTTP 400 invalid API key response as a configuration error", async () => {
+    let calls = 0;
+    const denied = new Error('API key not valid. Please pass a valid API key.');
+    (denied as unknown as Record<string, unknown>).status = 400;
+    genaiState.generateContent = async () => {
+      calls += 1;
+      throw denied;
+    };
+
+    const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
+    expect(error).toBeInstanceOf(GeminiError);
+    expect(error.status).toBe(503);
+    expect(error.code).toBe("not_configured");
+    expect(calls).toBe(1);
   });
 
   it("maps auth failures to a configuration error", async () => {
@@ -272,6 +297,46 @@ describe("suggestVideoMetadata", () => {
     expect(config.thinkingConfig).toBeUndefined();
   });
 
+  it("retries without a response schema when the selected model does not support it", async () => {
+    let calls = 0;
+    genaiState.generateContent = async () => {
+      calls += 1;
+      if (calls === 1) {
+        const rejected = new Error("Unsupported field: generationConfig.responseSchema");
+        (rejected as unknown as Record<string, unknown>).status = 400;
+        throw rejected;
+      }
+      return { text: modelOutput() };
+    };
+
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(calls).toBe(2);
+    expect(suggestion.title).toBe("Evening in Velvet");
+    const config = genaiState.lastArgs?.config as Record<string, unknown>;
+    expect(config.responseSchema).toBeUndefined();
+    expect(config.responseMimeType).toBe("application/json");
+  });
+
+  it("retries without JSON mode when the model rejects its MIME type", async () => {
+    let calls = 0;
+    genaiState.generateContent = async () => {
+      calls += 1;
+      if (calls === 1) {
+        const rejected = new Error("application/json responseMimeType is not supported");
+        (rejected as unknown as Record<string, unknown>).status = 400;
+        throw rejected;
+      }
+      return { text: modelOutput() };
+    };
+
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(calls).toBe(2);
+    expect(suggestion.title).toBe("Evening in Velvet");
+    const config = genaiState.lastArgs?.config as Record<string, unknown>;
+    expect(config.responseSchema).toBeUndefined();
+    expect(config.responseMimeType).toBeUndefined();
+  });
+
   it("does not retry quota errors", async () => {
     let calls = 0;
     const quota = new Error("quota exceeded");
@@ -294,12 +359,12 @@ describe("suggestVideoMetadata", () => {
 
   it("redacts key material from provider errors", async () => {
     genaiState.generateContent = async () => {
-      throw new Error("upstream said api_key: AIzaFakeKeyMaterial1234567890 nope");
+      throw new Error("upstream echoed AQ.FakeKeyMaterial1234567890abcdefghijklmnopqrstuvwxyz nope");
     };
     const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
     expect(error).toBeInstanceOf(GeminiError);
     expect(error.status).toBe(502);
-    expect(error.message).not.toContain("AIzaFakeKeyMaterial");
+    expect(error.message).not.toContain("AQ.FakeKeyMaterial");
     expect(error.message).toMatch(/redacted/);
   });
 });

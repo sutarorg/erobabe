@@ -2,32 +2,17 @@
 import { useState } from "react";
 import { LOGO_URL } from "../data/content";
 
-const STORAGE_KEY = "erobabe-age-verified";
-
 /**
- * Age verification gate shown before entering the public website.
- * Frontend-only: the confirmation is stored in localStorage so returning
- * visitors in the same browser skip the gate. Nothing is verified remotely.
+ * Age gate shown on every fresh entry to the public website.
+ * It is dismissed only after an explicit click and never persists that choice.
+ * This front-end confirmation does not verify a visitor's age remotely.
  */
 export default function AgeGate() {
-  const [verified, setVerified] = useState(() => {
-    try {
-      return localStorage.getItem(STORAGE_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [verified, setVerified] = useState(false);
 
   if (verified) return null;
 
-  const confirm = () => {
-    try {
-      localStorage.setItem(STORAGE_KEY, "1");
-    } catch {
-      /* private mode — state-only fallback */
-    }
-    setVerified(true);
-  };
+  const confirm = () => setVerified(true);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">

@@ -19,7 +19,7 @@ export default async function CategoriesPage() {
       <h1 className="text-[22px] font-semibold tracking-tight">Categories</h1>
       <p className="mt-1 text-[12.5px] text-ink-3">Browse all genres</p>
 
-      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+      <div className="mt-6 grid grid-cols-3 gap-3">
         {categories.map((cat) => (
           <Link
             key={cat.id}

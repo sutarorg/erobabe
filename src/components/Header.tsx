@@ -96,11 +96,11 @@ export default function Header({
         )}
 
         {/* Desktop / wide-container navigation */}
-        <nav aria-label="Primary" className="hidden h-full items-stretch @2xl:flex">
+        <nav aria-label="Primary" className="hidden h-full items-stretch min-[1000px]:flex">
           {NAV_ITEMS.map((item) => {
             const active = navActive === item.key;
             const className = cn(
-              "relative flex items-center px-3 text-[13px] font-medium transition-colors duration-150",
+              "relative flex items-center px-2 text-[13px] font-medium transition-colors duration-150 min-[1000px]:px-1",
               active ? "text-accent" : "text-ink-2 hover:text-ink"
             );
             const inner = (
@@ -138,7 +138,7 @@ export default function Header({
           {searchOpen ? (
             <form
               onSubmit={submitSearch}
-              className="flex h-8 w-[168px] items-center gap-1 rounded-md border border-line bg-card pl-2.5 pr-1 transition-colors focus-within:border-accent/60 @sm:w-[200px]"
+              className="flex h-8 w-[168px] items-center gap-1 rounded-md border border-line bg-card pl-2.5 pr-1 transition-colors focus-within:border-accent/60 @sm:w-[200px] min-[1000px]:w-[128px]"
               role="search"
             >
               <Search className="h-3.5 w-3.5 shrink-0 text-ink-3" aria-hidden />
@@ -212,7 +212,7 @@ export default function Header({
             onClick={() => onMenuOpenChange(!menuOpen)}
             aria-label={menuOpen ? "Close menu" : "Open menu"}
             aria-expanded={menuOpen}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition-colors hover:bg-card hover:text-ink @2xl:hidden"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition-colors hover:bg-card hover:text-ink min-[1000px]:hidden"
           >
             {menuOpen ? (
               <X className="h-4 w-4" aria-hidden />
@@ -227,7 +227,7 @@ export default function Header({
       {menuOpen && (
         <nav
           aria-label="Mobile"
-          className="border-t border-line bg-panel px-4 py-2 @sm:px-5 @2xl:hidden @2xl:px-7"
+          className="border-t border-line bg-panel px-4 py-2 @sm:px-5 min-[1000px]:hidden @2xl:px-7"
         >
           {NAV_ITEMS.map((item) => {
             const active = navActive === item.key;

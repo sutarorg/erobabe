@@ -30,6 +30,12 @@ export default async function HomePage({
 
   const featuredVideos = mappedVideos.slice(0, 20);
   const latestVideos = mappedVideos.slice(0, 16);
+  const categoryCards = categories.map((category) => ({
+    id: category.id,
+    label: category.label,
+    slug: category.slug,
+    icon: category.icon || undefined,
+  }));
 
   if (query) {
     return (
@@ -62,7 +68,10 @@ export default async function HomePage({
     return (
       <div className="pt-4">
         <Hero />
-        <div className="mt-12 rounded-lg border border-dashed border-line bg-card p-12 text-center">
+        <section className="mt-7">
+          <Categories activeCategory={null} categories={categoryCards} />
+        </section>
+        <div className="mt-8 rounded-lg border border-dashed border-line bg-card p-12 text-center">
           <p className="text-[16px] font-semibold">No videos published yet</p>
           <p className="mt-2 text-[13px] text-ink-3">The library is being prepared. Check back soon for premium content.</p>
         </div>
@@ -75,15 +84,7 @@ export default async function HomePage({
       <Hero />
 
       <section className="mt-7">
-        <Categories
-          activeCategory={null}
-          categories={categories.map((category) => ({
-            id: category.id,
-            label: category.label,
-            slug: category.slug,
-            icon: category.icon || undefined,
-          }))}
-        />
+        <Categories activeCategory={null} categories={categoryCards} />
       </section>
 
       <section className="mt-8">
