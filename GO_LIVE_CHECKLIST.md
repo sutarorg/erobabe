@@ -96,7 +96,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 ## 7. Groq AI
 
 - [ ] **Account and API key**: Groq account, API key created at https://console.groq.com → `GROQ_API_KEY` set.
-- [ ] **Model configured**: `GROQ_MODEL` set to current model, e.g., `llama-3.1-8b-instant`, matches docs.
+- [ ] **Model configured**: `GROQ_MODEL` set to an active model available to the API key (default: `openai/gpt-oss-20b`); the app automatically maps the retired `llama-3.1-8b-instant` setting to its replacement.
 - [ ] **Metadata generation tested**: Publisher sends source filename/URL path and selected category to Groq, receives title, description, and tags server-side, and blocks publication if Groq is not configured or returns incomplete metadata.
 - [ ] **No auto-publish**: AI output never auto-publishes video or asserts facts about content not verified.
 - [ ] **Privacy**: No video bytes, private rights docs, payment records, or unnecessary personal info sent to Groq.

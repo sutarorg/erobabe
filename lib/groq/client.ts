@@ -6,6 +6,15 @@
 
 import Groq from "groq-sdk";
 
+/** Groq's recommended replacement for llama-3.1-8b-instant. */
+export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b";
+
+// Keep deployments working when their hosting environment still sets the old
+// model explicitly. Groq shut llama-3.1-8b-instant down on August 16, 2026.
+const MODEL_REPLACEMENTS = new Map<string, string>([
+  ["llama-3.1-8b-instant", DEFAULT_GROQ_MODEL],
+]);
+
 let groqClient: Groq | null = null;
 
 export function getGroqClient(): Groq | null {
@@ -15,6 +24,57 @@ export function getGroqClient(): Groq | null {
     groqClient = new Groq({ apiKey });
   }
   return groqClient;
+}
+
+/** Resolves unset and retired model IDs before making the API request. */
+export function resolveGroqModel(configuredModel = process.env.GROQ_MODEL): string {
+  const requestedModel = configuredModel?.trim() || DEFAULT_GROQ_MODEL;
+  return MODEL_REPLACEMENTS.get(requestedModel) || requestedModel;
+}
+
+function isModelNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+
+  const apiError = error as {
+    status?: unknown;
+    code?: unknown;
+    error?: unknown;
+    message?: unknown;
+  };
+  const responseBody = apiError.error && typeof apiError.error === "object"
+    ? JSON.stringify(apiError.error)
+    : String(apiError.error || "");
+  const details = `${String(apiError.code || "")} ${String(apiError.message || "")} ${responseBody}`;
+
+  return /model_not_found/i.test(details) || (
+    apiError.status === 404 && /the model .*(?:does not exist|not found|do not have access)/i.test(details)
+  );
+}
+
+function unavailableModelError(model: string): Error {
+  return new Error(
+    `Groq model "${model}" is unavailable to this API key. Set GROQ_MODEL to an active model enabled for your Groq account (recommended default: "${DEFAULT_GROQ_MODEL}").`
+  );
+}
+
+/** Retry a model-not-found response with the maintained default model. */
+export async function withGroqModelFallback<T>(
+  requestedModel: string,
+  createCompletion: (model: string) => PromiseLike<T>
+): Promise<T> {
+  try {
+    return await createCompletion(requestedModel);
+  } catch (error) {
+    if (!isModelNotFoundError(error)) throw error;
+    if (requestedModel === DEFAULT_GROQ_MODEL) throw unavailableModelError(requestedModel);
+
+    try {
+      return await createCompletion(DEFAULT_GROQ_MODEL);
+    } catch (fallbackError) {
+      if (!isModelNotFoundError(fallbackError)) throw fallbackError;
+      throw unavailableModelError(DEFAULT_GROQ_MODEL);
+    }
+  }
 }
 
 export interface SuggestMetadataParams {
@@ -40,8 +100,7 @@ export async function suggestVideoMetadata(
     throw new Error("Groq not configured — missing GROQ_API_KEY");
   }
 
-  // Use a model that exists per current docs — llama-3.1-8b-instant or similar
-  const model = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
+  const model = resolveGroqModel();
 
   // Treat all browser-provided values as data, not instructions. The filename
   // is the only media clue available to the model; it must not be used to
@@ -74,13 +133,15 @@ Example JSON:
 {"title":"Evening in Velvet","description":"An elegant, slow-paced portrait captured in soft cinematic light.","tags":["mature","boudoir","4k"],"category":"Boudoir"}
 `;
 
-  const completion = await client.chat.completions.create({
-    model,
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.7,
-    max_tokens: 500,
-    response_format: { type: "json_object" },
-  });
+  const completion = await withGroqModelFallback(model, (modelId) =>
+    client.chat.completions.create({
+      model: modelId,
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.7,
+      max_completion_tokens: 500,
+      response_format: { type: "json_object" },
+    })
+  );
 
   const content = completion.choices[0]?.message?.content;
   if (!content) throw new Error("Groq returned empty content");
