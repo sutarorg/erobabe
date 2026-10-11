@@ -22,12 +22,12 @@ interface CategoriesProps {
   categories?: CategoryInput[];
 }
 
-const FEATURED_HOME_CATEGORIES = HOME_CATEGORIES.filter((category) => category.id !== "more").slice(0, 6);
+const FEATURED_HOME_CATEGORIES = HOME_CATEGORIES.filter((category) => category.id !== "more").slice(0, 7);
 const MORE_CATEGORY = HOME_CATEGORIES.find((category) => category.id === "more")!;
 
 /**
- * Homepage category list: keep six featured categories in the designed
- * order, then add More as the seventh and final card to open the full
+ * Homepage category list: keep seven featured categories in the designed
+ * order, then add More as the eighth and final card to open the full
  * category index. Database metadata is used when available; the seeded
  * taxonomy remains a safe visual fallback while public data is loading or
  * unconfigured.
@@ -51,17 +51,17 @@ export default function Categories({ activeCategory = null, onSelect, onMore, ca
       </div>
 
       {/*
-        Exactly one row: all seven cards (six featured + More) share a single
-        seven-column track at every container width, and the cards are compact
+        Exactly one row: all eight cards (seven featured + More) share a single
+        eight-column track at every container width, and the cards are compact
         enough — icon above label — to fit without horizontal scrolling.
       */}
-      <div className="category-grid mt-3.5 grid grid-cols-7 gap-1 @md:gap-1.5 @2xl:gap-2.5">
+      <div className="category-grid mt-3.5 grid grid-cols-8 gap-1 @md:gap-1.5 @2xl:gap-2.5">
         {list.map((cat) => {
           const isMore = cat.label.trim().toLowerCase() === "more";
           const Icon = resolveCategoryIcon(cat.icon, cat.slug || cat.label);
           const active = !isMore && activeCategory === cat.label;
           const className = cn(
-            // Compact vertical cards keep all seven categories on one row
+            // Compact vertical cards keep all eight categories on one row
             // without horizontal scrolling in the center content panel.
             "group flex min-h-[58px] min-w-0 flex-col items-center justify-center gap-1.5 rounded-lg border px-0 py-1.5 text-center transition-colors duration-150 @sm:min-h-[68px] @sm:gap-2 @sm:px-0.5 @sm:py-2 @md:px-1 @2xl:min-h-[76px]",
             active

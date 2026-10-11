@@ -26,11 +26,8 @@ export default async function CategoriesPage() {
         Explore the library by what you love — every category is hand-curated and updated daily.
       </p>
 
-      {/*
-        Three columns at every width — the twelve seeded categories land as
-        four even rows of three cards.
-      */}
-      <div className="mt-6 grid grid-cols-3 auto-rows-fr gap-3">
+      {/* Four cards across in the center panel, with fewer columns on small screens. */}
+      <div className="mt-6 grid grid-cols-2 auto-rows-fr gap-3 @md:grid-cols-3 @lg:grid-cols-4">
         {categories.map((cat) => {
           const videoCount = cat.video_count || 0;
           return (

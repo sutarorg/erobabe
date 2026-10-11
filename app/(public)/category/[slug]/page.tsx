@@ -37,9 +37,9 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
           </Link>
         </div>
       ) : (
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+        <div className="mt-6 grid grid-cols-2 gap-4 @md:grid-cols-3 @lg:grid-cols-4">
           {videos.map((video) => (
-            <PublicVideoCard key={video.slug} video={video} subtitle={`${video.view_count || 0} views`} />
+            <PublicVideoCard key={video.slug} video={video} />
           ))}
         </div>
       )}

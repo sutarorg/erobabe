@@ -31,16 +31,16 @@ async function render() {
 }
 
 describe("/categories page", () => {
-  it("renders all 12 category cards as four rows of three", async () => {
+  it("renders all 12 category cards in a four-column grid", async () => {
     const html = await render();
     expect(html).toMatch(/<h1[^>]*>All Categories<\/h1>/);
     expect(html).toContain("Mature");
     expect(html).toContain("Amateur");
     expect(html).toContain("/category/mature");
 
-    // 12 cards ÷ 3 columns = four even rows.
+    // 12 cards ÷ 4 columns = three even rows at full width.
     const grid = html.match(/<div class="([^"]*grid[^"]*)"/);
-    expect(grid?.[1]).toContain("grid-cols-3");
+    expect(grid?.[1]).toContain("@lg:grid-cols-4");
     expect(grid?.[1]).toContain("auto-rows-fr");
     expect(html.split('href="/category/').length - 1).toBe(12);
   });
