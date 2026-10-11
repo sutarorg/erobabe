@@ -18,12 +18,17 @@ const DATABASE_CATEGORIES = [
 ];
 
 describe("homepage categories", () => {
-  it("shows seven rows in one column and ends with More", () => {
+  it("lays the seven cards out in one horizontal row ending with More", () => {
     const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
-    const grid = container.querySelector(".grid-cols-1");
-    expect(grid).toBeTruthy();
+    const row = container.querySelector(".category-row");
+    expect(row).toBeTruthy();
+    expect(row?.className).toMatch(/\bflex\b/);
+    // A single row: side-by-side flex items that scroll sideways when the
+    // panel is narrow, never a stacked vertical column.
+    expect(row?.className).toMatch(/flex-row|overflow-x-auto/);
+    expect(row?.className).not.toMatch(/grid-cols-1/);
 
-    const links = within(grid as HTMLElement).getAllByRole("link");
+    const links = within(row as HTMLElement).getAllByRole("link");
     expect(links).toHaveLength(7);
     expect(links.slice(0, 6).map((link) => link.textContent?.trim())).toEqual([
       "Mature",
@@ -35,5 +40,16 @@ describe("homepage categories", () => {
     ]);
     expect(links[6].textContent?.trim()).toBe("More");
     expect(links[6].getAttribute("href")).toBe("/categories");
+  });
+
+  it("gives every card the same flexible width so the row stays even", () => {
+    const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
+    const row = container.querySelector(".category-row") as HTMLElement;
+
+    const cards = within(row).getAllByRole("link");
+    for (const card of cards) {
+      expect(card.className).toMatch(/\bflex-1\b/);
+      expect(card.className).toMatch(/min-w-\[132px\]/);
+    }
   });
 });

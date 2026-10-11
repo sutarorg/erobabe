@@ -1,18 +1,50 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 import { LOGO_URL } from "../data/content";
 
+/** Where the visitor's one-time confirmation is remembered in their browser. */
+export const AGE_GATE_STORAGE_KEY = "erobabe-age-verified";
+
 /**
- * Age gate shown on every fresh entry to the public website.
- * It is dismissed only after an explicit click and never persists that choice.
+ * `useLayoutEffect` runs before the browser paints, which is what keeps the
+ * dialog from flashing for an already-verified visitor. It is swapped for
+ * `useEffect` during the server render, where React would otherwise warn that
+ * layout effects do nothing there.
+ */
+const useBeforeFirstPaint = typeof window === "undefined" ? useEffect : useLayoutEffect;
+
+type GateState = "checking" | "open" | "passed";
+
+/**
+ * Age gate shown once, before the visitor can use the public website.
+ * The confirmation is remembered in `localStorage`, so it is asked only on the
+ * first visit and never again until the browser data is cleared.
  * This front-end confirmation does not verify a visitor's age remotely.
  */
 export default function AgeGate() {
-  const [verified, setVerified] = useState(false);
+  // Nothing is rendered until the stored choice is known, which keeps the
+  // server markup and the first client render identical (no hydration drift).
+  const [state, setState] = useState<GateState>("checking");
 
-  if (verified) return null;
+  useBeforeFirstPaint(() => {
+    try {
+      setState(window.localStorage.getItem(AGE_GATE_STORAGE_KEY) ? "passed" : "open");
+    } catch {
+      // Storage blocked (private mode, disabled cookies): ask once per load.
+      setState("open");
+    }
+  }, []);
 
-  const confirm = () => setVerified(true);
+  if (state !== "open") return null;
+
+  const confirm = () => {
+    try {
+      window.localStorage.setItem(AGE_GATE_STORAGE_KEY, new Date().toISOString());
+    } catch {
+      // Confirmation simply will not persist — the dialog still closes.
+    }
+    setState("passed");
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
