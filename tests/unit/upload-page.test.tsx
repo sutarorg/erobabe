@@ -266,3 +266,136 @@ describe("per-video thumbnail is sent with its own video", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("direct Uqload upload from the browser (CORS-free simple request)", () => {
+  function fileInput() {
+    return (document.querySelector('label input[type="file"][accept="video/*"]') as HTMLInputElement | null) ?? null;
+  }
+
+  function publishVideoFile() {
+    const input = fileInput();
+    expect(input).toBeTruthy();
+    fireEvent.change(input, { target: { files: [new File([new Uint8Array(1024)], "my trip.mp4", { type: "video/mp4" })] } });
+  }
+
+  /**
+   * XHR stub that simulates Uqload's upload server: the request is delivered
+   * but the response is unreadable (no CORS headers), so the browser fires
+   * `error` with status 0 and an empty body.
+   */
+  class DeliveredButUnreadableXHR {
+    upload: any = {};
+    status = 0;
+    responseText = "";
+    withCredentials: boolean | null = null;
+    headersSet: string[] = [];
+    static instances: DeliveredButUnreadableXHR[] = [];
+
+    open(_method: string, _url: string) {
+      DeliveredButUnreadableXHR.instances.push(this);
+    }
+    setRequestHeader(name: string) {
+      this.headersSet.push(name);
+    }
+    send() {
+      this.status = 0;
+      this.responseText = "";
+      this.onerror?.();
+    }
+    addEventListener() {}
+  }
+
+  function stubUqloadFetch(confirmSequence: Array<Record<string, unknown>>) {
+    const requests: Array<{ url: string; body: any }> = [];
+    let confirmCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: any, init?: any) => {
+        const path = String(url);
+        requests.push({ url: path, body: init?.body ? JSON.parse(init.body) : null });
+        if (path.includes("uqload-session")) {
+          return new Response(
+            JSON.stringify({ serverUrl: "https://e17.uqload.example/upload/02", fields: { key: "test-key", file_public: "1", file_adult: "1" } }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (path.includes("uqload-confirm")) {
+          const response = confirmSequence[Math.min(confirmCalls, confirmSequence.length - 1)];
+          confirmCalls += 1;
+          return new Response(JSON.stringify(response), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        if (path.includes("/api/videos/upload")) {
+          return new Response(
+            JSON.stringify({ video: { slug: "uq-clip" }, metadata: { title: "My Trip" }, processing: true }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        return new Response(JSON.stringify({ error: `unexpected request to ${path}` }), {
+          status: 500,
+          headers: { "content-type": "application/json" }
+        });
+      })
+    );
+    return requests;
+  }
+
+  it("sends a listener-less simple request and publishes the filecode confirmed from the library", async () => {
+    const requests = stubUqloadFetch([
+      { found: true, fileCode: "xyz789", uploaded: "2026-10-11 09:58:00", matchedBy: "title" },
+    ]);
+    vi.stubGlobal("XMLHttpRequest", DeliveredButUnreadableXHR);
+
+    render(<UploadPage />);
+    publishVideoFile();
+    expect(await screen.findByText("my trip.mp4")).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
+    const form = screen.getByText("Add videos").closest("form") as HTMLFormElement;
+    fireEvent.submit(form);
+
+    expect(await screen.findByText("Published · provider is still encoding", {}, { timeout: 5000 })).toBeTruthy();
+
+    // The filecode came from the library-confirmation endpoint, not the (unreadable) upload response.
+    const publish = requests.find((request) => request.url.includes("/api/videos/upload"));
+    expect(publish?.body?.providerFileId).toBe("xyz789");
+    const confirm = requests.filter((request) => request.url.includes("uqload-confirm"));
+    expect(confirm).toHaveLength(1);
+    expect(confirm[0]?.body).toEqual({ fileTitle: "my trip", fileName: "my trip.mp4" });
+
+    // Regression guard for the preflight bug: no listener may be registered on
+    // `upload` (that forces the CORS preflight Uqload never answers) and no
+    // custom headers may be set (the request must stay a CORS simple request).
+    expect(DeliveredButUnreadableXHR.instances.length).toBeGreaterThan(0);
+    for (const xhr of DeliveredButUnreadableXHR.instances) {
+      expect(Object.keys(xhr.upload)).toEqual([]);
+      expect(xhr.headersSet).toEqual([]);
+      expect(xhr.withCredentials).toBe(false);
+    }
+
+    vi.unstubAllGlobals();
+  });
+
+  it("retries the confirmation until the file appears in the Uqload library", async () => {
+    const requests = stubUqloadFetch([
+      { found: false },
+      { found: true, fileCode: "late123", uploaded: "2026-10-11 09:58:01", matchedBy: "title" },
+    ]);
+    vi.stubGlobal("XMLHttpRequest", DeliveredButUnreadableXHR);
+
+    render(<UploadPage />);
+    publishVideoFile();
+    expect(await screen.findByText("my trip.mp4")).toBeTruthy();
+    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
+    const form = screen.getByText("Add videos").closest("form") as HTMLFormElement;
+    fireEvent.submit(form);
+
+    // First poll finds nothing, second poll (after the 3 s interval) confirms.
+    expect(await screen.findByText("Published · provider is still encoding", {}, { timeout: 15000 })).toBeTruthy();
+
+    const confirm = requests.filter((request) => request.url.includes("uqload-confirm"));
+    expect(confirm).toHaveLength(2);
+    const publish = requests.find((request) => request.url.includes("/api/videos/upload"));
+    expect(publish?.body?.providerFileId).toBe("late123");
+
+    vi.unstubAllGlobals();
+  }, 30000);
+});

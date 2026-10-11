@@ -17,7 +17,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { postJson } from "@/src/utils/api";
 import { splitEmbedEntries, splitUrlEntries } from "@/lib/video/entries";
-import { uploadFormWithProgress, uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
+import { uploadFormDirect, uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
 import { parseUqloadUploadResponse } from "@/lib/video/uqload-response";
 
 type Category = { id: string; label: string };
@@ -59,14 +59,32 @@ function readableSize(size: number) {
   return `${Math.max(1, Math.round(size / 1024))} KB`;
 }
 
-function readableSpeed(bytesPerSecond: number | null) {
-  if (!bytesPerSecond || !Number.isFinite(bytesPerSecond)) return "";
-  return ` · ${readableSize(bytesPerSecond)}/s`;
-}
-
 function newId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** How often to poll the Uqload library for a just-sent upload. */
+const UQLOAD_CONFIRM_ATTEMPTS = 10;
+const UQLOAD_CONFIRM_INTERVAL_MS = 3000;
+
+/** Sleeps until the abort signal fires (rejecting with UploadAbortedError) or the delay elapses. */
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new UploadAbortedError());
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new UploadAbortedError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export function ProgressBar({ percent, phase }: { percent: number; phase: Phase }) {
@@ -253,6 +271,38 @@ export default function UploadPage() {
     return target.storagePath;
   }
 
+  /**
+   * Confirms a video the browser just POSTed straight to Uqload and returns
+   * its filecode.
+   *
+   * Uqload's upload server does not send CORS headers, so the browser cannot
+   * read the JSON response that carries the filecode. Instead the upload is
+   * confirmed by polling the account library (a server-side `file/list`
+   * lookup). The file lands in the library as soon as the upload server
+   * accepts it, so the first or second poll normally finds it.
+   */
+  async function confirmUqloadUpload(opts: { fileTitle: string; fileName: string; controller: AbortController }): Promise<string> {
+    for (let attempt = 0; attempt < UQLOAD_CONFIRM_ATTEMPTS; attempt++) {
+      if (opts.controller.signal.aborted) throw new UploadAbortedError();
+      if (attempt > 0) await abortableSleep(UQLOAD_CONFIRM_INTERVAL_MS, opts.controller.signal);
+
+      try {
+        const result = await postJson<{ found: boolean; fileCode?: string }>(
+          "/api/videos/uqload-confirm",
+          { fileTitle: opts.fileTitle, fileName: opts.fileName }
+        );
+        if (result?.found && result.fileCode) return String(result.fileCode);
+      } catch (pollError) {
+        if (pollError instanceof UploadAbortedError) throw pollError;
+        // Transient failure (network blip, cold function) — retry below.
+        continue;
+      }
+    }
+    throw new Error(
+      "The video was sent to Uqload, but it did not appear in the Uqload library yet. Check your Uqload account — the file may still show up there shortly."
+    );
+  }
+
   async function publishFileItem(item: Item, controller: AbortController) {
     if (!item.file) throw new Error("Missing file");
 
@@ -261,7 +311,8 @@ export default function UploadPage() {
     // would silently drop the thumbnail.
     let thumbnailPath = item.thumbnailPath;
 
-    // 0–8%: thumbnail, 8–88%: Uqload, 88–100%: Groq metadata.
+    // 0–8%: thumbnail, then an indeterminate state for the direct Uqload
+    // upload (no byte progress — see uploadFormDirect), then Groq metadata.
     if (item.thumbnail && !thumbnailPath) {
       patchItem(item.id, { phase: "uploading", detail: "Uploading thumbnail…", percent: 0 });
       thumbnailPath = await uploadThumbnailFile(item, controller, (percent) =>
@@ -278,31 +329,37 @@ export default function UploadPage() {
     });
     if (!session?.serverUrl) throw new Error("Uqload did not return an upload server");
 
+    const fileTitle = item.file.name.replace(/\.[^.]+$/, "").slice(0, 160) || item.file.name;
+
     const form = new FormData();
     for (const [name, value] of Object.entries(session.fields || {})) form.append(name, value);
     form.append("file", item.file, item.file.name);
-    form.append("file_title", item.file.name.replace(/\.[^.]+$/, "").slice(0, 160) || item.file.name);
+    form.append("file_title", fileTitle);
     if (item.thumbnail && item.thumbnail.size <= MAX_UQLOAD_SNAPSHOT) {
       form.append("snapshot", item.thumbnail, item.thumbnail.name);
     }
 
-    let speed: number | null = null;
-    const responseText = await uploadFormWithProgress(session.serverUrl, form, {
-      signal: controller.signal,
-      onProgress: (progress) => {
-        speed = progress.bytesPerSecond;
-        patchItem(item.id, {
-          phase: "uploading",
-          percent: 10 + Math.round(progress.percent * 0.75),
-          detail: `Uploading to Uqload ${readableSize(progress.loaded)} of ${readableSize(progress.total)}${readableSpeed(speed)}`,
-        });
-      },
-    });
-    const uploaded = parseUqloadUploadResponse(responseText);
+    // No byte progress is possible for a direct upload — registering an
+    // upload progress listener would force a CORS preflight that Uqload does
+    // not answer, cancelling the request before a single byte is sent.
+    patchItem(item.id, { phase: "processing", detail: "Uploading directly to Uqload…" });
+    const outcome = await uploadFormDirect(session.serverUrl, form, { signal: controller.signal });
+
+    let fileCode: string;
+    if (outcome.responseText) {
+      // Readable response (same-origin proxy, or Uqload adds CORS headers).
+      fileCode = parseUqloadUploadResponse(outcome.responseText).filecode;
+    } else {
+      // The bytes left the browser but the response is unreadable (Uqload
+      // omits CORS headers) — confirm the upload by finding the file in the
+      // account library.
+      patchItem(item.id, { phase: "processing", detail: "Confirming upload on Uqload…" });
+      fileCode = await confirmUqloadUpload({ fileTitle, fileName: item.file.name, controller });
+    }
 
     patchItem(item.id, { phase: "processing", percent: 90, detail: "Generating AI metadata…" });
     const json = await postJson<any>("/api/videos/upload", {
-      providerFileId: uploaded.filecode,
+      providerFileId: fileCode,
       thumbnailPath: thumbnailPath || null,
       categoryId,
       fileName: item.file.name,
@@ -482,7 +539,8 @@ export default function UploadPage() {
               <Film aria-hidden="true" className="mx-auto h-6 w-6 text-ink-3" />
               <p className="mt-2 text-[13px] font-medium">Select one or more video files</p>
               <p className="mt-1 text-[11px] text-ink-3">
-                Files upload directly to Uqload, so large videos are fine. Each one gets AI metadata and its own optional thumbnail.
+                Files upload directly to Uqload, so large videos are fine. Each one gets AI metadata and its own optional thumbnail. The bar pulses
+                while a direct upload travels — live byte progress isn’t possible without a CORS preflight, which Uqload doesn’t answer.
               </p>
               <label className="mt-4 inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-line bg-card px-4 text-[12px] font-semibold hover:bg-card-hover">
                 <Plus aria-hidden="true" className="h-4 w-4" />
