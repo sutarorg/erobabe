@@ -26,7 +26,9 @@ describe("public header navigation", () => {
 
     const primary = screen.getByRole("navigation", { name: "Primary" });
     expect(primary.className).toContain("min-[1000px]:flex");
-    expect(primary.className).toContain("gap-1");
+    // Wider spacing between the header buttons.
+    expect(primary.className).toContain("gap-2");
+    expect(primary.className).not.toMatch(/\bgap-1\b/);
 
     const menuToggle = screen.getByRole("button", { name: "Open menu" });
     expect(menuToggle.className).toContain("min-[1000px]:hidden");
