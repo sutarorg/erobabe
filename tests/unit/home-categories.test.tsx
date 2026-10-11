@@ -18,29 +18,31 @@ const DATABASE_CATEGORIES = [
 ];
 
 describe("homepage categories", () => {
-  it("shows all seven featured cards in one horizontal row without horizontal scrolling", () => {
+  it("shows all eight category cards in one horizontal row without horizontal scrolling", () => {
     const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
     const grid = container.querySelector(".category-grid");
     expect(grid).toBeTruthy();
     expect(grid?.className).toMatch(/\bgrid\b/);
-    // Seven columns for seven cards (six featured + More) — a single row.
-    expect(grid?.className).toContain("grid-cols-7");
-    expect(grid?.className).not.toMatch(/grid-cols-[1-6]\b|grid-cols-8|grid-cols-9|grid-cols-10|grid-cols-11|grid-cols-12/);
+    // Eight columns for eight cards (seven featured + More) — a single row.
+    expect(grid?.className).toContain("grid-cols-8");
+    expect(grid?.className).not.toMatch(/grid-cols-[1-7]\b|grid-cols-9|grid-cols-10|grid-cols-11|grid-cols-12/);
     expect(grid?.className).not.toMatch(/overflow-x-auto|snap-x/);
-    expect(grid?.children).toHaveLength(7);
+    expect(grid?.children).toHaveLength(8);
 
     const links = within(grid as HTMLElement).getAllByRole("link");
-    expect(links).toHaveLength(7);
-    expect(links.slice(0, 6).map((link) => link.textContent?.trim())).toEqual([
+    expect(links).toHaveLength(8);
+    expect(links.slice(0, 7).map((link) => link.textContent?.trim())).toEqual([
       "Mature",
       "Amateur",
       "POV",
       "Lesbian",
       "Kinky",
       "Mature 18+",
+      "Couples",
     ]);
-    expect(links[6].textContent?.trim()).toBe("More");
-    expect(links[6].getAttribute("href")).toBe("/categories");
+    expect(links[6].getAttribute("href")).toBe("/category/couples");
+    expect(links[7].textContent?.trim()).toBe("More");
+    expect(links[7].getAttribute("href")).toBe("/categories");
   });
 
   it("lets each card shrink to its grid track instead of forcing overflow", () => {

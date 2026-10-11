@@ -1,22 +1,18 @@
 import Link from "next/link";
-import { formatDuration } from "@/lib/site";
+import { Eye } from "lucide-react";
+import { formatDuration, formatTimeAgo } from "@/lib/site";
 import type { PublicVideo } from "@/lib/public/catalog";
 
 const FALLBACK_THUMB = "https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png";
 
-export default function PublicVideoCard({
-  video,
-  subtitle,
-}: {
-  video: PublicVideo;
-  subtitle?: string;
-}) {
-  const caption =
-    subtitle ??
-    [video.category_label, video.view_count ? `${video.view_count} views` : null].filter(Boolean).join(" • ");
+export default function PublicVideoCard({ video }: { video: PublicVideo }) {
+  const publishedDate = video.published_at ? new Date(video.published_at) : null;
+  const dateTime = publishedDate && Number.isFinite(publishedDate.getTime())
+    ? publishedDate.toISOString()
+    : undefined;
 
   return (
-    <Link href={`/video/${video.slug}`} prefetch className="group">
+    <Link href={`/video/${video.slug}`} prefetch className="group min-w-0">
       <div className="relative aspect-video overflow-hidden rounded-lg border border-line bg-card">
         <img
           src={video.thumbnail_url || FALLBACK_THUMB}
@@ -36,7 +32,20 @@ export default function PublicVideoCard({
         ) : null}
       </div>
       <h3 className="mt-2 line-clamp-2 text-[13px] font-medium leading-tight text-ink group-hover:text-accent">{video.title}</h3>
-      {caption ? <p className="mt-1 text-[11px] text-ink-3">{caption}</p> : null}
+      <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-ink-3">
+        {video.category_label && (
+          <>
+            <span>{video.category_label}</span>
+            <span aria-hidden>•</span>
+          </>
+        )}
+        <span className="inline-flex items-center gap-1 whitespace-nowrap">
+          <Eye className="h-3 w-3" aria-hidden />
+          <span className="tabular-nums">{video.view_count.toLocaleString("en-US")} views</span>
+        </span>
+        <span aria-hidden>•</span>
+        <time dateTime={dateTime} className="whitespace-nowrap">{formatTimeAgo(video.published_at)}</time>
+      </div>
     </Link>
   );
 }

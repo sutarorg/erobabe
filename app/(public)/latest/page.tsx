@@ -29,13 +29,9 @@ export default async function LatestPage() {
           <p className="text-[14px] font-semibold">No videos published yet</p>
         </div>
       ) : (
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+        <div className="mt-6 grid grid-cols-2 gap-4 @md:grid-cols-3 @lg:grid-cols-4">
           {videos.map((video) => (
-            <PublicVideoCard
-              key={video.slug}
-              video={video}
-              subtitle={video.published_at ? new Date(video.published_at).toLocaleDateString() : undefined}
-            />
+            <PublicVideoCard key={video.slug} video={video} />
           ))}
         </div>
       )}

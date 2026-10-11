@@ -105,11 +105,7 @@ export default async function HomePage({
         <VideoSection title="Latest Videos">
           <div className="video-grid mt-3.5 grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
             {latestVideos.map((video) => (
-              <PublicVideoCard
-                key={video.slug}
-                video={video}
-                subtitle={video.published_at ? new Date(video.published_at).toLocaleDateString() : "Recently"}
-              />
+              <PublicVideoCard key={video.slug} video={video} />
             ))}
           </div>
         </VideoSection>
