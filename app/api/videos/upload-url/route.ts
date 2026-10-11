@@ -6,34 +6,27 @@ import {
   createGeneratedVideo,
   createUploadJob,
   failUpload,
-  getOptionalFile,
   httpErrorStatus,
   publishVideo,
   requireActiveAdmin,
   sourceNameFromUrl,
-  uploadThumbnail,
 } from "@/lib/video/publishing";
+import { resolveThumbnailUrl } from "@/lib/video/storage";
+import { normalizeRemoteEntries } from "@/lib/video/entries";
 
 const MAX_URLS_PER_REQUEST = 20;
 
 export async function POST(req: NextRequest) {
   try {
     const { user, service } = await requireActiveAdmin();
-    const formData = await req.formData();
-    const rawUrls = String(formData.get("urls") || "");
-    const categoryId = String(formData.get("categoryId") || "").trim();
-    const thumbnail = getOptionalFile(formData, "thumbnail");
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+
+    const categoryId = String(body.categoryId || "").trim();
     if (!categoryId) return NextResponse.json({ error: "Choose a category" }, { status: 400 });
 
-    const urls = Array.from(
-      new Set(
-        rawUrls
-          .split(/\r?\n|,/)
-          .map((value) => value.trim())
-          .filter(Boolean)
-          .map((value) => assertPublicHttpUrl(value, "Remote video URL"))
-      )
-    );
+    const rawEntries = normalizeRemoteEntries(body);
+    const urls = Array.from(new Set(rawEntries.map((entry) => assertPublicHttpUrl(entry.url, "Remote video URL"))));
     if (!urls.length) return NextResponse.json({ error: "Enter at least one remote video URL" }, { status: 400 });
     if (urls.length > MAX_URLS_PER_REQUEST) {
       return NextResponse.json({ error: `Upload up to ${MAX_URLS_PER_REQUEST} remote URLs at a time` }, { status: 400 });
@@ -50,14 +43,23 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // One optional thumbnail can be applied to all URLs in this batch.
-    const thumbnailUrl = await uploadThumbnail({ service, userId: user.id, file: thumbnail });
+    // Resolve each distinct thumbnail once, then reuse it for its URLs.
+    const thumbnailByPath = new Map<string, string | null>();
     const results: Array<Record<string, unknown>> = [];
 
-    for (const remoteUrl of urls) {
+    for (const entry of rawEntries) {
+      const remoteUrl = assertPublicHttpUrl(entry.url, "Remote video URL");
       let generated: Awaited<ReturnType<typeof createGeneratedVideo>> | null = null;
       let job: any = null;
       try {
+        let thumbnailUrl: string | null = null;
+        if (entry.thumbnailPath) {
+          if (!thumbnailByPath.has(entry.thumbnailPath)) {
+            thumbnailByPath.set(entry.thumbnailPath, resolveThumbnailUrl(service, user.id, entry.thumbnailPath));
+          }
+          thumbnailUrl = thumbnailByPath.get(entry.thumbnailPath) || null;
+        }
+
         generated = await createGeneratedVideo({
           service,
           userId: user.id,
@@ -91,7 +93,7 @@ export async function POST(req: NextRequest) {
           target_type: "video",
           target_id: generated.video.id,
           level: "info",
-          metadata: { provider: "uqload", host: new URL(remoteUrl).hostname },
+          metadata: { provider: "uqload", host: new URL(remoteUrl).hostname, has_custom_thumbnail: Boolean(thumbnailUrl) },
         });
 
         results.push({

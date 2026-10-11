@@ -2,9 +2,6 @@ import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { suggestVideoMetadata, type SuggestedMetadata } from "@/lib/groq/client";
 
-const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024;
-const THUMBNAIL_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-
 export type ServiceClient = ReturnType<typeof createServiceClient>;
 
 export type GeneratedVideo = {
@@ -227,6 +224,7 @@ export async function createUploadJob({
   fileName,
   fileSize,
   provider = "uqload",
+  storagePath,
 }: {
   service: ServiceClient;
   videoId: string;
@@ -234,20 +232,23 @@ export async function createUploadJob({
   fileName: string;
   fileSize?: number;
   provider?: string;
+  /** Transit object in the private video-incoming bucket, when there is one. */
+  storagePath?: string | null;
 }) {
-  const { data: job, error } = await service
-    .from("upload_jobs")
-    .insert({
-      video_id: videoId,
-      file_name: fileName,
-      file_size: fileSize || null,
-      provider,
-      status: "uploading",
-      progress: 0,
-      created_by: userId,
-    })
-    .select()
-    .single();
+  const insert: Record<string, unknown> = {
+    video_id: videoId,
+    file_name: fileName,
+    file_size: fileSize || null,
+    provider,
+    status: "uploading",
+    progress: 0,
+    created_by: userId,
+  };
+  // The column is added by migration 00000000000004. Omit it rather than fail
+  // the insert on a database that has not been migrated yet.
+  if (storagePath) insert.storage_path = storagePath;
+
+  const { data: job, error } = await service.from("upload_jobs").insert(insert).select().single();
   if (error) throw error;
   return job;
 }
@@ -275,43 +276,6 @@ export async function failUpload({
     await service.from("upload_jobs").update({ status: "failed", error_message: message }).eq("id", jobId);
   }
   await service.from("videos").update({ status: "draft", visibility: "private" }).eq("id", videoId);
-}
-
-export function getOptionalFile(formData: FormData, key: string): File | null {
-  const value = formData.get(key);
-  if (!value || typeof value === "string") return null;
-  return value.size > 0 ? value : null;
-}
-
-function fileExtension(file: File) {
-  const fromName = file.name.split(".").pop()?.toLowerCase();
-  if (fromName && /^[a-z0-9]{1,10}$/.test(fromName)) return fromName;
-  return file.type === "image/png" ? "png" : file.type === "image/gif" ? "gif" : "jpg";
-}
-
-export async function uploadThumbnail({
-  service,
-  userId,
-  file,
-}: {
-  service: ServiceClient;
-  userId: string;
-  file: File | null;
-}): Promise<string | null> {
-  if (!file) return null;
-  if (!THUMBNAIL_TYPES.has(file.type)) throw new Error("Thumbnail must be a JPG, PNG, GIF, or WebP image");
-  if (file.size > MAX_THUMBNAIL_SIZE) throw new Error("Thumbnail must be 10 MB or smaller");
-
-  const objectPath = `${userId}/${randomUUID()}.${fileExtension(file)}`;
-  const { error } = await service.storage.from("video-thumbnails").upload(objectPath, file, {
-    contentType: file.type,
-    upsert: false,
-  });
-  if (error) throw new Error(`Thumbnail upload failed: ${error.message}`);
-
-  const { data } = service.storage.from("video-thumbnails").getPublicUrl(objectPath);
-  if (!data.publicUrl) throw new Error("Thumbnail upload did not return a public URL");
-  return data.publicUrl;
 }
 
 export function assertPublicHttpUrl(value: string, label = "URL"): string {

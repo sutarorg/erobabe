@@ -184,13 +184,49 @@ update public.profiles set role='admin' where email='admin@erobabe.com';
 2. Each chain store has its own API key — copy the key for your chosen chain
 3. This is `BCON_API_KEY` (server-only)
 
-### 5. Configure real callback endpoint
-1. In Store Settings → **Callback URL** (or **Webhook**), enter the callback as a **plain URL string** for every enabled chain. For the deployed Vercel app use:
-   - `https://erobabe.vercel.app/api/bcon/callback`
-2. Do **not** paste Markdown (`[label](url)`), JSON, an array, or a quoted object into a chain field. In particular, `callback_url.btc` must be the raw string above (and the equivalent `callback_url.eth`, `callback_url.bnb`, etc. must also each be a string if those chains are enabled).
-3. If the Bcon form says `callback_url.btc must be a string`, clear the field and paste only the URL with no leading/trailing spaces; it is a dashboard validation error, not an API-key error in this application.
-4. Bcon docs show callback parameters: `addr`, `txid`, `value`, `status`, `external_id`. This route accepts GET and POST callbacks and returns HTTP 200 to a reachability probe with no transaction values.
-5. Save
+### 5. Configure the callback endpoint — one URL per blockchain
+
+A Bcon store does **not** have a single "HTTP Callback URL". It stores one callback
+URL per blockchain: `callback_url` for BTC, `callback_url_bnb` for BNB, and a
+`callback_url_<code>` entry for every other chain on the store (`eth`, `trx`,
+`sol`). Bcon's own docs state that a store "by default returns information on BTC
+and BNB even if they are empty", so those two fields are validated on every save
+regardless of what you intend to accept.
+
+1. In Bcon Dashboard → **Merchants** → your store → **Settings**, find the
+   Callback URL field(s). For the deployed Vercel app the value is always:
+   ```
+   https://erobabe.vercel.app/api/bcon/callback
+   ```
+2. Paste that **raw** URL into **every** callback field the form renders —
+   including the BTC and BNB fields for chains you do not intend to use. If a
+   chain field cannot be filled, unselect that blockchain so Bcon stops
+   validating it.
+3. Never paste Markdown (`[label](url)`), quotes, JSON, an array, or a trailing
+   space. The field must be a bare URL string.
+4. Save.
+
+#### Fixing `The callback_url.btc must be a string. (and 2 more errors)`
+
+That is Laravel validation from Bcon's own store form, not an error in this
+application. It means one or more `callback_url.<chain>` entries were submitted
+as `null` — i.e. the form rendered a callback field for a chain and it was left
+blank. BTC and BNB are always present, so a store that also enables Ethereum
+validates exactly three fields: `callback_url.btc`, `callback_url.bnb`, and
+`callback_url.eth` — which is the "and 2 more errors" you see.
+
+Fix: fill all three (or unselect the chains you do not use) and save again.
+
+You can verify the result without leaving this app: **Admin → System Health**
+calls `GET https://external-api.bcon.global/api/v1/stores/get_store` with
+`BCON_API_KEY` and lists every chain on the store with its registered
+`callback_url`, flagging the ones that are still empty.
+
+5. Bcon docs show callback parameters: `addr`, `txid`, `value`, `status`,
+   `external_id` (0 = unconfirmed, 1 = partially confirmed, 2 = confirmed). The
+   Test Payment endpoint posts `transaction_id` and `sum` instead — this route
+   accepts both spellings, handles GET and POST, and returns HTTP 200 to a
+   reachability probe with no transaction values.
 
 ### 6. Configure callback behavior
 - Bcon does NOT document cryptographic signature for callback (as of 10 Oct 2026). Do NOT invent one.
@@ -257,9 +293,16 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
    - `POST https://sX.myvideo.com/upload/01` with FormData: `key`, `file`, `file_title`, `file_descr`, `tags`, `file_public=1`, `file_adult=1`
    - Response: `{ status:200, files:[{ filecode, filename, status }] }`
    - `GET https://uqload.vc/api/file/info?key=...&file_code=...` → check processing status, thumbnail
-4. **Upload worker**: For large local files, do **not** route multi-GB requests through a Vercel Function (request bodies are limited). This app relays the authenticated admin upload to Uqload so its API key remains server-only; deploy that route on an upload-capable worker/runtime that permits the intended content. Do not move `UQLOAD_API_KEY` into browser code merely to bypass the limit.
-5. **Thumbnail behavior**: An optional custom thumbnail is stored in the public `video-thumbnails` bucket; Uqload's `player_img` is used as a fallback once it is available.
-6. **Processing status**: A publish click makes the video public immediately. `canplay=1` lets `/api/videos/status` refresh duration/player details and mark its upload job complete.
+4. **Upload path — how large files get in**: Vercel functions reject any request body above **4.5 MB** with a plain-text `413 Request Entity Too Large`. Posting a video to one of our own routes therefore cannot work, and used to surface in the admin UI as `Unexpected token 'R', "Request En"... is not valid JSON`. The current flow keeps `UQLOAD_API_KEY` server-only and never sends a large body through a function:
+
+   1. `POST /api/videos/storage-token` (admin, JSON) returns a short-lived Supabase **signed upload URL** for a private `video-incoming` object — or, with `kind: "thumbnail"`, for a public `video-thumbnails` object.
+   2. The browser `PUT`s the bytes straight to Supabase Storage with `XMLHttpRequest`, which is what drives the per-video progress bar in `/admin/videos/upload`.
+   3. The browser then posts only `{ storagePath, thumbnailPath, categoryId }` to `POST /api/videos/upload` (a few hundred bytes). That route generates Groq metadata and hands Uqload a **signed download URL** via its `upload/url` remote-import endpoint, so Uqload pulls the file itself.
+   4. `/api/videos/status` deletes the transit object once `canplay=1`, and stale transit files are swept on the next upload request.
+
+   Do not move `UQLOAD_API_KEY` into browser code merely to shorten this path.
+5. **Thumbnail behavior**: Each video has its own thumbnail picker — including every iframe embed and every remote link, not just local files. A custom thumbnail is stored in the public `video-thumbnails` bucket; Uqload's `player_img` is used as a fallback once it is available.
+6. **Processing status**: A publish click makes the video public immediately. `canplay=1` lets `/api/videos/status` refresh duration/player details, mark its upload job complete, and clean up the transit object.
 
 ### If using replacement provider
 
@@ -273,9 +316,10 @@ curl "https://YOUR_DOMAIN/api/bcon/callback?external_id=erobabe-test-123&addr=TE
 
 1. Go to **Storage** → **New bucket** → `ad-creatives` (public, for advertiser creatives)
 2. Create bucket `video-thumbnails` (public, for admin-selected video thumbnails)
-3. Create bucket `videos` (private, only if you later implement an internal provider)
-4. Set policies: allow authenticated advertisers to upload/delete only within their own `ad-creatives/<user-id>/` folder; public read is needed for creative and thumbnail display.
-5. The campaign and publisher flows now fail clearly if their required bucket is missing. Verify both bucket names before accepting uploads.
+3. Create bucket `video-incoming` (**private**, 2 GB limit) — the transit bucket browser uploads land in before Uqload imports them. Migration `00000000000004_video_transit_storage.sql` creates it; `lib/video/storage.ts` also creates it on first use so a missed migration does not block uploads.
+4. Optionally create bucket `videos` (private, only if you later implement an internal provider)
+5. Set policies: allow authenticated advertisers to upload/delete only within their own `ad-creatives/<user-id>/` folder; public read is needed for creative and thumbnail display. `video-incoming` needs **no** policy — every access goes through the service-role key server-side via signed URLs.
+6. The campaign and publisher flows now fail clearly if their required bucket is missing. Verify both bucket names before accepting uploads.
 
 ---
 

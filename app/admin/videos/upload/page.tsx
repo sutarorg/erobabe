@@ -1,31 +1,98 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { CheckCircle2, CloudUpload, Film, ImagePlus, Link2, LoaderCircle, PlaySquare, Plus, Trash2 } from "lucide-react";
+import {
+  CheckCircle2,
+  CloudUpload,
+  Film,
+  ImagePlus,
+  Link2,
+  LoaderCircle,
+  PlaySquare,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { postJson } from "@/src/utils/api";
+import { splitEmbedEntries, splitUrlEntries } from "@/lib/video/entries";
+import { uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
 
 type Category = { id: string; label: string };
-type UploadItem = { id: string; file: File; thumbnail: File | null };
-type PublishResult = { label: string; title?: string; status: string; error?: string; processing?: boolean; slug?: string };
 type UploadMode = "files" | "embed" | "url";
+type ItemKind = "file" | "embed" | "url";
+type Phase = "idle" | "uploading" | "processing" | "published" | "failed";
+
+type Item = {
+  id: string;
+  kind: ItemKind;
+  /** Local video file — only for `file` items. */
+  file: File | null;
+  /** Iframe source/code or remote video URL — for `embed` and `url` items. */
+  source: string;
+  thumbnail: File | null;
+  thumbnailPreview: string | null;
+  /** Storage path once the thumbnail has been pushed to Supabase Storage. */
+  thumbnailPath: string | null;
+  phase: Phase;
+  percent: number;
+  detail: string;
+  error?: string;
+  title?: string;
+  slug?: string;
+};
+
+const THUMBNAIL_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024;
 
 function readableSize(size: number) {
-  return `${(size / 1024 / 1024).toFixed(size > 100 * 1024 * 1024 ? 0 : 1)} MB`;
+  if (size > 1024 * 1024 * 1024) return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (size > 1024 * 1024) return `${(size / 1024 / 1024).toFixed(size > 100 * 1024 * 1024 ? 0 : 1)} MB`;
+  return `${Math.max(1, Math.round(size / 1024))} KB`;
+}
+
+function readableSpeed(bytesPerSecond: number | null) {
+  if (!bytesPerSecond || !Number.isFinite(bytesPerSecond)) return "";
+  return ` · ${readableSize(bytesPerSecond)}/s`;
+}
+
+function newId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function ProgressBar({ percent, phase }: { percent: number; phase: Phase }) {
+  const failed = phase === "failed";
+  const done = phase === "published";
+  const indeterminate = phase === "processing";
+  return (
+    <div className="mt-2.5">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+        <div
+          className={`h-full rounded-full transition-[width] duration-300 ${
+            failed ? "bg-red-400" : done ? "bg-emerald-400" : "bg-accent"
+          } ${indeterminate ? "animate-pulse" : ""}`}
+          style={{ width: `${indeterminate ? 100 : Math.max(2, Math.min(100, percent))}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 export default function UploadPage() {
   const [mode, setMode] = useState<UploadMode>("files");
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryId, setCategoryId] = useState("");
-  const [localItems, setLocalItems] = useState<UploadItem[]>([]);
-  const [embedInput, setEmbedInput] = useState("");
-  const [embedThumbnail, setEmbedThumbnail] = useState<File | null>(null);
-  const [remoteUrls, setRemoteUrls] = useState("");
-  const [remoteThumbnail, setRemoteThumbnail] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [items, setItems] = useState<Item[]>([]);
+  const [pasteBuffer, setPasteBuffer] = useState("");
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
-  const [results, setResults] = useState<PublishResult[]>([]);
+  const [notice, setNotice] = useState("");
+
+  const itemsRef = useRef<Item[]>([]);
+  itemsRef.current = items;
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -36,148 +103,314 @@ export default function UploadPage() {
       .then(({ data }) => setCategories((data || []) as Category[]));
   }, []);
 
+  // Free object URLs when the component unmounts.
+  useEffect(
+    () => () => {
+      for (const item of itemsRef.current) {
+        if (item.thumbnailPreview) URL.revokeObjectURL(item.thumbnailPreview);
+      }
+    },
+    []
+  );
+
   const categoryLabel = useMemo(() => categories.find((category) => category.id === categoryId)?.label, [categories, categoryId]);
+
+  const patchItem = useCallback((id: string, patch: Partial<Item>) => {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }, []);
+
+  function makeFileItem(file: File): Item {
+    return {
+      id: newId(),
+      kind: "file",
+      file,
+      source: file.name,
+      thumbnail: null,
+      thumbnailPreview: null,
+      thumbnailPath: null,
+      phase: "idle",
+      percent: 0,
+      detail: "Ready to publish",
+    };
+  }
+
+  function makeSourceItem(kind: ItemKind, source: string): Item {
+    return {
+      id: newId(),
+      kind,
+      file: null,
+      source,
+      thumbnail: null,
+      thumbnailPreview: null,
+      thumbnailPath: null,
+      phase: "idle",
+      percent: 0,
+      detail: "Ready to publish",
+    };
+  }
 
   function chooseLocalVideos(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("video/"));
-    setLocalItems((current) => [
-      ...current,
-      ...files.map((file) => ({ id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`, file, thumbnail: null })),
-    ]);
+    if (!files.length) {
+      setNotice("No video files were selected.");
+      return;
+    }
+    setItems((current) => [...current, ...files.map(makeFileItem)]);
     event.target.value = "";
     setError("");
+    setNotice("");
   }
 
-  function setLocalThumbnail(id: string, file: File | null) {
-    setLocalItems((current) => current.map((item) => (item.id === id ? { ...item, thumbnail: file } : item)));
-  }
-
-  async function publishLocal(event: FormEvent) {
-    event.preventDefault();
+  function applyPaste() {
+    const entries = mode === "embed" ? splitEmbedEntries(pasteBuffer) : splitUrlEntries(pasteBuffer);
+    if (!entries.length) return;
+    const kind: ItemKind = mode === "embed" ? "embed" : "url";
+    setItems((current) => [...current, ...entries.map((entry) => makeSourceItem(kind, entry))]);
+    setPasteBuffer("");
     setError("");
-    setResults([]);
-    if (!categoryId) {
-      setError("Choose a category before publishing.");
+    setNotice("");
+  }
+
+  function setThumbnail(id: string, file: File | null) {
+    setItems((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+        if (item.thumbnailPreview) URL.revokeObjectURL(item.thumbnailPreview);
+        if (!file) return { ...item, thumbnail: null, thumbnailPreview: null, thumbnailPath: null };
+        return {
+          ...item,
+          thumbnail: file,
+          thumbnailPreview: URL.createObjectURL(file),
+          thumbnailPath: null,
+        };
+      })
+    );
+  }
+
+  function handleThumbnailInput(id: string, event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+    if (!file) return;
+    if (!THUMBNAIL_TYPES.includes(file.type)) {
+      setError("Thumbnails must be JPG, PNG, GIF, or WebP.");
       return;
     }
-    if (!localItems.length) {
-      setError("Choose one or more video files.");
+    if (file.size > MAX_THUMBNAIL_SIZE) {
+      setError("Thumbnails must be 10 MB or smaller.");
       return;
+    }
+    setError("");
+    setThumbnail(id, file);
+  }
+
+  function removeItem(id: string) {
+    setItems((current) => {
+      const target = current.find((item) => item.id === id);
+      if (target?.thumbnailPreview) URL.revokeObjectURL(target.thumbnailPreview);
+      return current.filter((item) => item.id !== id);
+    });
+  }
+
+  function resetItems() {
+    setItems((current) => {
+      for (const item of current) if (item.thumbnailPreview) URL.revokeObjectURL(item.thumbnailPreview);
+      return [];
+    });
+    setError("");
+    setNotice("");
+  }
+
+  function switchMode(next: UploadMode) {
+    if (next === mode) return;
+    resetItems();
+    setMode(next);
+  }
+
+  /** Uploads a thumbnail to Supabase Storage and returns its object path. */
+  async function uploadThumbnailFile(item: Item, controller: AbortController, onProgress: (percent: number) => void) {
+    if (!item.thumbnail) return item.thumbnailPath;
+    if (item.thumbnailPath) return item.thumbnailPath;
+
+    const target = await postJson<{ uploadUrl: string; storagePath: string }>("/api/videos/storage-token", {
+      kind: "thumbnail",
+      fileName: item.thumbnail.name,
+      fileSize: item.thumbnail.size,
+      mimeType: item.thumbnail.type,
+    });
+
+    await uploadWithProgress(target.uploadUrl, item.thumbnail, {
+      contentType: item.thumbnail.type,
+      signal: controller.signal,
+      onProgress: (progress) => onProgress(progress.percent),
+    });
+    return target.storagePath;
+  }
+
+  async function publishFileItem(item: Item, controller: AbortController) {
+    if (!item.file) throw new Error("Missing file");
+
+    // `item` is a snapshot taken when publishing started, so the resolved
+    // thumbnail path has to be carried in a local — reading it back off `item`
+    // would silently drop the thumbnail.
+    let thumbnailPath = item.thumbnailPath;
+
+    // 0–12%: thumbnail, 12–92%: the video itself, 92–100%: Groq + Uqload.
+    if (item.thumbnail && !thumbnailPath) {
+      patchItem(item.id, { phase: "uploading", detail: "Uploading thumbnail…", percent: 0 });
+      thumbnailPath = await uploadThumbnailFile(item, controller, (percent) =>
+        patchItem(item.id, { percent: Math.round(percent * 0.12) })
+      );
+      patchItem(item.id, { thumbnailPath, percent: 12 });
     }
 
-    setLoading(true);
-    const nextResults: PublishResult[] = [];
-    for (const item of localItems) {
-      try {
-        const form = new FormData();
-        form.append("file", item.file);
-        form.append("categoryId", categoryId);
-        if (item.thumbnail) form.append("thumbnail", item.thumbnail);
-        const response = await fetch("/api/videos/upload", { method: "POST", body: form });
-        const json = await response.json();
-        if (!response.ok) throw new Error(json.error || "Upload failed");
-        nextResults.push({
-          label: item.file.name,
-          title: json.metadata?.title,
-          status: json.status || "published",
-          processing: Boolean(json.processing),
-          slug: json.video?.slug,
+    const target = await postJson<{ uploadUrl: string; storagePath: string }>("/api/videos/storage-token", {
+      kind: "video",
+      fileName: item.file.name,
+      fileSize: item.file.size,
+      mimeType: item.file.type,
+    });
+
+    let speed: number | null = null;
+    await uploadWithProgress(target.uploadUrl, item.file, {
+      contentType: item.file.type,
+      signal: controller.signal,
+      onProgress: (progress) => {
+        speed = progress.bytesPerSecond;
+        patchItem(item.id, {
+          phase: "uploading",
+          percent: 12 + Math.round(progress.percent * 0.8),
+          detail: `Uploading ${readableSize(progress.loaded)} of ${readableSize(progress.total)}${readableSpeed(speed)}`,
         });
+      },
+    });
+
+    patchItem(item.id, { phase: "processing", percent: 93, detail: "Generating AI metadata…" });
+    const json = await postJson<any>("/api/videos/upload", {
+      storagePath: target.storagePath,
+      thumbnailPath: thumbnailPath || null,
+      categoryId,
+      fileName: item.file.name,
+      fileSize: item.file.size,
+    });
+
+    patchItem(item.id, {
+      phase: "published",
+      percent: 100,
+      detail: json.processing ? "Published · provider is still encoding" : "Published",
+      title: json.metadata?.title,
+      slug: json.video?.slug,
+    });
+  }
+
+  async function publishSourceItem(item: Item, controller: AbortController) {
+    const endpoint = item.kind === "embed" ? "/api/videos/embed" : "/api/videos/upload-url";
+    const payloadKey = item.kind === "embed" ? "source" : "url";
+    let thumbnailPath = item.thumbnailPath;
+
+    if (item.thumbnail && !thumbnailPath) {
+      patchItem(item.id, { phase: "uploading", detail: "Uploading thumbnail…", percent: 0 });
+      thumbnailPath = await uploadThumbnailFile(item, controller, (percent) =>
+        patchItem(item.id, { percent: Math.round(percent * 0.55) })
+      );
+      patchItem(item.id, { thumbnailPath, percent: 55 });
+    }
+
+    patchItem(item.id, { phase: "processing", percent: 70, detail: "Generating AI metadata…" });
+    const json = await postJson<any>(endpoint, {
+      categoryId,
+      entries: [{ [payloadKey]: item.source, thumbnailPath: thumbnailPath || null }],
+    });
+    const result = json.results?.[0];
+    if (!result || result.status !== "published") {
+      throw new Error(result?.error || json.error || "Unable to publish");
+    }
+
+    patchItem(item.id, {
+      phase: "published",
+      percent: 100,
+      detail: "Published",
+      title: result.title,
+      slug: result.slug,
+    });
+  }
+
+  async function publishAll(event: FormEvent) {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+
+    if (!categoryId) {
+      setError("Choose a category before publishing.");
+      return;
+    }
+    const pending = itemsRef.current.filter((item) => item.phase !== "published");
+    if (!pending.length) {
+      setError("Add at least one video first.");
+      return;
+    }
+    const invalid = pending.find((item) => item.kind !== "file" && !item.source.trim());
+    if (invalid) {
+      setError("Every entry needs a URL or iframe source. Remove the empty ones and try again.");
+      return;
+    }
+
+    setRunning(true);
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    // Reset anything that failed on a previous attempt.
+    for (const item of pending) patchItem(item.id, { phase: "idle", percent: 0, detail: "Queued", error: undefined });
+
+    let failures = 0;
+    for (const item of pending) {
+      if (controller.signal.aborted) break;
+      try {
+        if (item.kind === "file") await publishFileItem(item, controller);
+        else await publishSourceItem(item, controller);
       } catch (publishError: any) {
-        nextResults.push({ label: item.file.name, status: "failed", error: publishError.message || "Upload failed" });
+        if (publishError instanceof UploadAbortedError) break;
+        failures += 1;
+        patchItem(item.id, {
+          phase: "failed",
+          percent: 100,
+          detail: "Failed",
+          error: publishError.message || "Upload failed",
+        });
       }
     }
-    setResults(nextResults);
-    setLoading(false);
-    if (nextResults.some((result) => result.status === "failed")) setError("Some videos could not be published. Review the results below.");
-    else setLocalItems([]);
+
+    setRunning(false);
+    abortRef.current = null;
+    if (failures) setError(`${failures} item${failures > 1 ? "s" : ""} could not be published. See the inline messages.`);
+    else setNotice("All videos were published.");
   }
 
-  async function publishEmbed(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    setResults([]);
-    if (!categoryId) {
-      setError("Choose a category before publishing.");
-      return;
-    }
-    if (!embedInput.trim()) {
-      setError("Paste an iframe source URL or iframe embed code.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const form = new FormData();
-      form.append("embed", embedInput);
-      form.append("categoryId", categoryId);
-      if (embedThumbnail) form.append("thumbnail", embedThumbnail);
-      const response = await fetch("/api/videos/embed", { method: "POST", body: form });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.error || "Unable to publish embed");
-      setResults([{ label: "Embedded video", title: json.metadata?.title, status: json.status || "published", slug: json.video?.slug }]);
-      setEmbedInput("");
-      setEmbedThumbnail(null);
-    } catch (publishError: any) {
-      setError(publishError.message || "Unable to publish embed");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function publishRemoteUrls(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    setResults([]);
-    if (!categoryId) {
-      setError("Choose a category before publishing.");
-      return;
-    }
-    if (!remoteUrls.trim()) {
-      setError("Enter one or more direct video URLs.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const form = new FormData();
-      form.append("urls", remoteUrls);
-      form.append("categoryId", categoryId);
-      if (remoteThumbnail) form.append("thumbnail", remoteThumbnail);
-      const response = await fetch("/api/videos/upload-url", { method: "POST", body: form });
-      const json = await response.json();
-      const remoteResults = (json.results || []).map((result: any) => ({
-        label: result.remoteUrl || "Remote video",
-        title: result.title,
-        status: result.status || "failed",
-        error: result.error,
-        processing: result.processing,
-      }));
-      if (remoteResults.length) setResults(remoteResults);
-      if (!response.ok) throw new Error(json.error || "Unable to queue remote upload");
-      if (!json.failed) {
-        setRemoteUrls("");
-        setRemoteThumbnail(null);
-      }
-      if (json.failed) setError("Some remote URLs could not be queued. Review the results below.");
-    } catch (publishError: any) {
-      setError(publishError.message || "Unable to queue remote upload");
-    } finally {
-      setLoading(false);
-    }
+  function cancelPublish() {
+    abortRef.current?.abort();
+    setRunning(false);
+    setNotice("Publishing cancelled. Finished items were kept.");
   }
 
   const modes: { key: UploadMode; label: string; icon: typeof CloudUpload; description: string }[] = [
-    { key: "files", label: "Upload videos", icon: CloudUpload, description: "Upload one or more local video files to Uqload." },
-    { key: "embed", label: "Embed by iframe", icon: PlaySquare, description: "Publish a trusted iframe source URL or iframe code." },
-    { key: "url", label: "Upload by link", icon: Link2, description: "Send direct video URLs to Uqload for server-side import." },
+    { key: "files", label: "Upload videos", icon: CloudUpload, description: "Stream local video files straight to storage — no size limit from the web server." },
+    { key: "embed", label: "Embed by iframe", icon: PlaySquare, description: "Publish trusted iframe sources, each with its own thumbnail." },
+    { key: "url", label: "Upload by link", icon: Link2, description: "Send direct video URLs to Uqload, each with its own thumbnail." },
   ];
+
+  const pastePlaceholder =
+    mode === "embed"
+      ? 'https://player.example.com/embed/abc\n—or—\n<iframe src="https://player.example.com/embed/abc" allowfullscreen></iframe>'
+      : "https://cdn.example.com/video-one.mp4\nhttps://cdn.example.com/video-two.mp4";
+
+  const publishedCount = items.filter((item) => item.phase === "published").length;
 
   return (
     <div className="max-w-5xl">
       <div>
         <h1 className="text-[20px] font-semibold">Publish videos</h1>
-        <p className="mt-1 text-[12px] text-ink-3">Choose a publishing method. Groq generates the title, description, and tags; you control only category and thumbnail.</p>
+        <p className="mt-1 text-[12px] text-ink-3">
+          Choose a publishing method. Groq generates the title, description, and tags; you control only the category and each video&apos;s thumbnail.
+        </p>
       </div>
 
       <div className="mt-6 grid gap-3 md:grid-cols-3">
@@ -185,7 +418,12 @@ export default function UploadPage() {
           const Icon = item.icon;
           const active = mode === item.key;
           return (
-            <button key={item.key} type="button" onClick={() => { setMode(item.key); setError(""); setResults([]); }} className={`rounded-lg border p-4 text-left transition ${active ? "border-accent bg-accent/[0.08]" : "border-line bg-pcard hover:border-ink-3"}`}>
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => switchMode(item.key)}
+              className={`rounded-lg border p-4 text-left transition ${active ? "border-accent bg-accent/[0.08]" : "border-line bg-pcard hover:border-ink-3"}`}
+            >
               <Icon aria-hidden="true" className={`h-5 w-5 ${active ? "text-accent" : "text-ink-3"}`} />
               <p className="mt-3 text-[13px] font-semibold">{item.label}</p>
               <p className="mt-1 text-[11px] leading-relaxed text-ink-3">{item.description}</p>
@@ -194,111 +432,220 @@ export default function UploadPage() {
         })}
       </div>
 
-      <div className="mt-5 rounded-lg border border-line bg-pcard p-5">
+      <form onSubmit={publishAll} className="mt-5 rounded-lg border border-line bg-pcard p-5">
         <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line pb-5">
           <label className="block w-full max-w-sm">
             <span className="mb-1 block text-[11px] font-medium">Category *</span>
-            <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} required className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]">
+            <select
+              value={categoryId}
+              onChange={(event) => setCategoryId(event.target.value)}
+              required
+              className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]"
+            >
               <option value="">Choose a category</option>
-              {categories.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.label}
+                </option>
+              ))}
             </select>
           </label>
-          <p className="text-[11px] text-ink-3">Need a category? <Link href="/admin/categories" className="text-accent hover:underline">Manage categories</Link>.</p>
+          <p className="text-[11px] text-ink-3">
+            Need a category?{" "}
+            <Link href="/admin/categories" className="text-accent hover:underline">
+              Manage categories
+            </Link>
+            .
+          </p>
         </div>
 
-        {mode === "files" && (
-          <form onSubmit={publishLocal} className="pt-5">
+        {/* ---------------- Add ---------------- */}
+        <div className="pt-5">
+          {mode === "files" ? (
             <div className="rounded-lg border border-dashed border-line bg-void p-5 text-center">
               <Film aria-hidden="true" className="mx-auto h-6 w-6 text-ink-3" />
               <p className="mt-2 text-[13px] font-medium">Select one or more video files</p>
-              <p className="mt-1 text-[11px] text-ink-3">Each selected video gets AI-generated metadata and can have its own optional thumbnail.</p>
+              <p className="mt-1 text-[11px] text-ink-3">
+                Files stream directly to storage, so large videos are fine. Each one gets AI metadata and its own optional thumbnail.
+              </p>
               <label className="mt-4 inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-line bg-card px-4 text-[12px] font-semibold hover:bg-card-hover">
                 <Plus aria-hidden="true" className="h-4 w-4" />
                 Add videos
                 <input type="file" accept="video/*" multiple onChange={chooseLocalVideos} className="sr-only" />
               </label>
             </div>
-            {localItems.length > 0 && (
-              <div className="mt-4 space-y-3">
-                {localItems.map((item) => (
-                  <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-md border border-line bg-void p-3">
-                    <Film aria-hidden="true" className="h-4 w-4 shrink-0 text-ink-3" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[12px] font-medium">{item.file.name}</p>
-                      <p className="mt-0.5 text-[10.5px] text-ink-3">{readableSize(item.file.size)} · AI metadata will use this filename and “{categoryLabel || "selected category"}”.</p>
-                    </div>
-                    <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-line px-2.5 text-[11px] text-ink-2 hover:bg-white/5">
-                      <ImagePlus aria-hidden="true" className="h-3.5 w-3.5" />
-                      {item.thumbnail ? "Thumbnail added" : "Add thumbnail"}
-                      <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={(event) => setLocalThumbnail(item.id, event.target.files?.[0] || null)} className="sr-only" />
-                    </label>
-                    <button type="button" onClick={() => setLocalItems((current) => current.filter((entry) => entry.id !== item.id))} aria-label={`Remove ${item.file.name}`} className="rounded-md p-2 text-ink-3 hover:bg-white/5 hover:text-red-300"><Trash2 aria-hidden="true" className="h-4 w-4" /></button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <button type="submit" disabled={loading || !localItems.length} className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-5 text-[13px] font-semibold text-white hover:bg-accent-soft disabled:opacity-50">
-              {loading && <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />}
-              {loading ? "Publishing selected videos..." : `Generate AI metadata & publish${localItems.length > 1 ? ` ${localItems.length} videos` : " video"}`}
-            </button>
-          </form>
-        )}
-
-        {mode === "embed" && (
-          <form onSubmit={publishEmbed} className="pt-5">
-            <label className="block">
-              <span className="mb-1 block text-[11px] font-medium">Iframe URL or embed code *</span>
-              <textarea value={embedInput} onChange={(event) => setEmbedInput(event.target.value)} required rows={5} className="w-full rounded-md border border-line bg-void px-3 py-2 font-mono text-[12px]" placeholder={'https://player.example.com/embed/abc\n—or—\n<iframe src="https://player.example.com/embed/abc" allowfullscreen></iframe>'} />
-              <span className="mt-1 block text-[10.5px] text-ink-3">Only public http(s) iframe sources are accepted. The original iframe attributes are intentionally not stored.</span>
-            </label>
-            <label className="mt-4 flex min-h-20 cursor-pointer items-center gap-3 rounded-md border border-dashed border-line bg-void p-3 hover:border-ink-3">
-              <ImagePlus aria-hidden="true" className="h-5 w-5 text-ink-3" />
-              <span><span className="block text-[12px] font-medium">Optional video thumbnail</span><span className="mt-0.5 block text-[10.5px] text-ink-3">{embedThumbnail ? `${embedThumbnail.name} · ${readableSize(embedThumbnail.size)}` : "JPG, PNG, GIF, or WebP · max 10 MB"}</span></span>
-              <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={(event) => setEmbedThumbnail(event.target.files?.[0] || null)} className="sr-only" />
-            </label>
-            <button type="submit" disabled={loading} className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-5 text-[13px] font-semibold text-white hover:bg-accent-soft disabled:opacity-50">
-              {loading && <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />}
-              {loading ? "Generating & publishing..." : "Generate AI metadata & publish embed"}
-            </button>
-          </form>
-        )}
-
-        {mode === "url" && (
-          <form onSubmit={publishRemoteUrls} className="pt-5">
-            <label className="block">
-              <span className="mb-1 block text-[11px] font-medium">Direct video URLs *</span>
-              <textarea value={remoteUrls} onChange={(event) => setRemoteUrls(event.target.value)} required rows={6} className="w-full rounded-md border border-line bg-void px-3 py-2 font-mono text-[12px]" placeholder={"https://cdn.example.com/video-one.mp4\nhttps://cdn.example.com/video-two.mp4"} />
-              <span className="mt-1 block text-[10.5px] text-ink-3">One public video URL per line (up to 20). Each URL is queued directly with Uqload&apos;s remote-upload API.</span>
-            </label>
-            <label className="mt-4 flex min-h-20 cursor-pointer items-center gap-3 rounded-md border border-dashed border-line bg-void p-3 hover:border-ink-3">
-              <ImagePlus aria-hidden="true" className="h-5 w-5 text-ink-3" />
-              <span><span className="block text-[12px] font-medium">Optional thumbnail for this batch</span><span className="mt-0.5 block text-[10.5px] text-ink-3">{remoteThumbnail ? `${remoteThumbnail.name} · ${readableSize(remoteThumbnail.size)}` : "JPG, PNG, GIF, or WebP · max 10 MB"}</span></span>
-              <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={(event) => setRemoteThumbnail(event.target.files?.[0] || null)} className="sr-only" />
-            </label>
-            <button type="submit" disabled={loading} className="mt-5 inline-flex h-9 items-center gap-2 rounded-md bg-accent px-5 text-[13px] font-semibold text-white hover:bg-accent-soft disabled:opacity-50">
-              {loading && <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />}
-              {loading ? "Queuing Uqload imports..." : "Generate AI metadata & publish through Uqload"}
-            </button>
-          </form>
-        )}
-
-        {error && <p className="mt-5 rounded-md bg-red-500/10 p-3 text-[12px] text-red-300">{error}</p>}
-        {results.length > 0 && (
-          <div className="mt-5 rounded-md border border-emerald-500/20 bg-emerald-500/[0.05] p-4">
-            <div className="flex items-center gap-2"><CheckCircle2 aria-hidden="true" className="h-4 w-4 text-emerald-300" /><p className="text-[12px] font-semibold text-emerald-200">Publish results</p></div>
-            <div className="mt-3 space-y-2">
-              {results.map((result, index) => (
-                <div key={`${result.label}-${index}`} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-void/70 px-3 py-2 text-[11px]">
-                  <span className="min-w-0 truncate text-ink-2">{result.title ? `${result.title} — ${result.label}` : result.label}</span>
-                  {result.error ? <span className="text-red-300">{result.error}</span> : <span className="uppercase text-emerald-300">{result.processing ? "Published · processing" : result.status}</span>}
-                </div>
-              ))}
+          ) : (
+            <div className="rounded-lg border border-dashed border-line bg-void p-4">
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium">
+                  {mode === "embed" ? "Iframe URL or embed code" : "Direct video URLs"}
+                </span>
+                <textarea
+                  value={pasteBuffer}
+                  onChange={(event) => setPasteBuffer(event.target.value)}
+                  rows={mode === "embed" ? 4 : 5}
+                  className="w-full rounded-md border border-line bg-card px-3 py-2 font-mono text-[12px]"
+                  placeholder={pastePlaceholder}
+                />
+                <span className="mt-1 block text-[10.5px] text-ink-3">
+                  {mode === "embed"
+                    ? "Paste several iframes at once — each one becomes its own entry with its own thumbnail."
+                    : "One public video URL per line (up to 20). Each line becomes its own entry with its own thumbnail."}
+                </span>
+              </label>
+              <button
+                type="button"
+                onClick={applyPaste}
+                disabled={!pasteBuffer.trim()}
+                className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md border border-line bg-card px-3 text-[12px] font-semibold hover:bg-card-hover disabled:opacity-50"
+              >
+                <Plus aria-hidden="true" className="h-3.5 w-3.5" />
+                Add {mode === "embed" ? "embed" : "link"}
+              </button>
             </div>
+          )}
+        </div>
+
+        {/* ---------------- Per-video rows ---------------- */}
+        {items.length > 0 && (
+          <div className="mt-4 space-y-3">
+            {items.map((item, index) => (
+              <div key={item.id} className="rounded-md border border-line bg-void p-3">
+                <div className="flex flex-wrap items-start gap-3">
+                  {/* Thumbnail control — one per video */}
+                  <div className="w-[104px] shrink-0">
+                    {item.thumbnailPreview ? (
+                      <div className="relative overflow-hidden rounded-md border border-line">
+                        <img src={item.thumbnailPreview} alt="" className="aspect-video w-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => setThumbnail(item.id, null)}
+                          aria-label="Remove thumbnail"
+                          className="absolute right-1 top-1 rounded bg-black/70 p-0.5 text-ink hover:text-red-300"
+                        >
+                          <X aria-hidden="true" className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="flex aspect-video w-full cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line bg-card text-ink-3 hover:border-accent/50 hover:text-accent">
+                        <ImagePlus aria-hidden="true" className="h-4 w-4" />
+                        <span className="text-[9.5px] font-medium">Thumbnail</span>
+                      </label>
+                    )}
+                    <label className="mt-1 block cursor-pointer text-center text-[9.5px] text-accent hover:underline">
+                      {item.thumbnailPreview ? "Replace" : "Add image"}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/gif,image/webp"
+                        onChange={(event) => handleThumbnailInput(item.id, event)}
+                        className="sr-only"
+                      />
+                    </label>
+                  </div>
+
+                  {/* Identity */}
+                  <div className="min-w-[220px] flex-1">
+                    {item.kind === "file" ? (
+                      <>
+                        <p className="flex items-center gap-1.5 truncate text-[12px] font-medium">
+                          <Film aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-ink-3" />
+                          {item.file?.name}
+                        </p>
+                        <p className="mt-0.5 text-[10.5px] text-ink-3">
+                          {item.file ? readableSize(item.file.size) : ""} · “{categoryLabel || "selected category"}”
+                        </p>
+                      </>
+                    ) : (
+                      <label className="block">
+                        <span className="mb-1 block text-[10.5px] font-medium text-ink-3">
+                          {item.kind === "embed" ? "Iframe URL or embed code" : "Direct video URL"}
+                        </span>
+                        <input
+                          value={item.source}
+                          onChange={(event) => patchItem(item.id, { source: event.target.value })}
+                          disabled={running}
+                          className="w-full rounded-md border border-line bg-card px-2.5 py-1.5 font-mono text-[11px] disabled:opacity-60"
+                        />
+                      </label>
+                    )}
+
+                    {item.title && <p className="mt-1 text-[11px] text-ink-2">Title: {item.title}</p>}
+
+                    {item.phase === "idle" && <p className="mt-1.5 text-[10.5px] text-ink-3">{item.detail}</p>}
+                    {(item.phase === "uploading" || item.phase === "processing") && (
+                      <p className="mt-1.5 flex items-center gap-1.5 text-[10.5px] text-accent">
+                        <LoaderCircle aria-hidden="true" className="h-3 w-3 animate-spin" />
+                        {item.detail}
+                      </p>
+                    )}
+                    {item.phase === "published" && (
+                      <p className="mt-1.5 flex items-center gap-1.5 text-[10.5px] text-emerald-300">
+                        <CheckCircle2 aria-hidden="true" className="h-3 w-3" />
+                        {item.detail}
+                        {item.slug && (
+                          <Link href={`/video/${item.slug}`} target="_blank" className="underline">
+                            View
+                          </Link>
+                        )}
+                      </p>
+                    )}
+                    {item.phase === "failed" && <p className="mt-1.5 text-[10.5px] text-red-300">{item.error}</p>}
+
+                    {item.phase !== "idle" && <ProgressBar percent={item.percent} phase={item.phase} />}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => removeItem(item.id)}
+                    disabled={running}
+                    aria-label={`Remove entry ${index + 1}`}
+                    className="rounded-md p-2 text-ink-3 hover:bg-white/5 hover:text-red-300 disabled:opacity-40"
+                  >
+                    <Trash2 aria-hidden="true" className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
-      </div>
 
-      <p className="mt-4 text-[11px] leading-relaxed text-ink-3">A publish action makes the video public immediately. Uqload may still be encoding a newly uploaded or imported file; the public player will become playable as soon as the provider finishes processing.</p>
+        {/* ---------------- Actions ---------------- */}
+        <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="submit"
+            disabled={running || !items.length}
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-5 text-[13px] font-semibold text-white hover:bg-accent-soft disabled:opacity-50"
+          >
+            {running && <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />}
+            {running
+              ? "Publishing…"
+              : `Generate AI metadata & publish${items.length - publishedCount > 1 ? ` ${items.length - publishedCount} videos` : " video"}`}
+          </button>
+          {running && (
+            <button type="button" onClick={cancelPublish} className="inline-flex h-9 items-center rounded-md border border-line px-4 text-[12px] hover:bg-white/5">
+              Cancel
+            </button>
+          )}
+          {items.length > 0 && !running && (
+            <button type="button" onClick={resetItems} className="inline-flex h-9 items-center rounded-md border border-line px-4 text-[12px] hover:bg-white/5">
+              Clear list
+            </button>
+          )}
+          {items.length > 0 && (
+            <span className="text-[11px] tabular-nums text-ink-3">
+              {publishedCount} of {items.length} published
+            </span>
+          )}
+        </div>
+
+        {error && <p className="mt-5 rounded-md bg-red-500/10 p-3 text-[12px] text-red-300">{error}</p>}
+        {notice && !error && <p className="mt-5 rounded-md bg-emerald-500/10 p-3 text-[12px] text-emerald-300">{notice}</p>}
+      </form>
+
+      <p className="mt-4 text-[11px] leading-relaxed text-ink-3">
+        A publish action makes the video public immediately. Uqload may still be encoding a newly uploaded or imported file; the public player becomes
+        playable as soon as the provider finishes processing.
+      </p>
     </div>
   );
 }

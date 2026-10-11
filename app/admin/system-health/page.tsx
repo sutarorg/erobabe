@@ -1,4 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { inspectBconSetup } from "@/lib/bcon/client";
+import { getSiteUrl } from "@/lib/site";
+import BconStoreCheck from "./BconStoreCheck";
 
 export default async function SystemHealthAdmin() {
   const supabase = createServiceClient();
@@ -16,10 +19,30 @@ export default async function SystemHealthAdmin() {
     dbStatus = `Failed: ${e.message}`;
   }
 
+  // Real Bcon check — reads the store over the API instead of trusting env vars.
+  let bconStatus = "Not configured";
+  let bconDetail = "Crypto payment gateway";
+  if (process.env.BCON_API_KEY) {
+    const bcon = await inspectBconSetup(getSiteUrl());
+    if (bcon.error) {
+      bconStatus = "Unreachable";
+      bconDetail = bcon.error;
+    } else if (!bcon.store) {
+      bconStatus = "No store found";
+      bconDetail = "BCON_API_KEY did not resolve to a store";
+    } else if (bcon.missingCallbackChains.length) {
+      bconStatus = "Callback incomplete";
+      bconDetail = `Missing callback_url for: ${bcon.missingCallbackChains.join(", ")}`;
+    } else {
+      bconStatus = "Operational";
+      bconDetail = `Store “${bcon.store.name || bcon.store.id}” · ${bcon.chains.length} chain(s) configured`;
+    }
+  }
+
   const checks = [
     { name: "Database", status: dbStatus, latency: dbLatency, desc: "Supabase PostgreSQL" },
     { name: "Auth", status: "Operational", latency: "—", desc: "Supabase Auth" },
-    { name: "Bcon API", status: process.env.BCON_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "Crypto payment gateway" },
+    { name: "Bcon API", status: bconStatus, latency: "—", desc: bconDetail },
     { name: "Video Provider", status: process.env.VIDEO_PROVIDER ? `${process.env.VIDEO_PROVIDER} ${process.env.UQLOAD_ADULT_CONTENT_APPROVED === "true" ? "(approved)" : "(blocked — see DEPLOYMENT.md)"}` : "Not configured", latency: "—", desc: "Uqload or replacement" },
     { name: "Resend", status: process.env.RESEND_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "Transactional email" },
     { name: "Groq", status: process.env.GROQ_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "AI metadata assistant" },
@@ -43,8 +66,10 @@ export default async function SystemHealthAdmin() {
         ))}
       </div>
 
+      <BconStoreCheck />
+
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
-        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic request performed for Database. Never report healthy when no check performed.</p>
+        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the Bcon store. Never report healthy when no check performed.</p>
       </div>
     </div>
   );
