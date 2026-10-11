@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import Link from "next/link";
 
 vi.mock("next/link", () => ({
@@ -494,4 +494,134 @@ describe("direct Uqload upload from the browser (CORS-free simple request)", () 
 
     vi.unstubAllGlobals();
   }, 30000);
+});
+
+describe("upload progress while the video bytes travel", () => {
+  /** XHR stub for a direct Uqload POST that stays open until the test ends. */
+  class InFlightXHR {
+    upload: any = {};
+    status = 0;
+    responseText = "";
+    static instances: InFlightXHR[] = [];
+
+    open(method: string, url: string) {
+      InFlightXHR.instances.push(this);
+      expect(method).toBe("POST");
+      expect(url).toContain("uqload");
+    }
+    setRequestHeader() {}
+    send() {
+      // Deliberately never settles: the browser is still pushing the bytes.
+    }
+    addEventListener() {}
+    abort() {}
+  }
+
+  function stubBackend() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: any) => {
+        const path = String(url);
+        if (path.includes("uqload-session")) {
+          return new Response(
+            JSON.stringify({ serverUrl: "https://e17.uqload.example/upload/03", fields: { key: "test-key", file_public: "1", file_adult: "1" } }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (path.includes("uqload-confirm")) {
+          return new Response(JSON.stringify({ fileCodes: [] }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ error: `unexpected request to ${path}` }), { status: 500, headers: { "content-type": "application/json" } });
+      })
+    );
+    vi.stubGlobal("XMLHttpRequest", InFlightXHR);
+    InFlightXHR.instances = [];
+  }
+
+  /** Adds a video of `size` bytes without allocating the bytes. */
+  function addVideo(name: string, size: number) {
+    const input = document.querySelector('label input[type="file"][accept="video/*"]') as HTMLInputElement;
+    const file = new File([new Uint8Array(8)], name, { type: "video/mp4" });
+    Object.defineProperty(file, "size", { value: size });
+    fireEvent.change(input, { target: { files: [file] } });
+  }
+
+  async function startPublishing(names: Array<[string, number]>) {
+    for (const [name, size] of names) addVideo(name, size);
+    const select = await screen.findByLabelText("Category *");
+    // The category list arrives from Supabase after the first paint.
+    await waitFor(() => expect(within(select).queryByText("Mature")).toBeTruthy());
+    fireEvent.change(select, { target: { value: "cat-1" } });
+    fireEvent.submit(screen.getByText("Add videos").closest("form") as HTMLFormElement);
+  }
+
+  const estimatedPercent = () => {
+    const text = screen.getByText(/Uploading to Uqload —/).textContent || "";
+    return Number(text.match(/—\s*(\d+)%/)?.[1] ?? 0);
+  };
+
+  it("moves the bar and reports an estimated speed and time while the POST is open", async () => {
+    stubBackend();
+    render(<UploadPage />);
+
+    // 20 MB on a ~2 MB/s link: several seconds of estimated transfer.
+    await startPublishing([["long-clip.mp4", 20 * 1024 * 1024]]);
+
+    const first = await screen.findByText(/Uploading to Uqload —/);
+    expect(first.textContent).toMatch(/MB\/s/);
+    expect(first.textContent).toMatch(/estimated/);
+
+    const startedAt = estimatedPercent();
+    // The estimate keeps moving instead of leaving the row on a frozen bar.
+    await waitFor(() => expect(estimatedPercent()).toBeGreaterThan(startedAt), { timeout: 4000 });
+
+    vi.unstubAllGlobals();
+  }, 15000);
+
+  it("sends several videos at the same time instead of one after another", async () => {
+    stubBackend();
+    render(<UploadPage />);
+
+    await startPublishing([
+      ["one.mp4", 4 * 1024 * 1024],
+      ["two.mp4", 4 * 1024 * 1024],
+      ["three.mp4", 4 * 1024 * 1024],
+    ]);
+
+    // All three transfers reach the network layer without waiting for a
+    // confirmation that can only arrive after each upload completes.
+    await waitFor(() => expect(InFlightXHR.instances.length).toBe(3), { timeout: 4000 });
+
+    // …and the batch panel names how many are travelling right now, with an
+    // overall ETA for the whole set.
+    const batchPanel = await screen.findByRole("status");
+    expect(within(batchPanel).getByText(/3 uploading/)).toBeTruthy();
+    expect(within(batchPanel).getByText(/left \(estimated\)/)).toBeTruthy();
+
+    vi.unstubAllGlobals();
+  }, 15000);
+
+  it("uploads same-titled files one at a time so each keeps its own file code", async () => {
+    stubBackend();
+    render(<UploadPage />);
+
+    // `clip.mp4` and `clip.mkv` are stored by Uqload under the same title, so
+    // the library diff could not tell their file codes apart if both travelled
+    // at once.
+    await startPublishing([
+      ["clip.mp4", 4 * 1024 * 1024],
+      ["clip.mkv", 4 * 1024 * 1024],
+    ]);
+
+    await waitFor(() => expect(InFlightXHR.instances.length).toBe(1), { timeout: 4000 });
+    // Give the second worker every chance to (wrongly) start in parallel.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    expect(InFlightXHR.instances.length).toBe(1);
+    expect(within(screen.getByRole("status")).getByText(/1 uploading/)).toBeTruthy();
+    expect(screen.getByText(/uploaded one at a time/)).toBeTruthy();
+
+    vi.unstubAllGlobals();
+  }, 15000);
 });
