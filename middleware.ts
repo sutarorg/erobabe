@@ -1,7 +1,16 @@
-import { type NextRequest } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  const isProtected = pathname.startsWith("/admin") || pathname.startsWith("/advertiser");
+
+  // Public pages skip the Supabase round-trip so navigation stays instant.
+  // Auth is still enforced on /admin and /advertiser.
+  if (!isProtected) {
+    return NextResponse.next();
+  }
+
   return await updateSession(request);
 }
 

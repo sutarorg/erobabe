@@ -2,20 +2,15 @@ import { randomUUID } from "crypto";
 import type { ServiceClient } from "@/lib/video/publishing";
 
 /**
- * Direct-to-storage video transit.
+ * Thumbnail storage only.
  *
- * Vercel functions reject any request body above 4.5 MB with a plain-text
- * 413 "Request Entity Too Large", so video bytes must never be POSTed to one
- * of our own routes. Instead:
+ * Video bytes never land in Supabase. Creating a `video-incoming` bucket with
+ * a 2 GB file-size cap was throwing
+ * `Unable to prepare storage bucket "video-incoming": The object exceeded the
+ * maximum allowed size` on projects whose global limit is 50 MB. Videos now
+ * POST straight to Uqload from the browser (`/api/videos/uqload-session`).
  *
- *   1. the browser asks `/api/videos/storage-token` for a short-lived signed
- *      upload URL (a tiny JSON request);
- *   2. the browser PUTs the file straight to Supabase Storage, which reports
- *      real upload progress;
- *   3. the browser posts only the storage path to `/api/videos/upload`, and the
- *      server hands Uqload a signed download URL to pull the file from.
- *
- * Nothing large ever crosses a Vercel function.
+ * Thumbnails stay here — they are small enough for a signed upload URL.
  */
 
 export const VIDEO_INCOMING_BUCKET = "video-incoming";
@@ -59,18 +54,27 @@ export async function ensureStorageBuckets(service: ServiceClient): Promise<void
   if (bucketsChecked) return;
 
   const specs: Array<{ id: string; public: boolean; allowedMimeTypes: string[] | null; fileSizeLimit: number }> = [
-    { id: VIDEO_INCOMING_BUCKET, public: false, allowedMimeTypes: null, fileSizeLimit: MAX_VIDEO_SIZE },
     { id: THUMBNAIL_BUCKET, public: true, allowedMimeTypes: [...THUMBNAIL_TYPES], fileSizeLimit: MAX_THUMBNAIL_SIZE },
   ];
 
+  let existingIds: Set<string> | null = null;
+  try {
+    const { data } = await service.storage.listBuckets();
+    existingIds = new Set((data || []).map((bucket: { id?: string; name?: string }) => bucket.id || bucket.name || ""));
+  } catch {
+    existingIds = null;
+  }
+
   for (const spec of specs) {
+    if (existingIds?.has(spec.id)) continue;
     const { error } = await service.storage.createBucket(spec.id, {
       public: spec.public,
       fileSizeLimit: spec.fileSizeLimit,
       allowedMimeTypes: spec.allowedMimeTypes,
     });
-    // "already exists" / duplicate key / "Bucket not found" races are all fine.
-    if (error && !/already exists|duplicate|23505/i.test(String(error.message))) {
+    // "already exists" / duplicate / a too-large limit on an existing project
+    // must never block a thumbnail upload.
+    if (error && !/already exists|duplicate|23505|exceeded the maximum allowed size/i.test(String(error.message))) {
       throw new Error(`Unable to prepare storage bucket "${spec.id}": ${error.message}`);
     }
   }
@@ -112,29 +116,14 @@ export interface UploadTarget {
   publicUrl?: string;
 }
 
-export async function createVideoUploadTarget({
-  service,
-  userId,
-  fileName,
-  fileSize,
-  mimeType,
-}: {
+export async function createVideoUploadTarget(_args: {
   service: ServiceClient;
   userId: string;
   fileName: string;
   fileSize: number;
   mimeType: string;
 }): Promise<UploadTarget> {
-  if (!(fileSize > 0)) throw new Error("Select a video file");
-  if (fileSize > MAX_VIDEO_SIZE) throw new Error("Video file is too large (max 2 GB)");
-  if (!String(mimeType || "").startsWith("video/")) throw new Error("Only video files are allowed");
-
-  await ensureStorageBuckets(service);
-  const storagePath = `${transitPrefix(userId)}/${randomUUID()}.${videoExtension(fileName, mimeType)}`;
-  const { data, error } = await service.storage.from(VIDEO_INCOMING_BUCKET).createSignedUploadUrl(storagePath, { upsert: false });
-  if (error || !data?.signedUrl) throw new Error(`Could not create an upload URL: ${error?.message || "unknown storage error"}`);
-
-  return { uploadUrl: data.signedUrl, storagePath, bucket: VIDEO_INCOMING_BUCKET };
+  throw new Error("Video files upload directly to Uqload. Request /api/videos/uqload-session instead of a storage URL.");
 }
 
 export async function createThumbnailUploadTarget({

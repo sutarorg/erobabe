@@ -1,5 +1,5 @@
 "use client";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { CATEGORIES as MOCK_CATEGORIES, categorySlug } from "../data/content";
 import { cn } from "../utils/cn";
 import type { LucideIcon } from "lucide-react";
@@ -21,16 +21,7 @@ interface CategoriesProps {
 }
 
 export default function Categories({ activeCategory = null, onSelect, categories }: CategoriesProps = {}) {
-  const router = useRouter();
   const list = categories && categories.length > 0 ? categories : MOCK_CATEGORIES;
-
-  const select = (cat: CategoryInput) => {
-    if (onSelect) {
-      onSelect(cat.label);
-      return;
-    }
-    router.push(`/category/${cat.slug || categorySlug(cat.label)}`);
-  };
 
   return (
     <div>
@@ -42,19 +33,14 @@ export default function Categories({ activeCategory = null, onSelect, categories
         {list.map((cat) => {
           const Icon = resolveCategoryIcon(cat.icon, cat.slug || cat.label);
           const active = activeCategory === cat.label;
-          return (
-            <button
-              key={cat.id}
-              type="button"
-              onClick={() => select(cat)}
-              aria-pressed={active}
-              className={cn(
-                "group flex h-[82px] flex-col items-center justify-center gap-2 rounded-lg border bg-card transition-colors duration-150",
-                active
-                  ? "border-accent/70 bg-accent/8"
-                  : "border-line hover:border-accent/45 hover:bg-card-hover"
-              )}
-            >
+          const className = cn(
+            "group flex h-[82px] flex-col items-center justify-center gap-2 rounded-lg border bg-card transition-colors duration-150",
+            active
+              ? "border-accent/70 bg-accent/8"
+              : "border-line hover:border-accent/45 hover:bg-card-hover"
+          );
+          const inner = (
+            <>
               <Icon
                 className="h-5 w-5 text-accent transition-transform duration-200 group-hover:scale-110"
                 strokeWidth={1.8}
@@ -63,6 +49,30 @@ export default function Categories({ activeCategory = null, onSelect, categories
               <span className="text-[12px] font-medium leading-none text-zinc-200">
                 {cat.label}
               </span>
+            </>
+          );
+          if (!onSelect) {
+            return (
+              <Link
+                key={cat.id}
+                href={`/category/${cat.slug || categorySlug(cat.label)}`}
+                prefetch
+                aria-current={active ? "page" : undefined}
+                className={className}
+              >
+                {inner}
+              </Link>
+            );
+          }
+          return (
+            <button
+              key={cat.id}
+              type="button"
+              onClick={() => onSelect(cat.label)}
+              aria-pressed={active}
+              className={className}
+            >
+              {inner}
             </button>
           );
         })}

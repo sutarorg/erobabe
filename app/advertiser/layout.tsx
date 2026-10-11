@@ -1,32 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import {
-  ArrowLeft,
-  BarChart3,
-  CircleHelp,
-  CreditCard,
-  FileText,
-  LayoutDashboard,
-  LogOut,
-  Megaphone,
-  PlusCircle,
-  Radio,
-  UserRound,
-  type LucideIcon,
-} from "lucide-react";
-
-const advertiserNavigation: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: "/advertiser", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/advertiser/slots", label: "Ad Slots", icon: Megaphone },
-  { href: "/advertiser/campaigns", label: "My Campaigns", icon: Radio },
-  { href: "/advertiser/campaigns/new", label: "New Campaign", icon: PlusCircle },
-  { href: "/advertiser/payments", label: "Payments", icon: CreditCard },
-  { href: "/advertiser/invoices", label: "Invoices", icon: FileText },
-  { href: "/advertiser/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/advertiser/profile", label: "Profile", icon: UserRound },
-  { href: "/advertiser/support", label: "Support", icon: CircleHelp },
-];
+import { ArrowLeft, LogOut } from "lucide-react";
+import AdvertiserNav from "./AdvertiserNav";
 
 export default async function AdvertiserLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
@@ -60,23 +36,7 @@ export default async function AdvertiserLayout({ children }: { children: React.R
             <img src="https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png" alt="erobabe" className="h-6 w-auto" />
             <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent">Advertiser</span>
           </div>
-          <nav aria-label="Advertiser navigation" className="no-scrollbar flex-1 overflow-y-auto p-3">
-            <div className="space-y-1">
-              {advertiserNavigation.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className="flex items-center gap-2.5 rounded-md px-3 py-2 text-[12.5px] font-medium text-ink-2 hover:bg-white/5 hover:text-ink"
-                  >
-                    <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-ink-3" strokeWidth={1.8} />
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          </nav>
+          <AdvertiserNav />
           <div className="shrink-0 border-t border-line p-3">
             <Link href="/" className="flex items-center gap-2 rounded-md px-3 py-2 text-[12px] text-ink-3 hover:text-ink">
               <ArrowLeft aria-hidden="true" className="h-3.5 w-3.5" />

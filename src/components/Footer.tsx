@@ -1,12 +1,14 @@
 "use client";
+import Link from "next/link";
 import { LOGO_URL } from "../data/content";
-import type { NavKey } from "./Header";
+import { NAV_HREFS, type NavKey } from "./Header";
 
 interface FooterProps {
   onNavigate: (key: NavKey) => void;
   onOpenPage?: (path: string) => void;
   onAdvertise?: () => void;
   onAdmin?: () => void;
+  useLinks?: boolean;
 }
 
 const EXPLORE_LINKS: { label: string; key: NavKey }[] = [
@@ -16,16 +18,16 @@ const EXPLORE_LINKS: { label: string; key: NavKey }[] = [
   { label: "Browse All", key: "browse" },
 ];
 
-const INFO_LINKS: { label: string; path: string }[] = [
-  { label: "About Us", path: "about" },
-  { label: "Privacy Policy", path: "privacy" },
-  { label: "Terms of Service", path: "terms" },
+const INFO_LINKS: { label: string; path: string; href: string }[] = [
+  { label: "About Us", path: "about", href: "/about" },
+  { label: "Privacy Policy", path: "privacy", href: "/privacy" },
+  { label: "Terms of Service", path: "terms", href: "/terms" },
 ];
 
-const SUPPORT_LINKS: { label: string; path: string }[] = [
-  { label: "Contact Us", path: "contact" },
-  { label: "FAQ", path: "faq" },
-  { label: "Content Removal", path: "removal" },
+const SUPPORT_LINKS: { label: string; path: string; href: string }[] = [
+  { label: "Contact Us", path: "contact", href: "/contact" },
+  { label: "FAQ", path: "faq", href: "/faq" },
+  { label: "Content Removal", path: "removal", href: "/content-removal" },
 ];
 
 function LinkColumn({
@@ -48,7 +50,7 @@ function LinkColumn({
 const linkClass =
   "w-fit text-[12.5px] text-ink-3 transition-colors duration-150 hover:text-accent";
 
-export default function Footer({ onNavigate, onOpenPage, onAdvertise, onAdmin }: FooterProps) {
+export default function Footer({ onNavigate, onOpenPage, onAdvertise, onAdmin, useLinks = false }: FooterProps) {
   return (
     <footer className="mt-10 border-t border-line">
       <div className="mx-auto w-full max-w-[1200px] px-4 py-8 @sm:px-5 @2xl:px-7">
@@ -74,9 +76,15 @@ export default function Footer({ onNavigate, onOpenPage, onAdvertise, onAdmin }:
           <LinkColumn title="Explore">
             {EXPLORE_LINKS.map((link) => (
               <li key={link.label}>
-                <button type="button" onClick={() => onNavigate(link.key)} className={linkClass}>
-                  {link.label}
-                </button>
+                {useLinks ? (
+                  <Link href={NAV_HREFS[link.key]} prefetch className={linkClass}>
+                    {link.label}
+                  </Link>
+                ) : (
+                  <button type="button" onClick={() => onNavigate(link.key)} className={linkClass}>
+                    {link.label}
+                  </button>
+                )}
               </li>
             ))}
           </LinkColumn>
@@ -84,9 +92,15 @@ export default function Footer({ onNavigate, onOpenPage, onAdvertise, onAdmin }:
           <LinkColumn title="Information">
             {INFO_LINKS.map((link) => (
               <li key={link.path}>
-                <button type="button" onClick={() => onOpenPage?.(link.path)} className={linkClass}>
-                  {link.label}
-                </button>
+                {useLinks ? (
+                  <Link href={link.href} prefetch className={linkClass}>
+                    {link.label}
+                  </Link>
+                ) : (
+                  <button type="button" onClick={() => onOpenPage?.(link.path)} className={linkClass}>
+                    {link.label}
+                  </button>
+                )}
               </li>
             ))}
           </LinkColumn>
@@ -94,23 +108,41 @@ export default function Footer({ onNavigate, onOpenPage, onAdvertise, onAdmin }:
           <LinkColumn title="Support">
             {SUPPORT_LINKS.map((link) => (
               <li key={link.path}>
-                <button type="button" onClick={() => onOpenPage?.(link.path)} className={linkClass}>
-                  {link.label}
-                </button>
+                {useLinks ? (
+                  <Link href={link.href} prefetch className={linkClass}>
+                    {link.label}
+                  </Link>
+                ) : (
+                  <button type="button" onClick={() => onOpenPage?.(link.path)} className={linkClass}>
+                    {link.label}
+                  </button>
+                )}
               </li>
             ))}
             {onAdvertise && (
               <li>
-                <button type="button" onClick={onAdvertise} className={linkClass}>
-                  Advertise with us
-                </button>
+                {useLinks ? (
+                  <Link href="/advertiser" prefetch className={linkClass}>
+                    Advertise with us
+                  </Link>
+                ) : (
+                  <button type="button" onClick={onAdvertise} className={linkClass}>
+                    Advertise with us
+                  </button>
+                )}
               </li>
             )}
             {onAdmin && (
               <li>
-                <button type="button" onClick={onAdmin} className={linkClass}>
-                  Admin portal
-                </button>
+                {useLinks ? (
+                  <Link href="/admin" prefetch className={linkClass}>
+                    Admin portal
+                  </Link>
+                ) : (
+                  <button type="button" onClick={onAdmin} className={linkClass}>
+                    Admin portal
+                  </button>
+                )}
               </li>
             )}
           </LinkColumn>

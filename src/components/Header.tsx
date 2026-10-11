@@ -1,10 +1,19 @@
 "use client";
+import Link from "next/link";
 import { Menu, Search, User, X } from "lucide-react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { LOGO_URL } from "../data/content";
 import { cn } from "../utils/cn";
 
 export type NavKey = "home" | "categories" | "latest" | "toprated" | "browse";
+
+export const NAV_HREFS: Record<NavKey, string> = {
+  home: "/",
+  categories: "/categories",
+  latest: "/latest",
+  toprated: "/popular",
+  browse: "/browser",
+};
 
 const NAV_ITEMS: { key: NavKey; label: string }[] = [
   { key: "home", label: "Home" },
@@ -26,6 +35,8 @@ interface HeaderProps {
   user: { name: string } | null;
   onSignInClick: () => void;
   onSignOut: () => void;
+  /** Prefetching <Link> navigation for the Next.js site. */
+  useLinks?: boolean;
 }
 
 export default function Header({
@@ -40,6 +51,7 @@ export default function Header({
   user,
   onSignInClick,
   onSignOut,
+  useLinks = false,
 }: HeaderProps) {
   const handleSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
@@ -59,38 +71,42 @@ export default function Header({
     <header className="sticky top-0 z-40 border-b border-line bg-panel/95 backdrop-blur-md">
       <div className="relative mx-auto flex h-14 w-full max-w-[1200px] items-center gap-4 px-4 @sm:px-5 @2xl:px-7">
         {/* Brand */}
-        <button
-          type="button"
-          onClick={() => onNavigate("home")}
-          className="flex shrink-0 items-center gap-2"
-          aria-label="erobabe — home"
-        >
-          <img
-            src={LOGO_URL}
-            alt="erobabe logo"
-            className="h-7 w-auto object-contain"
-            draggable={false}
-          />
-          <span className="text-[15px] font-bold tracking-tight text-ink">
-            erobabe<span className="text-accent">.</span>
-          </span>
-        </button>
+        {useLinks ? (
+          <Link href="/" prefetch className="flex shrink-0 items-center gap-2" aria-label="erobabe — home">
+            <img src={LOGO_URL} alt="erobabe logo" className="h-7 w-auto object-contain" draggable={false} />
+            <span className="text-[15px] font-bold tracking-tight text-ink">
+              erobabe<span className="text-accent">.</span>
+            </span>
+          </Link>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onNavigate("home")}
+            className="flex shrink-0 items-center gap-2"
+            aria-label="erobabe — home"
+          >
+            <img
+              src={LOGO_URL}
+              alt="erobabe logo"
+              className="h-7 w-auto object-contain"
+              draggable={false}
+            />
+            <span className="text-[15px] font-bold tracking-tight text-ink">
+              erobabe<span className="text-accent">.</span>
+            </span>
+          </button>
+        )}
 
         {/* Desktop / wide-container navigation */}
         <nav aria-label="Primary" className="hidden h-full items-stretch @2xl:flex">
           {NAV_ITEMS.map((item) => {
             const active = navActive === item.key;
-            return (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => onNavigate(item.key)}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "relative px-3 text-[13px] font-medium transition-colors duration-150",
-                  active ? "text-accent" : "text-ink-2 hover:text-ink"
-                )}
-              >
+            const className = cn(
+              "relative flex items-center px-3 text-[13px] font-medium transition-colors duration-150",
+              active ? "text-accent" : "text-ink-2 hover:text-ink"
+            );
+            const inner = (
+              <>
                 {item.label}
                 <span
                   aria-hidden
@@ -99,6 +115,21 @@ export default function Header({
                     active ? "opacity-100" : "opacity-0"
                   )}
                 />
+              </>
+            );
+            return useLinks ? (
+              <Link key={item.key} href={NAV_HREFS[item.key]} prefetch aria-current={active ? "page" : undefined} className={className}>
+                {inner}
+              </Link>
+            ) : (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => onNavigate(item.key)}
+                aria-current={active ? "page" : undefined}
+                className={className}
+              >
+                {inner}
               </button>
             );
           })}
@@ -157,6 +188,15 @@ export default function Header({
                 {user.name}
               </span>
             </button>
+          ) : useLinks ? (
+            <Link
+              href="/auth/sign-in"
+              prefetch
+              className="flex h-8 items-center gap-1.5 rounded-md border border-line bg-card px-2.5 text-[13px] font-medium text-ink transition-colors hover:border-zinc-600 @sm:px-3"
+            >
+              <User className="h-3.5 w-3.5 text-ink-2" aria-hidden />
+              <span className="hidden @sm:inline">Sign In</span>
+            </Link>
           ) : (
             <button
               type="button"
@@ -193,7 +233,28 @@ export default function Header({
         >
           {NAV_ITEMS.map((item) => {
             const active = navActive === item.key;
-            return (
+            const className = cn(
+              "flex w-full items-center justify-between rounded-md px-2 py-2.5 text-left text-[13.5px] font-medium transition-colors",
+              active ? "text-accent" : "text-ink-2 hover:bg-card hover:text-ink"
+            );
+            const inner = (
+              <>
+                {item.label}
+                {active && <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />}
+              </>
+            );
+            return useLinks ? (
+              <Link
+                key={item.key}
+                href={NAV_HREFS[item.key]}
+                prefetch
+                aria-current={active ? "page" : undefined}
+                className={className}
+                onClick={() => onMenuOpenChange(false)}
+              >
+                {inner}
+              </Link>
+            ) : (
               <button
                 key={item.key}
                 type="button"
@@ -202,13 +263,9 @@ export default function Header({
                   onMenuOpenChange(false);
                 }}
                 aria-current={active ? "page" : undefined}
-                className={cn(
-                  "flex w-full items-center justify-between rounded-md px-2 py-2.5 text-left text-[13.5px] font-medium transition-colors",
-                  active ? "text-accent" : "text-ink-2 hover:bg-card hover:text-ink"
-                )}
+                className={className}
               >
-                {item.label}
-                {active && <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />}
+                {inner}
               </button>
             );
           })}
