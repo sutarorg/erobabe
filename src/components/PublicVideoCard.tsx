@@ -33,12 +33,6 @@ export default function PublicVideoCard({ video }: { video: PublicVideo }) {
       </div>
       <h3 className="mt-2 line-clamp-2 text-[13px] font-medium leading-tight text-ink group-hover:text-accent">{video.title}</h3>
       <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-ink-3">
-        {video.category_label && (
-          <>
-            <span>{video.category_label}</span>
-            <span aria-hidden>•</span>
-          </>
-        )}
         <span className="inline-flex items-center gap-1 whitespace-nowrap">
           <Eye className="h-3 w-3" aria-hidden />
           <span className="tabular-nums">{video.view_count.toLocaleString("en-US")} views</span>

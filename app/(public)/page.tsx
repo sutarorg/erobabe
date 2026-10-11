@@ -40,13 +40,16 @@ export default async function HomePage({
   if (query) {
     return (
       <div className="pt-4">
-        <div className="mb-6">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-accent">Search</p>
-          <h1 className="mt-1 text-[22px] font-semibold tracking-tight">Results for “{query}”</h1>
-          <p className="mt-1 text-[12.5px] text-ink-3">{mappedVideos.length} videos found</p>
+        <p className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">Search</p>
+        <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="text-[22px] font-semibold tracking-tight">Results for “{query}”</h1>
+          <span className="text-[12px] tabular-nums text-ink-3">{mappedVideos.length} videos found</span>
         </div>
+        <p className="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">
+          Explore matching scenes across our hand-curated library.
+        </p>
         {mappedVideos.length === 0 ? (
-          <div className="rounded-lg border border-line bg-card p-8 text-center">
+          <div className="mt-6 rounded-lg border border-line bg-card p-8 text-center">
             <p className="text-[14px] font-medium">No videos found</p>
             <p className="mt-1 text-[12.5px] text-ink-3">Try a different search term or browse categories.</p>
             <Link href="/" prefetch className="mt-4 inline-flex h-9 items-center justify-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-soft">
@@ -54,7 +57,7 @@ export default async function HomePage({
             </Link>
           </div>
         ) : (
-          <div className="mt-3.5 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {mappedVideos.map((video) => (
               <PublicVideoCard key={video.slug} video={video} />
             ))}

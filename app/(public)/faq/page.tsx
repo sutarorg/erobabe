@@ -16,9 +16,14 @@ const FAQS = [
 
 export default function FAQPage() {
   return (
-    <div className="pt-6 max-w-3xl">
+    <div className="pt-4">
       <p className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">Support</p>
-      <h1 className="mt-2 text-[22px] font-semibold tracking-tight">FAQ</h1>
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h1 className="text-[22px] font-semibold tracking-tight">FAQ</h1>
+      </div>
+      <p className="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">
+        Quick answers about browsing, advertising and moderation.
+      </p>
       <div className="mt-6 divide-y divide-line rounded-lg border border-line bg-card">
         {FAQS.map((f, i) => (
           <div key={i} className="p-5">
