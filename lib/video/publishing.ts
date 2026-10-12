@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { fallbackSuggestion, suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
+import { UfoloadError } from "@/lib/video/ufoload-protocol";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -33,6 +34,31 @@ export function httpErrorStatus(message: string): number {
   if (message === "Unauthorized") return 401;
   if (message.startsWith("Forbidden")) return 403;
   return 500;
+}
+
+/**
+ * Maps a thrown error onto the HTTP status our routes answer with.
+ *
+ * A provider rejection is never reported as *our* auth failure: a 401 from
+ * UFOLOAD means the server's API key is wrong (502 — an upstream
+ * misconfiguration), while 409/413/429/503 keep their meaning so the admin UI
+ * can tell the difference between "storage full" and "rate limited".
+ */
+export function errorStatusFrom(error: unknown): number {
+  if (error instanceof UfoloadError) {
+    if (error.status === 0) return 504;
+    if (error.status === 401 || error.status === 403 || error.status === 402) return 502;
+    if (error.status === 400) return 400;
+    return error.status >= 400 && error.status < 600 ? error.status : 502;
+  }
+  const message = error instanceof Error ? error.message : "";
+  return httpErrorStatus(message);
+}
+
+/** The message an admin should see, with no secrets and no stack traces. */
+export function errorMessageFrom(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
 }
 
 export function slugify(value: string): string {
@@ -205,7 +231,7 @@ export async function createGeneratedVideo({
   userId: string;
   sourceName: string;
   categoryId: string;
-  provider: "uqload" | "embed";
+  provider: "ufoload" | "embed" | "internal";
   thumbnailUrl?: string | null;
   /** Already generated while the bytes were in flight — skips a second Gemini call. */
   prepared?: GeneratedMetadata | null;
@@ -299,20 +325,26 @@ export async function createUploadJob({
   userId,
   fileName,
   fileSize,
-  provider = "uqload",
+  provider = "ufoload",
   storagePath,
+  providerUploadId,
+  providerImportId,
 }: {
   service: ServiceClient;
-  videoId: string;
+  videoId?: string | null;
   userId: string;
   fileName: string;
   fileSize?: number;
   provider?: string;
   /** Transit object in the private video-incoming bucket, when there is one. */
   storagePath?: string | null;
+  /** UFOLOAD direct-upload session id (init step). */
+  providerUploadId?: string | null;
+  /** UFOLOAD import task id — deliberately separate from the file id. */
+  providerImportId?: string | null;
 }) {
   const insert: Record<string, unknown> = {
-    video_id: videoId,
+    video_id: videoId ?? null,
     file_name: fileName,
     file_size: fileSize || null,
     provider,
@@ -320,21 +352,203 @@ export async function createUploadJob({
     progress: 0,
     created_by: userId,
   };
-  // The column is added by migration 00000000000004. Omit it rather than fail
-  // the insert on a database that has not been migrated yet.
+  // These columns are added by migration 00000000000004 / 00000000000006.
+  // Omit them rather than fail the insert on a database that has not been
+  // migrated yet.
   if (storagePath) insert.storage_path = storagePath;
+  if (providerUploadId) insert.provider_upload_id = providerUploadId;
+  if (providerImportId) insert.provider_import_id = providerImportId;
 
   const { data: job, error } = await service.from("upload_jobs").insert(insert).select().single();
   if (error) throw error;
   return job;
 }
 
+/**
+ * Finds the direct-upload job a completion request is allowed to finish.
+ *
+ * The client sends only the provider's `uploadId`; this lookup proves the
+ * session was created for *this* admin and has not been claimed already, so a
+ * browser can never complete — or publish — someone else's upload, and the
+ * provider file id always comes from UFOLOAD rather than from the request body.
+ */
+export async function findUploadJobForSession(
+  service: ServiceClient,
+  userId: string,
+  uploadId: string
+): Promise<{ id: string; video_id: string | null; file_name: string; file_size: number | null; provider: string } | null> {
+  const normalized = String(uploadId || "").trim();
+  if (!normalized) return null;
+
+  const { data, error } = await service
+    .from("upload_jobs")
+    .select("id, video_id, file_name, file_size, provider, status, created_by")
+    .eq("provider_upload_id", normalized)
+    .eq("created_by", userId)
+    .single();
+  if (error || !data) return null;
+  if (data.provider && data.provider !== "ufoload") return null;
+  return {
+    id: data.id,
+    video_id: data.video_id ?? null,
+    file_name: data.file_name,
+    file_size: data.file_size ?? null,
+    provider: data.provider || "ufoload",
+  };
+}
+
+/** Records the provider's own progress/state on the job row. */
+export async function updateUploadJob(
+  service: ServiceClient,
+  jobId: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  if (!jobId) return;
+  const { error } = await service.from("upload_jobs").update(patch).eq("id", jobId);
+  if (error) throw error;
+}
+
 export async function completeUploadJob(service: ServiceClient, jobId: string, providerFileId: string) {
   const { error } = await service
     .from("upload_jobs")
-    .update({ provider_file_id: providerFileId, status: "processing", progress: 100 })
+    .update({ provider_file_id: providerFileId, provider_status: "ready", status: "completed", progress: 100 })
     .eq("id", jobId);
   if (error) throw error;
+}
+
+/**
+ * Persists the identifiers UFOLOAD returned for a finished upload/import
+ * *without* making the video public.
+ *
+ * A file that reached the provider is not playable yet: it has to finish
+ * encoding (`queued` → `processing` → `ready`). The row therefore stays
+ * `processing` / private until {@link markVideoReady} is called with a provider
+ * confirmation, so nothing unplayable ever appears on a public page.
+ *
+ * The stored addresses are the stable embed/watch pages. Signed playback links
+ * (which the documentation says expire) are never written to the database.
+ */
+export async function attachProviderFile({
+  service,
+  videoId,
+  userId,
+  provider,
+  providerFileId,
+  providerPublicId,
+  embedUrl,
+  playableUrl,
+  thumbnailUrl,
+  durationSeconds,
+  progress,
+}: {
+  service: ServiceClient;
+  videoId: string;
+  userId: string;
+  provider: string;
+  providerFileId: string;
+  providerPublicId?: string | null;
+  embedUrl?: string | null;
+  playableUrl?: string | null;
+  thumbnailUrl?: string | null;
+  durationSeconds?: number | null;
+  progress?: number | null;
+}) {
+  const update: Record<string, unknown> = {
+    provider,
+    provider_file_id: providerFileId,
+    status: "processing",
+    visibility: "private",
+    updated_by: userId,
+  };
+  if (providerPublicId !== undefined) update.provider_public_id = providerPublicId || null;
+  if (embedUrl !== undefined) update.embed_url = embedUrl || null;
+  if (playableUrl !== undefined) update.playable_url = playableUrl || null;
+  if (thumbnailUrl !== undefined && thumbnailUrl) update.thumbnail_url = thumbnailUrl;
+  if (durationSeconds !== undefined && durationSeconds) update.duration_seconds = durationSeconds;
+  if (progress !== undefined && progress !== null) update.provider_progress = Math.max(0, Math.min(100, Math.round(progress)));
+
+  const { data, error } = await service
+    .from("videos")
+    .update(update)
+    .eq("id", videoId)
+    .select("id, slug, title, status, thumbnail_url")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/** Promotes a private processing row once the provider confirms it is ready. */
+export async function markVideoReady({
+  service,
+  videoId,
+  userId,
+  embedUrl,
+  playableUrl,
+  thumbnailUrl,
+  durationSeconds,
+}: {
+  service: ServiceClient;
+  videoId: string;
+  userId?: string;
+  embedUrl?: string | null;
+  playableUrl?: string | null;
+  thumbnailUrl?: string | null;
+  durationSeconds?: number | null;
+}) {
+  const update: Record<string, unknown> = {
+    status: "published",
+    visibility: "public",
+    rights_status: "cleared",
+    moderation_status: "approved",
+    published_at: new Date().toISOString(),
+    provider_progress: 100,
+    provider_error: null,
+  };
+  if (userId) update.updated_by = userId;
+  if (embedUrl) update.embed_url = embedUrl;
+  if (playableUrl) update.playable_url = playableUrl;
+  if (thumbnailUrl) update.thumbnail_url = thumbnailUrl;
+  if (durationSeconds) update.duration_seconds = durationSeconds;
+
+  const { data, error } = await service.from("videos").update(update).eq("id", videoId).select("id, slug, title, status").single();
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Records a provider failure: the reason is kept, and the row stays private so
+ * a failed encode can never be served as playable content.
+ */
+export async function markVideoFailed({
+  service,
+  videoId,
+  jobId,
+  message,
+}: {
+  service: ServiceClient;
+  videoId: string;
+  jobId?: string;
+  message: string;
+}) {
+  const reason = String(message || "Provider processing failed").slice(0, 500);
+  if (jobId) {
+    await service.from("upload_jobs").update({ status: "failed", error_message: reason }).eq("id", jobId);
+  }
+  await service
+    .from("videos")
+    .update({ status: "draft", visibility: "private", provider_error: reason })
+    .eq("id", videoId);
+}
+
+/** Keeps the provider's live progress visible while a file is still encoding. */
+export async function recordProviderProgress(
+  service: ServiceClient,
+  videoId: string,
+  progress: number | null | undefined
+): Promise<void> {
+  if (progress === null || progress === undefined || !Number.isFinite(Number(progress))) return;
+  const value = Math.max(0, Math.min(99, Math.round(Number(progress))));
+  await service.from("videos").update({ provider_progress: value }).eq("id", videoId);
 }
 
 export async function failUpload({

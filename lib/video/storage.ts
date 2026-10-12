@@ -7,8 +7,9 @@ import type { ServiceClient } from "@/lib/video/publishing";
  * Video bytes never land in Supabase. Creating a `video-incoming` bucket with
  * a 2 GB file-size cap was throwing
  * `Unable to prepare storage bucket "video-incoming": The object exceeded the
- * maximum allowed size` on projects whose global limit is 50 MB. Videos now
- * POST straight to Uqload from the browser (`/api/videos/uqload-session`).
+ * maximum allowed size` on projects whose global limit is 50 MB. Video bytes
+ * now go straight from the browser to UFOLOAD's upload node, chunk by chunk
+ * (`/api/videos/ufoload-session`).
  *
  * Thumbnails stay here — they are small enough for a signed upload URL.
  */
@@ -20,7 +21,7 @@ export const MAX_VIDEO_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
 export const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024; // 10 MB
 export const THUMBNAIL_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
-/** Long enough for Uqload's remote importer to fetch a queued file. */
+/** Long enough for a provider's remote importer to fetch a queued file. */
 export const TRANSIT_DOWNLOAD_TTL_SECONDS = 6 * 60 * 60;
 
 const SAFE_EXTENSION = /^[a-z0-9]{1,10}$/;
@@ -114,16 +115,6 @@ export interface UploadTarget {
   bucket: string;
   /** Only present for thumbnails, which live in the public bucket. */
   publicUrl?: string;
-}
-
-export async function createVideoUploadTarget(_args: {
-  service: ServiceClient;
-  userId: string;
-  fileName: string;
-  fileSize: number;
-  mimeType: string;
-}): Promise<UploadTarget> {
-  throw new Error("Video files upload directly to Uqload. Request /api/videos/uqload-session instead of a storage URL.");
 }
 
 export async function createThumbnailUploadTarget({

@@ -10,6 +10,7 @@
     "lint": "next lint",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
+    "test:live": "vitest run --config vitest.live.config.ts",
     "test:e2e": "playwright test",
     "db:generate": "echo 'Run supabase migrations via CLI or dashboard'"
   },

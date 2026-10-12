@@ -40,11 +40,30 @@ export default async function SystemHealthAdmin() {
     }
   }
 
+  const providerName = (process.env.VIDEO_PROVIDER || "ufoload").trim().toLowerCase();
+  const providerKnown = providerName === "ufoload" || providerName === "internal";
+  const providerApproved =
+    providerName === "ufoload" ? process.env.UFOLOAD_ADULT_CONTENT_APPROVED === "true" : providerName === "internal";
+  const videoProviderStatus = !providerKnown
+    ? "Misconfigured"
+    : !process.env.UFOLOAD_API_KEY && providerName === "ufoload"
+      ? "API key missing"
+      : providerApproved
+        ? `${providerName} (approved)`
+        : `${providerName} (blocked — see DEPLOYMENT.md)`;
+  const videoProviderDetail = !providerKnown
+    ? `VIDEO_PROVIDER="${providerName}" is not supported — uploads fail closed. Set it to "ufoload" (or "internal" for embed-only deployments).`
+    : providerName === "internal"
+      ? "Embed-only placeholder: no video hosting, no local uploads."
+      : providerApproved
+        ? "Direct chunked uploads and URL imports go to UFOLOAD; videos stay private until the provider reports them ready."
+        : "UFOLOAD uploads are refused until UFOLOAD_API_KEY is set and written adult-content/commercial approval is recorded (UFOLOAD_ADULT_CONTENT_APPROVED=true).";
+
   const checks = [
     { name: "Database", status: dbStatus, latency: dbLatency, desc: "Supabase PostgreSQL" },
     { name: "Auth", status: "Operational", latency: "—", desc: "Supabase Auth" },
     { name: "NOWPayments API", status: payStatus, latency: "—", desc: payDetail },
-    { name: "Video Provider", status: process.env.VIDEO_PROVIDER ? `${process.env.VIDEO_PROVIDER} ${process.env.UQLOAD_ADULT_CONTENT_APPROVED === "true" ? "(approved)" : "(blocked — see DEPLOYMENT.md)"}` : "Not configured", latency: "—", desc: "Uqload or replacement" },
+    { name: "Video Provider", status: videoProviderStatus, latency: "—", desc: videoProviderDetail },
     { name: "Resend", status: process.env.RESEND_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "Transactional email" },
     { name: "Gemini", status: process.env.GEMINI_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "AI metadata assistant" },
   ];

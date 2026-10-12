@@ -8,7 +8,8 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./tests/setup.ts"],
-    exclude: ["node_modules", "tests/e2e/**", ".next/**"],
+    // `tests/live/**` needs a real UFOLOAD key — see tests/live/README.md.
+    exclude: ["node_modules", "tests/e2e/**", "tests/live/**", ".next/**"],
   },
   resolve: {
     alias: {

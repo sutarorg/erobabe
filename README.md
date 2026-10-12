@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, video hosting abstraction, Resend email, Gemini AI, and SEO optimization.
+Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, UFOLOAD video hosting, Resend email, Gemini AI, and SEO optimization.
 
 ## Quick Start
 
@@ -19,6 +19,7 @@ Open http://localhost:3000
 - `DEPLOYMENT.md` — click-by-click production setup
 - `GO_LIVE_CHECKLIST.md` — operational requirements and blockers
 - `IMPLEMENTATION_REPORT.md` — what changed, tests, blockers
+- `tests/live/README.md` — how to run the optional live UFOLOAD tests
 - `.env.example` — env vars reference (no secrets)
 
 ## Stack
@@ -51,7 +52,16 @@ npx playwright test
 
 ## Production Blockers
 
-See `GO_LIVE_CHECKLIST.md` — Uqload TOS prohibits adult content without written approval, hosting must permit adult/commercial, legal identity required, etc. Do not launch until blockers resolved.
+See `GO_LIVE_CHECKLIST.md`. The current blockers are:
+
+- **UFOLOAD approval** — its Terms of Service carry no explicit adult-content clause, so
+  uploads stay gated (`UFOLOAD_ADULT_CONTENT_APPROVED=false` fails every upload closed)
+  until the provider confirms lawful adult content, commercial use, API uploads and
+  embedded playback in writing.
+- **Hosting** must permit adult/commercial content (Vercel Hobby does not).
+- **Legal identity, age assurance, NOWPayments approval, Resend domain verification.**
+
+Do not launch until the blockers are resolved.
 
 ## Brand
 

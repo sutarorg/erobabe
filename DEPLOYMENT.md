@@ -3,7 +3,7 @@
 This document gives complete, verified steps to deploy Erobabe from zero to production. It covers Supabase, NOWPayments, video hosting, Gemini, Resend, GitHub, hosting, domain, env vars, testing, and rollback.
 
 **Date**: October 10, 2026  
-**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, Gemini, internal video provider (Uqload blocked).
+**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, Gemini, UFOLOAD video hosting (gated behind written approval).
 
 ---
 
@@ -26,7 +26,7 @@ This document gives complete, verified steps to deploy Erobabe from zero to prod
 - Playwright browsers: `npx playwright install`
 
 ### Decisions requiring owner authorization before production
-1. **Video hosting provider**: Uqload TOS (https://uqload.vc/tos) prohibits pornography, nudity, sexual content. You MUST obtain written confirmation that lawful adult content, commercial use, API upload, and intended playback are permitted, OR approve replacement provider (Bunny.net Stream, Cloudflare Stream, Mux, or self-hosted S3 + transcoding). Without this, production video hosting is BLOCKED.
+1. **Video hosting provider**: UFOLOAD's TOS (https://ufoload.com/tos) does not spell out an adult-content clause, so you MUST obtain written confirmation from the provider that lawful adult content, commercial use, API uploads and embedded playback are permitted (`contact@ufoload.com`), OR approve a replacement provider (Bunny.net Stream, Cloudflare Stream, Mux, or self-hosted S3 + transcoding). Without this, production video hosting is BLOCKED. See section D.
 2. **Hosting provider**: Vercel Hobby is limited to personal non-commercial use and its Acceptable Use Policy restricts objectionable content. Do NOT deploy commercial Erobabe to Vercel Hobby. Choose a host whose terms explicitly permit adult content and commercial use. Document approval.
 3. **Legal identity**: Operator must provide real legal name, business address, registration, contact emails, age-verification procedures. Do not publish fictional identity.
 4. **Age assurance**: Evaluate jurisdiction-specific requirements (e.g., UK, EU, US state laws). Frontend age gate alone is not robust assurance. Implement required verification integration where legally required.
@@ -125,7 +125,7 @@ In Supabase Dashboard → **Edge Functions** → **Secrets**, add:
 - `GEMINI_API_KEY`
 - `NOWPAYMENTS_API_KEY`
 - `NOWPAYMENTS_IPN_SECRET`
-- `UQLOAD_API_KEY` (if applicable, but see blocker)
+- `UFOLOAD_API_KEY` (server-only; see the approval gate in section D)
 - `SITE_URL`
 
 ### 10. Create initial administrator using secure documented process
@@ -376,61 +376,147 @@ shows `finished` for that address and amount) — see "Rollback and recovery".
 
 ## D. Video-Hosting Setup
 
-### Hosting Decision — CRITICAL BLOCKER
+### Active provider: UFOLOAD
 
-**Uqload policy gate**: Uqload Terms of Service (https://uqload.vc/tos) states:
-> "Pornography, nudity, sexual and any kind offensive videos are prohibited."
+Videos are uploaded **directly from the admin browser to UFOLOAD** in chunks. The
+bytes never pass through a Vercel function (which rejects bodies above 4.5 MB)
+and never touch Supabase Storage. Supabase only stores the thumbnail, through the
+existing signed-upload route.
 
-**Current status**: PRODUCTION VIDEO HOSTING BLOCKED for Uqload without written approval.
+Official documentation used by the implementation:
+
+- API reference: https://ufoload.com/docs/api
+- OpenAPI definition: https://ufoload.com/api/openapi.json
+- Terms: https://ufoload.com/tos · Pricing: https://ufoload.com/pricing
+
+### Policy gate — written approval is a launch blocker
+
+UFOLOAD's Terms of Service (draft v0.1, dated 2026-10-11) prohibit unlawful,
+infringing, malware, violence and non-consensual material, and reserve
+discretionary enforcement — including withholding payouts. They do **not**
+contain an explicit adult-content clause, so an API key alone does not mean that
+lawful adult content, commercial use, API uploads or embedded playback are
+permitted on the account.
 
 **Before enabling production uploads, you must EITHER:**
-1. Obtain written provider confirmation that lawful adult content, commercial use, API upload, and intended playback method are permitted; OR
-2. Have owner approve replacement provider whose current terms explicitly support adult-content business.
 
-**Replacement providers whose terms typically support adult (verify current terms before use):**
-- Bunny.net Stream (check Acceptable Use, adult allowed with restrictions)
-- Cloudflare Stream (check terms, adult may be allowed if legal)
-- Mux (check terms)
-- Self-hosted S3 + transcoding (AWS S3, Wasabi, etc.) with your own player
+1. Obtain written confirmation from UFOLOAD (`contact@ufoload.com`) that lawful
+   adult content, commercial use, API uploads and embedded playback are permitted
+   for this account, keep the confirmation on file with its date and contact, and
+   only then set `UFOLOAD_ADULT_CONTENT_APPROVED=true`; **OR**
+2. Have the owner approve a different provider whose current terms explicitly
+   permit adult, commercial content, and implement it behind
+   `lib/video/provider.ts`.
 
-**Our implementation keeps provider integration replaceable via `lib/video/provider.ts` abstraction.**
+**Fail-closed gate.** While `UFOLOAD_ADULT_CONTENT_APPROVED` is anything other
+than `"true"`, every upload/import route answers `503` with an actionable message
+that names this variable, and nothing is sent to UFOLOAD. `VIDEO_PROVIDER`
+accepts only `ufoload` (real uploads) and `internal` (embeds only, no hosting);
+any other value throws a configuration error instead of quietly falling back to
+the retired Uqload integration.
 
-**If approval not available:**
-- Leave `UQLOAD_ADULT_CONTENT_APPROVED=false` and `VIDEO_PROVIDER=internal`
-- Internal provider stores placeholder and marks video as pending_review — no real streaming
-- Document blocker in `GO_LIVE_CHECKLIST.md` and this file
-- Do NOT falsely mark production video hosting as ready
+### Setup steps (UFOLOAD)
 
-### If Uqload remains provider (with approval)
+1. Create the account at https://ufoload.com.
+2. Open the dashboard → **Developers** and copy the API key (starts with `ufo_`,
+   shown only once). Keep it server-side.
+3. Check the plan's file-size ceiling and pick the matching limit:
+   Free 5 GB · Pro 10 GB · Max 25 GB. The application enforces its own 2 GB
+   ceiling in addition to the provider's `max_bytes`, and the admin UI reports a
+   clear `413` when a file exceeds either.
+4. Set these environment variables in the hosting provider (see `.env.example`):
+   - `UFOLOAD_API_KEY=ufo_...` — **server-only**; never `NEXT_PUBLIC_*`, never in a
+     browser response, commit, log or audit row.
+   - `UFOLOAD_ADULT_CONTENT_APPROVED=true` — only after the written confirmation.
+   - `VIDEO_PROVIDER=ufoload` — the active integration.
+5. Run the database migration `supabase/migrations/00000000000006_ufoload_video_provider.sql`.
+   It is additive: the `ufoload` provider value, `videos.provider_public_id`,
+   `videos.provider_progress`, `videos.provider_error`, and
+   `upload_jobs.provider_upload_id` / `provider_import_id` / `provider_status`.
+   Existing rows — including historical `provider='uqload'` videos — are left
+   exactly as they are and keep playing from their stored URLs.
+6. Open Admin → **System Health**: *Video Provider* must read `ufoload
+   (approved)`. Anything else names what is missing.
+7. Upload one real test video from `/admin/videos/upload`, wait for the row to
+   say *Published*, and open it on the public `/video/[slug]` page (see
+   `GO_LIVE_CHECKLIST.md` section D for the click-by-click checklist).
 
-1. **Get API key**: Login at https://uqload.vc → Account Settings → API Key → copy
-2. **Set env**: `UQLOAD_API_KEY=your_key`, `UQLOAD_ADULT_CONTENT_APPROVED=true`, `VIDEO_PROVIDER=uqload`
-3. **Endpoints used by code**:
-   - `GET https://uqload.vc/api/upload/server?key=API_KEY` → returns upload server URL
-   - `POST https://sX.myvideo.com/upload/01` with FormData **in this order**: `key`, `file_title`, `file_descr`, `tags`, `file_public=1`, `file_adult=1`, then `file`, then `snapshot` (thumbnail) last. ⚠️ Uqload ignores every multipart field sent **after** `file`, so a `file_title` appended behind the file is dropped and the stored title falls back to the file name (`my trip.mp4` → `My_Trip`).
-   - Response: `{ status:200, files:[{ filecode, filename, status }] }`
-   - `GET https://uqload.vc/api/file/list?key=...&per_page=50` → account library; used to confirm a just-sent upload by **diffing file codes against a pre-upload snapshot** (one request per poll). Do not filter by `title`: it is a literal substring match on the stored title and can never find a file whose stored title is unknown.
-   - `GET https://uqload.vc/api/file/info?key=...&file_code=...` → check processing status, thumbnail
-4. **Upload path — how large files get in**: Vercel functions reject any request body above **4.5 MB** with a plain-text `413 Request Entity Too Large`. Posting a video to one of our own routes therefore cannot work, and used to surface in the admin UI as `Unexpected token 'R', "Request En"... is not valid JSON`. The current flow keeps `UQLOAD_API_KEY` server-only and never sends a large body through a function:
+### Endpoints the code calls (verified against the official documentation)
 
-   1. `POST /api/videos/storage-token` (admin, JSON, `kind: "thumbnail"`) returns a short-lived Supabase **signed upload URL** for a public `video-thumbnails` object. Video bytes must not be posted there — the route answers `410` and points at the Uqload session route instead.
-   2. The browser `PUT`s the thumbnail straight to Supabase Storage with `XMLHttpRequest`.
-   3. `POST /api/videos/uqload-session` returns the Uqload upload-server URL plus its form fields (`key`, `file_public=1`, `file_adult=1`) so the browser can POST the video bytes **directly to Uqload** (a CORS "simple request" — no custom headers, no `xhr.upload` listeners, `withCredentials=false`; adding any of those forces a preflight Uqload never answers and cancels the upload before a single byte is sent).
-   4. `POST /api/videos/uqload-confirm` (`mode: "snapshot"`) snapshots the account's file codes **before** the bytes leave; the browser then re-sends `{ fileTitle, fileName, knownFileCodes, finalAttempt }` until a new code appears (backoff polling, one `file/list` per poll). The title only ranks several new files — the diff identifies the upload, because Uqload's stored title is derived from the file name and never matches a cleaned title.
-   5. The browser posts only `{ providerFileId, thumbnailPath, categoryId, fileName }` to `POST /api/videos/upload` (a few hundred bytes). That route generates Gemini metadata and creates the video record.
-   6. If the confirmation window closes before the file appears, the admin UI shows **Re-check library** — it re-runs the same diff against the stored snapshot instead of re-uploading the bytes.
+Base: `https://ufoload.com/api/v1`, authenticated with `Authorization: Bearer ufo_...`.
 
-   Do not move `UQLOAD_API_KEY` into browser code merely to shorten this path.
-5. **Thumbnail behavior**: Each video has its own thumbnail picker — including every iframe embed and every remote link, not just local files. A custom thumbnail is stored in the public `video-thumbnails` bucket; Uqload's `player_img` is used as a fallback once it is available.
-6. **Processing status**: A publish click makes the video public immediately. `canplay=1` lets `/api/videos/status` refresh duration/player details and mark its upload job complete.
+| Purpose | Request |
+| --- | --- |
+| Start a direct upload | `POST /files/uploads` `{filename, size, mime_type?}` → `201 {upload_id, url, grant, authorization, chunk_size, max_bytes, expires_at}` |
+| Send one chunk | `PUT {url}?offset=N` with `Authorization: <authorization from the grant>`; at most `chunk_size` (never above 256 MiB) |
+| Resume after an interruption | `GET {url}` → `{"offset": N}` |
+| Keep the slot alive / read state | `GET /files/uploads/{upload_id}` → `{state: pending\|completing\|completed\|failed\|aborted, file_id?}` |
+| Finish | `POST /files/uploads/{upload_id}/complete` → `{file, duplicate}`; `409 upload_busy` means "still finalizing" (the app retries) |
+| Cancel / free the slot | `DELETE /files/uploads/{upload_id}` |
+| Read / rename / delete a file | `GET` · `PATCH {name}` · `DELETE /files/{fileID}` (a ULID, or the 11-character `public_id`) |
+| Start a URL import | `POST /files/import` `{url, name?}` → `202 {import: {id, status, progress, file_id?}}` |
+| Poll / cancel an import | `GET /files/import` (matched by task id) · `DELETE /files/import/{id}` |
+| Playback | iframe `https://ufoload.com/e/{identifier}` · watch page `https://ufoload.com/v/{identifier}` (`?autoplay=0&mute=1&loop=1` supported) |
 
-### If using replacement provider
+Notes the implementation relies on:
 
-1. Implement new class in `lib/video/provider.ts` that implements `VideoProvider` interface
-2. Update `getVideoProvider()` factory
-3. Set `VIDEO_PROVIDER=bunny` (or chosen name) and set its API keys
-4. Ensure embed/playable URLs are returned correctly and are not blocked by robots.txt
-5. Test: upload via `/admin/videos/upload`, check status via `/api/videos/status`, verify playback on `/video/[slug]`
+- A direct-upload grant reserves a concurrency slot; an abandoned upload holds it
+  for 15 minutes, which is why the browser pings `GET /files/uploads/{id}` every
+  5 minutes during a long transfer.
+- UFOLOAD allows at most **10 active imports** per account; the import batch stops
+  and explains itself when the provider answers `409`/`429` instead of hammering it.
+- The `links` set returned with a file is **signed and expires** (hours). Stable
+  addresses only are stored: the embed page and the provider watch page.
+- Read endpoints are rate-limited (about 20 requests/second per account); the app
+  issues one status request per row per 5 seconds and treats `429` as retryable.
+
+### Upload path — how large files get in
+
+Vercel functions reject any request body above **4.5 MB** with a plain-text
+`413 Request Entity Too Large` (which used to surface as
+`Unexpected token 'R', "Request En"... is not valid JSON`). Large files therefore
+never travel through one of our routes:
+
+1. `POST /api/videos/ufoload-session` (admin, JSON, a few hundred bytes) asks
+   UFOLOAD for a grant and stores the session on the `upload_jobs` row. The
+   response carries the node URL, the **upload-scoped grant** and the chunk
+   parameters — the API key stays on the server and is never returned.
+2. The browser `PUT`s the file in chunks straight to that node URL with
+   `XMLHttpRequest` (so real progress events are available), authenticated with
+   the grant. A failed chunk asks the node for its accepted offset and resumes
+   from there instead of restarting or skipping data.
+3. `POST /api/videos/upload` posts the *session* id (never a provider file id —
+   that is read back from UFOLOAD server-side), generates/reuses Gemini metadata
+   and creates the video row. The video is created **private**.
+4. The admin page polls `GET /api/videos/status?jobId=...` every 5 seconds until
+   UFOLOAD reports the file as `ready`, at which point the row is published.
+5. Cancel aborts the in-flight transfer and calls
+   `POST /api/videos/ufoload-cancel`, which drops the partial upload and frees the
+   concurrency slot.
+
+`/api/videos/upload-url` starts a URL import instead: it answers `queued` (never
+`published`), stores the provider's *task* id in `upload_jobs.provider_import_id`,
+and `/api/videos/status` resolves the task, then the created file, then `ready`.
+
+### Thumbnails
+
+Each video — local file, iframe embed or remote URL — has its own thumbnail
+picker. A custom thumbnail is uploaded to the public `video-thumbnails` bucket
+through the existing signed-upload flow (`POST /api/videos/storage-token` →
+browser `PUT`). Thumbnails never go through UFOLOAD. When no thumbnail is chosen,
+the provider's own poster (`file.poster`, a stable address) is used.
+
+> `POST /api/videos/storage-token` answers `410` for `kind: "video"`: video bytes
+> must not transit Supabase or a function body.
+
+### Readiness rules
+
+- A video is published only when the provider reports the file as `ready`.
+  `processing`/`queued`/`uploading` rows stay private (and invisible to crawlers);
+  `failed` rows keep the provider's reason in `videos.provider_error` and stay private.
+- `provider_progress` shows the encoder's own percentage while it works.
+- A provider outage is reported as a note in the status response — it never turns
+  the admin page into a 500, and it never publishes anything.
 
 ### Supabase Storage
 
@@ -439,7 +525,7 @@ shows `finished` for that address and amount) — see "Rollback and recovery".
 3. Optionally create bucket `videos` (private, only if you later implement an internal provider)
 4. Set policies: allow authenticated advertisers to upload/delete only within their own `ad-creatives/<user-id>/` folder; public read is needed for creative and thumbnail display.
 
-> **Legacy**: `video-incoming` (from migration `00000000000004_video_transit_storage.sql`) belonged to the abandoned Supabase-transit flow — video bytes now go straight from the browser to Uqload, so the bucket is no longer used. On Supabase projects with a 50 MB global file limit the migration's 2 GB bucket insert can fail; skip/ignore that bucket and do not upload video bytes to Supabase.
+> **Legacy**: `video-incoming` (from migration `00000000000004_video_transit_storage.sql`) is only used as a short-lived transit area if an older deployment still routes bytes there — video bytes now go straight from the browser to UFOLOAD, so the bucket is not needed. On Supabase projects with a 50 MB global file limit the migration's 2 GB bucket insert can fail; skip/ignore that bucket and do not upload video bytes to Supabase.
 6. The campaign and publisher flows now fail clearly if their required bucket is missing. Verify both bucket names before accepting uploads.
 
 ---
@@ -603,9 +689,9 @@ fly deploy
 | `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional pin for the IPN callback URL the app sends with every payment (must be an absolute URL ending in `/api/nowpayments/ipn`) | No | Your domain | Hosting env | prod (optional) | Admin → System Health shows `URL source`: `NOWPAYMENTS_IPN_CALLBACK_URL`; an invalid value is reported as a config warning and ignored | Yes |
 | `NOWPAYMENTS_DEFAULT_PAY_CURRENCY` | Default NOWPayments asset identifier | No | One of: usdterc20, usdttrc20, usdtbsc, usdtsol, btc, eth, trx, bnbbsc, sol | Hosting env | prod | Must be enabled in the NOWPayments dashboard; checkout validates every selection server-side | Yes |
 | `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key for `x-nowpayments-sig` verification | No | NOWPayments Dashboard → Store Settings → IPN Secret Key | Hosting secrets | prod | Admin → System Health shows IPN secret set; every IPN is rejected without it | Yes |
-| `VIDEO_PROVIDER` | Video hosting provider | No | Choose: internal, uqload, bunny, etc. | Hosting env | prod | `internal` for fallback | Yes |
-| `UQLOAD_API_KEY` | Uqload API key | No | https://uqload.vc → Account → API key | Hosting secrets | prod (if using) | Test via `GET /api/upload/server` | Yes |
-| `UQLOAD_ADULT_CONTENT_APPROVED` | Flag confirming written approval for adult content on Uqload | No | Set to `true` only after written provider confirmation | Hosting env | prod | Must be `true` AND `UQLOAD_API_KEY` set for Uqload to be enabled | Yes |
+| `VIDEO_PROVIDER` | Video hosting integration | Yes | `ufoload` (real uploads) or `internal` (embeds only) | Hosting env | prod | `ufoload` | Yes |
+| `UFOLOAD_API_KEY` | UFOLOAD API key (`ufo_...`) | Yes (for uploads) | https://ufoload.com dashboard → Developers | Hosting secrets | prod | Server-only; an upload session returns only the upload grant | Yes |
+| `UFOLOAD_ADULT_CONTENT_APPROVED` | Approval gate for adult content / commercial use / API uploads on UFOLOAD | Yes (for uploads) | Set to `true` only after written provider confirmation | Hosting env | prod | Uploads answer `503` naming this variable until it is `true` **and** the key is set | Yes |
 | `GEMINI_API_KEY` | Gemini API key for metadata suggestions | No | https://aistudio.google.com/apikey → Create API key | Hosting secrets | prod (optional) | Test via `/api/gemini/suggest` as admin | Yes |
 | `GEMINI_MODEL` | Gemini model name | No | Current docs, e.g., `gemini-flash-latest` | Hosting env | prod (optional) | Check https://ai.google.dev/gemini-api/docs for supported models | Yes |
 | `GEMINI_MAX_OUTPUT_TOKENS` | Output-token budget for one metadata suggestion | No | `2048` (default); thinking tokens count against it | Hosting env | prod (optional) | Raise it if suggestions are truncated | Yes |
@@ -614,7 +700,7 @@ fly deploy
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |
 
-**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `UQLOAD_API_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
+**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `UFOLOAD_API_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
 
 ---
 
@@ -643,9 +729,9 @@ npx playwright test
 
 **Admin:**
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
-- [ ] Video publisher at `/admin/videos/upload` → upload multiple local files, paste a public iframe source, or import one or more public direct-video URLs to Uqload
+- [ ] Video publisher at `/admin/videos/upload` → upload multiple local files (chunked upload straight to UFOLOAD), paste a public iframe source, or import one or more public direct-video URLs
 - [ ] Choose only a category and optional thumbnail; title, description, and tags are generated server-side by Gemini (`/api/gemini/suggest` contract: title, description, tags, category) before publishing
-- [ ] Publish action sets status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]` (Uqload can still be encoding)
+- [ ] Publish action sets status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]` **only after UFOLOAD reports the file as ready** (rows still encoding stay private)
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
 - [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject
@@ -695,10 +781,10 @@ npx playwright test
 
 **Video hosting:**
 - [ ] Provider adapter abstraction exists in `lib/video/provider.ts`
-- [ ] Uqload adapter: `getUploadServer` and `uploadFile` use real API per docs
-- [ ] Upload errors do not lead to false Published status — our code sets draft on failure
-- [ ] Large file uploads not routed through Vercel Function that exceeds limit — we use provider direct upload server
-- [ ] If Uqload disabled (adult content not approved), upload returns 503 with clear blocker message
+- [ ] UFOLOAD adapter: direct upload, imports, file state, rename and delete use the documented API (`lib/video/ufoload.ts`)
+- [ ] Upload errors do not lead to false Published status — a failed encode keeps the row private (`status=draft`) with `provider_error`
+- [ ] Large file uploads never transit a Vercel Function — the browser PUTs chunks to the node URL the provider returned
+- [ ] If the approval gate or the API key is missing, uploads return 503 with a clear blocker message
 
 **Email:**
 - [ ] Resend domain verified (check Resend dashboard)
@@ -758,14 +844,14 @@ update invoices set status='paid', paid_at=now() where number='...';
 
 **Video hosting outage:**
 1. Check provider status page
-2. If Uqload blocked, switch `VIDEO_PROVIDER=internal` temporarily and document blocker
-3. Existing published videos remain accessible if playable_url stored
+2. If UFOLOAD is unavailable, the admin page reports it as a note on the row and pauses publishing; do **not** switch `VIDEO_PROVIDER` to an unknown value (the factory fails closed). `VIDEO_PROVIDER=internal` disables new uploads and is for embed-only deployments.
+3. Existing published videos remain accessible because their stored embed/watch URLs do not expire
 
 ---
 
 ## Unresolved Provider Approvals and Blockers
 
-1. **Uqload adult content**: TOS prohibits pornography/nudity. Production uploads disabled unless `UQLOAD_ADULT_CONTENT_APPROVED=true` with written approval. This is a launch blocker — see `GO_LIVE_CHECKLIST.md`.
+1. **UFOLOAD adult content / commercial use**: The TOS (draft v0.1) has no explicit adult-content clause, so production uploads stay disabled until UFOLOAD confirms in writing that lawful adult content, commercial use, API uploads and embedded playback are permitted — then set `UFOLOAD_ADULT_CONTENT_APPROVED=true`. This is a launch blocker — see `GO_LIVE_CHECKLIST.md`.
 2. **Vercel Hobby**: Not suitable for commercial adult site. Hosting decision required — see `GO_LIVE_CHECKLIST.md`.
 3. **Age assurance**: Frontend gate alone not robust. Legal review required for jurisdiction-specific verification.
 4. **Legal identity**: Owner must provide real business details before publishing Terms/Privacy.

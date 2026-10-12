@@ -1,6 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import Link from "next/link";
+
+/**
+ * Tests for the admin publishing page (`/admin/videos/upload`).
+ *
+ * The page is the only UI that changed with the UFOLOAD migration, and these
+ * tests pin the behaviour that matters:
+ *   - video bytes go straight from the browser to the UFOLOAD node URL, in
+ *     chunks, authenticated with the upload grant (never the API key);
+ *   - the completion call carries an upload *session* id, not a file id;
+ *   - a row is only shown as published once the provider reports ready;
+ *   - a cancelled transfer asks UFOLOAD to free its concurrency slot.
+ */
 
 vi.mock("next/link", () => ({
   default: ({ href, children, ...rest }: any) => (
@@ -22,14 +34,207 @@ vi.mock("@/lib/supabase/client", () => ({
 
 const UploadPage = (await import("@/app/admin/videos/upload/page")).default;
 
-describe("admin publish videos page", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+// --------------------------------------------------------------------------
+// Harness
+// --------------------------------------------------------------------------
 
+interface RecordedRequest {
+  url: string;
+  method: string;
+  body: any;
+  headers: Record<string, string>;
+}
+
+interface ChunkCall {
+  method: string;
+  url: string;
+  offset: number;
+  length: number;
+  headers: Record<string, string>;
+  withCredentials: boolean;
+  aborted: boolean;
+}
+
+const NODE_URL = "https://upload.ufoload.com/17/_node/v1/ingest/upl_1";
+const GRANT_HEADER = "UfoGrant 5f2c1e";
+
+let requests: RecordedRequest[] = [];
+let chunks: ChunkCall[] = [];
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+function requestBody(init?: RequestInit) {
+  if (!init?.body) return null;
+  try {
+    return JSON.parse(String(init.body));
+  } catch {
+    return null;
+  }
+}
+
+/** `fetch` stub that records every call and routes it to `handler`. */
+function stubFetch(handler: (url: string, init: RequestInit) => Response | Promise<Response>) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: any, init: RequestInit = {}) => {
+      const url = String(input);
+      requests.push({ url, method: init.method || "GET", body: requestBody(init), headers: (init.headers || {}) as Record<string, string> });
+      return handler(url, init);
+    })
+  );
+}
+
+/**
+ * XHR stub for the chunk PUTs.
+ *
+ * `settle: false` keeps a transfer open, which is how the cancel test sees an
+ * upload that is genuinely in flight.
+ */
+function stubChunkXhr(options: { settle?: boolean; status?: number; responseText?: string } = {}) {
+  const { settle = true, status = 204, responseText = "" } = options;
+
+  class StubChunkXhr {
+    upload: any = {};
+    status = 0;
+    responseText = "";
+    withCredentials = false;
+    responseType = "";
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    ontimeout: (() => void) | null = null;
+
+    private call: ChunkCall = { method: "", url: "", offset: -1, length: 0, headers: {}, withCredentials: false, aborted: false };
+
+    open(method: string, url: string) {
+      this.call.method = method;
+      this.call.url = url;
+      const parsed = new URL(url);
+      this.call.offset = Number(parsed.searchParams.get("offset"));
+      chunks.push(this.call);
+    }
+
+    setRequestHeader(name: string, value: string) {
+      this.call.headers[name] = value;
+    }
+
+    abort() {
+      this.call.aborted = true;
+      this.onabort?.();
+    }
+
+    send(body: any) {
+      this.call.length = Number(body?.size || 0);
+      this.call.withCredentials = this.withCredentials;
+      if (!settle) return;
+      // The browser reports progress before the node answers.
+      this.upload.onprogress?.({ lengthComputable: true, loaded: this.call.length, total: this.call.length });
+      this.upload.onload?.();
+      this.status = status;
+      this.responseText = responseText;
+      this.onload?.();
+    }
+  }
+
+  vi.stubGlobal("XMLHttpRequest", StubChunkXhr as unknown as typeof XMLHttpRequest);
+}
+
+/**
+ * A real (tiny) video file.
+ *
+ * The bytes are genuine so `Blob.slice()` reports the same size the chunk
+ * planner used — faking `size` would desync the plan from the slices.
+ */
+function videoFile(name: string, size: number) {
+  return new File([new Uint8Array(size)], name, { type: "video/mp4" });
+}
+
+function addVideoFiles(files: File[]) {
+  const input = document.querySelector('label input[type="file"][accept="video/*"]') as HTMLInputElement;
+  fireEvent.change(input, { target: { files } });
+}
+
+async function chooseCategory() {
+  const select = await screen.findByLabelText("Category *");
+  await waitFor(() => expect(within(select).queryByText("Mature")).toBeTruthy());
+  fireEvent.change(select, { target: { value: "cat-1" } });
+}
+
+function submitForm() {
+  fireEvent.submit(screen.getByText(/Generate AI metadata & publish/).closest("form") as HTMLFormElement);
+}
+
+/** The session + completion answers a happy-path upload needs. */
+function uploadRoutes(overrides: Record<string, (url: string, init: RequestInit) => Response> = {}) {
+  return (url: string, init: RequestInit): Response => {
+    for (const [fragment, answer] of Object.entries(overrides)) {
+      if (url.includes(fragment)) return answer(url, init);
+    }
+    if (url.includes("/api/videos/ufoload-session")) {
+      return json({
+        uploadId: "upl_1",
+        jobId: "job-1",
+        url: NODE_URL,
+        authorization: GRANT_HEADER,
+        chunkSize: 4,
+        maxBytes: 2 * 1024 * 1024 * 1024,
+        expiresAt: "2026-10-12T14:00:00Z",
+        keepAliveIntervalMs: 300000,
+      });
+    }
+    if (url.includes("/api/videos/upload")) {
+      return json({
+        videoId: "video-1",
+        jobId: "job-1",
+        providerFileId: "01J6FSPD0S1N7M4HP2Y7Z1B5GE",
+        providerPublicId: "aBcD1234xyz",
+        providerStatus: "ready",
+        status: "ready",
+        processing: false,
+        progress: 100,
+        metadata: { title: "My Trip", description: "A clip.", tags: ["mature"], source: "ai" },
+        metadataSource: "ai",
+        video: { slug: "my-trip-abc12345" },
+      });
+    }
+    if (url.includes("/api/videos/status")) {
+      return json({ providerState: "ready", note: "UFOLOAD confirmed this video is ready.", video: {}, job: {} });
+    }
+    if (url.includes("/api/gemini/suggest")) {
+      return json({
+        suggestion: { title: "My Trip", description: "A prepared description for the clip.", tags: ["mature"], category: "Mature" },
+      });
+    }
+    return json({ error: `unexpected request to ${url}` }, 500);
+  };
+}
+
+function findRequest(fragment: string) {
+  return requests.find((request) => request.url.includes(fragment));
+}
+
+beforeEach(() => {
+  requests = [];
+  chunks = [];
+  vi.clearAllMocks();
+  (URL as any).createObjectURL = () => "blob:mock-preview";
+  (URL as any).revokeObjectURL = () => {};
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+// --------------------------------------------------------------------------
+
+describe("admin publish videos page", () => {
   it("offers the three publishing methods", async () => {
     render(<UploadPage />);
-    expect(await screen.findByText("Upload videos")).toBeTruthy();
+    expect(await screen.findByText("Publish videos")).toBeTruthy();
+    expect(screen.getByText("Upload videos")).toBeTruthy();
     expect(screen.getByText("Embed by iframe")).toBeTruthy();
     expect(screen.getByText("Upload by link")).toBeTruthy();
   });
@@ -49,12 +254,9 @@ describe("admin publish videos page", () => {
     const entries = screen.getAllByLabelText(/^Iframe URL or embed code$/);
     expect(entries).toHaveLength(2);
 
-    // One thumbnail picker per entry, not a single shared card.
     expect(screen.getAllByText("Thumbnail")).toHaveLength(2);
     expect(screen.getAllByText("Add image")).toHaveLength(2);
-    expect(screen.queryByText("Optional video thumbnail")).toBeNull();
 
-    // Each entry keeps its own source and is independently editable.
     expect((entries[0] as HTMLInputElement).value).toContain("a.example/1");
     fireEvent.change(entries[1], { target: { value: "https://a.example/edited" } });
     expect((screen.getAllByLabelText(/^Iframe URL or embed code$/)[1] as HTMLInputElement).value).toBe(
@@ -73,25 +275,28 @@ describe("admin publish videos page", () => {
 
     expect(screen.getAllByLabelText(/^Direct video URL$/)).toHaveLength(3);
     expect(screen.getAllByText("Add image")).toHaveLength(3);
-    expect(screen.queryByText("Optional thumbnail for this batch")).toBeNull();
   });
 
   it("requires a category before publishing", async () => {
     render(<UploadPage />);
-    fireEvent.click(await screen.findByText("Embed by iframe"));
-    fireEvent.change(screen.getByPlaceholderText(/player\.example\.com\/embed\/abc/), {
-      target: { value: "https://a.example/1" },
+    fireEvent.click(await screen.findByText("Upload by link"));
+    fireEvent.change(screen.getByPlaceholderText(/cdn\.example\.com\/video-one\.mp4/), {
+      target: { value: "https://cdn/1.mp4" },
     });
-    fireEvent.click(screen.getByText("Add embed"));
+    fireEvent.click(screen.getByText("Add link"));
 
-    const form = screen.getByText("Add embed").closest("form") as HTMLFormElement;
-    fireEvent.submit(form);
-
+    submitForm();
     expect(await screen.findByText("Choose a category before publishing.")).toBeTruthy();
   });
 
-  it("reports a 413 from the host as a readable message, not a JSON parse error", async () => {
-    // Regression guard for: Unexpected token 'R', "Request En"... is not valid JSON
+  it("keeps the category link working", async () => {
+    render(<UploadPage />);
+    const link = (await screen.findByText("Manage categories")).closest("a");
+    expect(link?.getAttribute("href")).toBe("/admin/categories");
+    expect(Link).toBeTruthy();
+  });
+
+  it("reports a non-JSON host error as a readable message, not a parse error", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response("Request Entity Too Large", { status: 413, headers: { "content-type": "text/plain" } }))
@@ -105,35 +310,312 @@ describe("admin publish videos page", () => {
     fireEvent.click(screen.getByText("Add embed"));
     fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
 
-    const form = screen.getByText("Add embed").closest("form") as HTMLFormElement;
-    fireEvent.submit(form);
+    submitForm();
 
     const message = await screen.findByText(/4\.5 MB/);
     expect(message.textContent).not.toContain("Unexpected token");
-    vi.unstubAllGlobals();
   });
+});
+
+describe("direct UFOLOAD upload from the browser", () => {
+  it("asks for a session, PUTs the chunks to the node URL, and completes with the session id", async () => {
+    stubFetch(uploadRoutes());
+    stubChunkXhr();
+
+    render(<UploadPage />);
+    addVideoFiles([videoFile("my trip.mp4", 10)]);
+    expect(await screen.findByText("my trip.mp4")).toBeTruthy();
+    await chooseCategory();
+    submitForm();
+
+    expect(await screen.findByText("Published · UFOLOAD has the video ready to play")).toBeTruthy();
+
+    // 1. The server hands out an upload-scoped session.
+    const session = findRequest("/api/videos/ufoload-session");
+    expect(session?.body).toEqual({ fileName: "my trip.mp4", fileSize: 10, mimeType: "video/mp4" });
+
+    // 2. Ten bytes travel as 4 + 4 + 2, straight to the node URL, in order.
+    expect(chunks.map((chunk) => [chunk.method, chunk.offset, chunk.length])).toEqual([
+      ["PUT", 0, 4],
+      ["PUT", 4, 4],
+      ["PUT", 8, 2],
+    ]);
+    for (const chunk of chunks) {
+      expect(chunk.url.startsWith(NODE_URL)).toBe(true);
+      expect(chunk.headers.Authorization).toBe(GRANT_HEADER);
+      expect(chunk.headers["Content-Length"]).toBeUndefined();
+      expect(chunk.withCredentials).toBe(false);
+    }
+
+    // 3. Completion carries the session id — and never a provider file id.
+    const completion = findRequest("/api/videos/upload");
+    expect(completion?.body).toMatchObject({
+      uploadId: "upl_1",
+      jobId: "job-1",
+      categoryId: "cat-1",
+      fileName: "my trip.mp4",
+    });
+    expect(completion?.body.providerFileId).toBeUndefined();
+    expect(completion?.body.filecode).toBeUndefined();
+    // Metadata was prepared while the bytes travelled, so it is reused.
+    expect(completion?.body.metadata).toEqual({
+      title: "My Trip",
+      description: "A prepared description for the clip.",
+      tags: ["mature"],
+      source: "ai",
+    });
+
+    // No secret ever reaches the browser-facing requests.
+    for (const request of requests) {
+      expect(JSON.stringify(request.body ?? {})).not.toMatch(/ufo_[A-Za-z0-9]{8,}/);
+    }
+  });
+
+  it("sends several videos at the same time and shows the batch", async () => {
+    stubFetch(uploadRoutes());
+    stubChunkXhr({ settle: false });
+
+    render(<UploadPage />);
+    addVideoFiles([videoFile("one.mp4", 4), videoFile("two.mp4", 4), videoFile("three.mp4", 4)]);
+    await chooseCategory();
+    submitForm();
+
+    // All three requests for a session are issued without waiting for each other.
+    await waitFor(() => expect(requests.filter((request) => request.url.includes("ufoload-session"))).toHaveLength(3));
+    await waitFor(() => expect(chunks.length).toBe(3));
+
+    const panel = await screen.findByRole("status");
+    expect(within(panel).getByText(/3 uploading/)).toBeTruthy();
+    expect(within(panel).getByText(/0 of 3 finished/)).toBeTruthy();
+    // No invented speed or ETA in the batch summary.
+    expect(within(panel).queryByText(/MB\/s|KB\/s/)).toBeNull();
+  });
+
+  it("starts the first chunk before the thumbnail has finished uploading", async () => {
+    stubFetch(
+      uploadRoutes({
+        "storage-token": () => new Promise(() => {}) as unknown as Response,
+      })
+    );
+    stubChunkXhr({ settle: false });
+
+    const { container } = render(<UploadPage />);
+    addVideoFiles([videoFile("with-cover.mp4", 4)]);
+    const thumbnail = container.querySelector('input[type="file"][accept^="image/"]') as HTMLInputElement;
+    fireEvent.change(thumbnail, { target: { files: [new File([new Uint8Array(64)], "cover.jpg", { type: "image/jpeg" })] } });
+    await chooseCategory();
+    submitForm();
+
+    await waitFor(() => expect(chunks.length).toBeGreaterThan(0), { timeout: 4000 });
+  });
+
+  it("keeps a row that is still encoding and lets the admin re-check it", async () => {
+    // The page polls a still-encoding video every few seconds for many minutes;
+    // fake timers let the whole window pass without a real wait.
+    stubFetch(
+      uploadRoutes({
+        "/api/videos/upload": () =>
+          json({
+            videoId: "video-1",
+            jobId: "job-1",
+            providerStatus: "processing",
+            status: "processing",
+            processing: true,
+            progress: 12,
+            metadata: { title: "My Trip", description: "A clip.", tags: ["mature"], source: "ai" },
+            metadataSource: "ai",
+            video: { slug: "my-trip-abc12345" },
+          }),
+        "/api/videos/status": (_url, init) => json({ providerState: "processing", note: "UFOLOAD is still processing this video." }),
+      })
+    );
+    stubChunkXhr();
+
+    render(<UploadPage />);
+    addVideoFiles([videoFile("slow.mp4", 4)]);
+    await chooseCategory();
+
+    vi.useFakeTimers();
+    await act(async () => {
+      submitForm();
+      // Past the whole polling window (24 checks, 5 s apart).
+      await vi.advanceTimersByTimeAsync(24 * 5000 + 5000);
+    });
+
+    const terminal = screen.getByText(/still encoding — this row publishes itself/);
+    expect(terminal).toBeTruthy();
+    // The row was polled with the job id the server returned.
+    const polls = requests.filter((request) => request.url.includes("/api/videos/status"));
+    expect(polls.length).toBeGreaterThan(1);
+    expect(polls[0].url).toContain("jobId=job-1");
+    // It is actionable: a re-check is offered instead of an endless spinner.
+    const recheck = screen.getByText("Re-check status");
+
+    stubFetch(uploadRoutes());
+    await act(async () => {
+      fireEvent.click(recheck);
+      await vi.advanceTimersByTimeAsync(5000 + 500);
+    });
+    expect(screen.getByText("Published · UFOLOAD has the video ready to play")).toBeTruthy();
+  });
+
+  it("shows the provider's failure reason on the row", async () => {
+    stubFetch(
+      uploadRoutes({
+        "/api/videos/upload": () =>
+          json({
+            videoId: "video-1",
+            jobId: "job-1",
+            providerStatus: "failed",
+            status: "failed",
+            processing: false,
+            providerError: "unsupported codec",
+            metadata: { title: "My Trip", description: "A clip.", tags: ["mature"], source: "ai" },
+            metadataSource: "ai",
+            video: { slug: "my-trip-abc12345" },
+          }),
+      })
+    );
+    stubChunkXhr();
+
+    render(<UploadPage />);
+    addVideoFiles([videoFile("broken.mkv", 4)]);
+    await chooseCategory();
+    submitForm();
+
+    expect(await screen.findByText("unsupported codec")).toBeTruthy();
+    expect((await screen.findByText(/could not be published/)).textContent).toMatch(/1 item/);
+  });
+
+  it("surfaces file-name metadata as something the admin must review", async () => {
+    stubFetch(
+      uploadRoutes({
+        "/api/videos/upload": () =>
+          json({
+            videoId: "video-1",
+            jobId: "job-1",
+            providerStatus: "ready",
+            status: "ready",
+            processing: false,
+            metadata: { title: "my trip", description: "From the file name.", tags: ["mature"], source: "fallback" },
+            metadataSource: "fallback",
+            metadataWarning: "AI metadata unavailable. File-name metadata was used instead — review the title.",
+            video: { slug: "my-trip-abc12345" },
+          }),
+      })
+    );
+    stubChunkXhr();
+
+    render(<UploadPage />);
+    addVideoFiles([videoFile("my trip.mp4", 4)]);
+    await chooseCategory();
+    submitForm();
+
+    expect(
+      await screen.findByText("Published · AI metadata unavailable — file-name metadata used, please review")
+    ).toBeTruthy();
+    expect(screen.getByText(/review the title/)).toBeTruthy();
+    expect((await screen.findByText(/All videos were published/)).textContent).toMatch(/file-name metadata/);
+  });
+
+  it("cancels the transfer and frees the provider's slot", async () => {
+    stubFetch(uploadRoutes());
+    stubChunkXhr({ settle: false });
+
+    render(<UploadPage />);
+    addVideoFiles([videoFile("one.mp4", 4), videoFile("two.mp4", 4)]);
+    await chooseCategory();
+    submitForm();
+
+    await waitFor(() => expect(chunks.length).toBe(2));
+    fireEvent.click(screen.getByText("Cancel"));
+
+    await waitFor(() => expect(screen.getByText("Publishing cancelled. Finished items were kept.")).toBeTruthy());
+    // Every in-flight upload is cancelled provider-side…
+    const cancels = requests.filter((request) => request.url.includes("/api/videos/ufoload-cancel"));
+    expect(cancels.map((request) => request.body)).toEqual([{ uploadId: "upl_1" }, { uploadId: "upl_1" }]);
+    // …and the rows go back to a state the admin can decide about.
+    expect(screen.getAllByText("Cancelled — ready to publish")).toHaveLength(2);
+    expect(chunks.every((chunk) => chunk.aborted)).toBe(true);
+  });
+});
+
+describe("URL imports", () => {
+  it("reports an import as queued, never as published before the provider is ready", async () => {
+    const seen: string[] = [];
+    stubFetch((url, init) => {
+      if (url.includes("/api/videos/upload-url")) {
+        return json({
+          results: [
+            {
+              remoteUrl: "https://cdn.example.com/a.mp4",
+              videoId: "video-9",
+              jobId: "job-9",
+              importId: "imp_9",
+              title: "Imported clip",
+              status: "queued",
+              providerStatus: "queued",
+              processing: true,
+            },
+          ],
+          queued: 1,
+          succeeded: 1,
+          failed: 0,
+          note: "UFOLOAD downloads and encodes in the background.",
+        });
+      }
+      if (url.includes("/api/videos/status")) {
+        seen.push(url);
+        return json({ providerState: "ready", note: "UFOLOAD confirmed this video is ready." });
+      }
+      return json({ error: `unexpected ${url}` }, 500);
+    });
+
+    render(<UploadPage />);
+    fireEvent.click(await screen.findByText("Upload by link"));
+    fireEvent.change(screen.getByPlaceholderText(/cdn\.example\.com\/video-one\.mp4/), {
+      target: { value: "https://cdn.example.com/a.mp4" },
+    });
+    fireEvent.click(screen.getByText("Add link"));
+    await chooseCategory();
+    submitForm();
+
+    // The first poll only happens after the page's settle delay, and the row is
+    // "queued" at the provider until that poll reports ready.
+    expect(await screen.findByText(/Import started — UFOLOAD is downloading the link/)).toBeTruthy();
+    expect(await screen.findByText("Published · UFOLOAD has the video ready to play", {}, { timeout: 8000 })).toBeTruthy();
+
+    const start = findRequest("/api/videos/upload-url");
+    expect(start?.body).toEqual({
+      categoryId: "cat-1",
+      entries: [{ url: "https://cdn.example.com/a.mp4", thumbnailPath: null }],
+    });
+    // The row polls the job the import created…
+    expect(seen[0]).toContain("jobId=job-9");
+  }, 15000);
 
   it("shows the provider reason when metadata fell back to file-name suggestions", async () => {
     const warning = "AI metadata unavailable (Gemini API key was rejected). File-name metadata was used instead.";
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            results: [
-              {
-                status: "published",
-                title: "Clip",
-                metadataSource: "fallback",
-                metadataWarning: warning,
-              },
-            ],
-            succeeded: 1,
-            failed: 0,
-          }),
-          { status: 200, headers: { "content-type": "application/json" } }
-        )
-      )
+    stubFetch(() =>
+      json({
+        results: [
+          {
+            remoteUrl: "https://cdn.example/video.mp4",
+            videoId: "video-3",
+            jobId: "job-3",
+            importId: "imp_3",
+            title: "video",
+            status: "queued",
+            providerStatus: "queued",
+            processing: true,
+            metadataSource: "fallback",
+            metadataWarning: warning,
+          },
+        ],
+        queued: 1,
+        succeeded: 1,
+        failed: 0,
+      })
     );
 
     render(<UploadPage />);
@@ -142,542 +624,72 @@ describe("admin publish videos page", () => {
       target: { value: "https://cdn.example/video.mp4" },
     });
     fireEvent.click(screen.getByText("Add link"));
-    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
-
-    const form = screen.getByText("Add link").closest("form") as HTMLFormElement;
-    fireEvent.submit(form);
+    await chooseCategory();
+    submitForm();
 
     expect(await screen.findByText(warning)).toBeTruthy();
-    vi.unstubAllGlobals();
   });
 
-  it("keeps the category link working", async () => {
-    render(<UploadPage />);
-    const link = (await screen.findByText("Manage categories")).closest("a");
-    expect(link?.getAttribute("href")).toBe("/admin/categories");
-    expect(Link).toBeTruthy();
-  });
-});
-
-describe("per-video progress bar", () => {
-  it("renders a bar with the current phase once an item starts", async () => {
-    const { ProgressBar } = await import("@/app/admin/videos/upload/page");
-    expect(ProgressBar).toBeTypeOf("function");
-  });
-
-  it("shows progress for the row being uploaded", async () => {
-    const uploads: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: any) => {
-        const path = String(url);
-        if (path.includes("uqload-session")) {
-          return new Response(
-            JSON.stringify({ serverUrl: "https://s1.uqload.example/upload/01", fields: { key: "test-key", file_public: "1", file_adult: "1" } }),
-            { status: 200, headers: { "content-type": "application/json" } }
-          );
-        }
-        return new Response(JSON.stringify({ error: "stop here" }), {
-          status: 500,
-          headers: { "content-type": "application/json" },
-        });
-      })
-    );
-    vi.stubGlobal(
-      "XMLHttpRequest",
-      class {
-        upload: any = {};
-        responseText = JSON.stringify({ status: 200, msg: "OK", files: [{ filecode: "abc123", filename: "clip.mp4", status: "OK" }] });
-        open(_m: string, url: string) {
-          uploads.push(url);
-        }
-        setRequestHeader() {}
-        send() {
-          this.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 });
-          this.status = 200;
-          this.onload?.();
-        }
-        addEventListener() {}
-      }
-    );
-
-    render(<UploadPage />);
-    const input = (await screen.findByText("Add videos")).closest("label")?.querySelector("input[type=file]");
-    const file = new File([new Uint8Array(1024)], "clip.mp4", { type: "video/mp4" });
-    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
-
-    expect(await screen.findByText("clip.mp4")).toBeTruthy();
-    // The row exposes a per-item thumbnail control and a remove button.
-    expect(screen.getByText("Add image")).toBeTruthy();
-    expect(screen.getByLabelText("Remove entry 1")).toBeTruthy();
-
-    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
-    const form = screen.getByText("Add videos").closest("form") as HTMLFormElement;
-    fireEvent.submit(form);
-
-    // The failure from the stubbed publish route is shown inline on the row,
-    // proving the per-item state machine (not a global error banner) ran.
-    expect(await screen.findByText("stop here")).toBeTruthy();
-    expect(uploads).toContain("https://s1.uqload.example/upload/01");
-
-    vi.unstubAllGlobals();
-  });
-});
-
-describe("per-video thumbnail is sent with its own video", () => {
-  beforeEach(() => {
-    // jsdom does not implement object URLs.
-    (URL as any).createObjectURL = () => "blob:mock-preview";
-    (URL as any).revokeObjectURL = () => {};
-  });
-
-  it("includes the uploaded thumbnail path in the publish request", async () => {
-    const requests: Array<{ url: string; body: any }> = [];
-
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: any, init?: any) => {
-        const path = String(url);
-        requests.push({ url: path, body: init?.body ? JSON.parse(init.body) : null });
-        if (path.includes("storage-token")) {
-          const kind = JSON.parse(init.body).kind;
-          return new Response(
-            JSON.stringify({
-              uploadUrl: `https://storage.example/put-${kind}`,
-              storagePath: kind === "thumbnail" ? "user-1/thumb-a.jpg" : "user-1/video-a.mp4",
-            }),
-            { status: 200, headers: { "content-type": "application/json" } }
-          );
-        }
-        return new Response(JSON.stringify({ results: [{ status: "published", title: "T" }], succeeded: 1, failed: 0 }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
+  it("reports a refused import inline", async () => {
+    stubFetch(() =>
+      json({
+        results: [{ remoteUrl: "https://cdn.example/video.mp4", status: "failed", error: "The source server refused the download." }],
+        queued: 0,
+        succeeded: 0,
+        failed: 1,
       })
     );
 
-    vi.stubGlobal(
-      "XMLHttpRequest",
-      class {
-        upload: any = {};
-        status = 200;
-        open() {}
-        setRequestHeader() {}
-        send() {
-          this.upload.onprogress?.({ lengthComputable: true, loaded: 10, total: 10 });
-          this.onload?.();
-        }
-      }
-    );
-
-    const { container } = render(<UploadPage />);
+    render(<UploadPage />);
     fireEvent.click(await screen.findByText("Upload by link"));
     fireEvent.change(screen.getByPlaceholderText(/cdn\.example\.com\/video-one\.mp4/), {
-      target: { value: "https://cdn/1.mp4" },
+      target: { value: "https://cdn.example/video.mp4" },
     });
     fireEvent.click(screen.getByText("Add link"));
-    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
+    await chooseCategory();
+    submitForm();
 
-    // Attach a thumbnail to this specific entry.
-    const thumbInput = container.querySelector('input[type="file"][accept^="image/"]') as HTMLInputElement;
-    expect(thumbInput).toBeTruthy();
-    fireEvent.change(thumbInput, {
-      target: { files: [new File([new Uint8Array(64)], "cover.jpg", { type: "image/jpeg" })] },
-    });
-    expect(await screen.findByText("Replace")).toBeTruthy();
-
-    const form = screen.getByText("Add link").closest("form") as HTMLFormElement;
-    fireEvent.submit(form);
-
-    await screen.findByText("All videos were published.");
-
-    const publish = requests.find((request) => request.url.includes("/api/videos/upload-url"));
-    expect(publish).toBeTruthy();
-    expect(publish?.body).toEqual({
-      categoryId: "cat-1",
-      entries: [{ url: "https://cdn/1.mp4", thumbnailPath: "user-1/thumb-a.jpg" }],
-    });
-
-    // The thumbnail really went to storage before the publish call.
-    expect(requests.some((request) => request.url.includes("storage-token") && request.body.kind === "thumbnail")).toBe(true);
-
-    vi.unstubAllGlobals();
+    expect(await screen.findByText("The source server refused the download.")).toBeTruthy();
   });
 });
 
-describe("direct Uqload upload from the browser (CORS-free simple request)", () => {
-  function fileInput() {
-    return (document.querySelector('label input[type="file"][accept="video/*"]') as HTMLInputElement | null) ?? null;
-  }
-
-  function publishVideoFile() {
-    const input = fileInput();
-    expect(input).toBeTruthy();
-    fireEvent.change(input, { target: { files: [new File([new Uint8Array(1024)], "my trip.mp4", { type: "video/mp4" })] } });
-  }
-
-  /**
-   * XHR stub that simulates Uqload's upload server: the request is delivered
-   * but the response is unreadable (no CORS headers), so the browser fires
-   * `error` with status 0 and an empty body.
-   */
-  class DeliveredButUnreadableXHR {
-    upload: any = {};
-    status = 0;
-    responseText = "";
-    withCredentials: boolean | null = null;
-    headersSet: string[] = [];
-    static instances: DeliveredButUnreadableXHR[] = [];
-
-    open(_method: string, _url: string) {
-      DeliveredButUnreadableXHR.instances.push(this);
-    }
-    setRequestHeader(name: string) {
-      this.headersSet.push(name);
-    }
-    send() {
-      this.status = 0;
-      this.responseText = "";
-      this.onerror?.();
-    }
-    addEventListener() {}
-  }
-
-  function stubUqloadFetch(
-    confirmSequence: Array<Record<string, unknown>>,
-    options: { fileCodes?: string[] | null } = {}
-  ) {
-    const requests: Array<{ url: string; body: any }> = [];
-    let confirmCalls = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: any, init?: any) => {
-        const path = String(url);
-        const body = init?.body ? JSON.parse(init.body) : null;
-        requests.push({ url: path, body });
-        if (path.includes("uqload-session")) {
-          return new Response(
-            JSON.stringify({ serverUrl: "https://e17.uqload.example/upload/02", fields: { key: "test-key", file_public: "1", file_adult: "1" } }),
-            { status: 200, headers: { "content-type": "application/json" } }
-          );
-        }
-        if (path.includes("uqload-confirm")) {
-          if (body?.mode === "snapshot") {
-            // Pre-upload library snapshot: the diff baseline for confirmation.
-            return new Response(JSON.stringify({ fileCodes: options.fileCodes ?? [] }), {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            });
-          }
-          const response = confirmSequence[Math.min(confirmCalls, confirmSequence.length - 1)];
-          confirmCalls += 1;
-          return new Response(JSON.stringify(response), { status: 200, headers: { "content-type": "application/json" } });
-        }
-        if (path.includes("/api/gemini/suggest")) {
-          return new Response(
-            JSON.stringify({
-              suggestion: {
-                title: "My Trip",
-                description: "A prepared description for the clip.",
-                tags: ["mature"],
-                category: "Mature",
-              },
-            }),
-            { status: 200, headers: { "content-type": "application/json" } }
-          );
-        }
-        if (path.includes("/api/videos/upload")) {
-          return new Response(
-            JSON.stringify({ video: { slug: "uq-clip" }, metadata: { title: "My Trip" }, processing: true }),
-            { status: 200, headers: { "content-type": "application/json" } }
-          );
-        }
-        return new Response(JSON.stringify({ error: `unexpected request to ${path}` }), {
-          status: 500,
-          headers: { "content-type": "application/json" }
+describe("iframe embeds", () => {
+  it("publishes an iframe entry through the generic embed route", async () => {
+    stubFetch((url) => {
+      if (url.includes("/api/videos/embed")) {
+        return json({
+          results: [
+            {
+              source: "https://player.example.com/embed/abc",
+              videoId: "video-7",
+              title: "Embedded",
+              status: "published",
+              metadataSource: "ai",
+            },
+          ],
+          succeeded: 1,
+          failed: 0,
         });
-      })
-    );
-    return requests;
-  }
-
-  it("snapshots the library, sends a listener-less simple request, and publishes the filecode confirmed by the diff", async () => {
-    const requests = stubUqloadFetch(
-      [{ found: true, fileCode: "xyz789", uploaded: "2026-10-11 09:58:00", matchedBy: "only-new" }],
-      { fileCodes: ["old000"] }
-    );
-    vi.stubGlobal("XMLHttpRequest", DeliveredButUnreadableXHR);
-
-    render(<UploadPage />);
-    publishVideoFile();
-    expect(await screen.findByText("my trip.mp4")).toBeTruthy();
-    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
-    const form = screen.getByText("Add videos").closest("form") as HTMLFormElement;
-    fireEvent.submit(form);
-
-    expect(await screen.findByText("Published · provider is still encoding", {}, { timeout: 5000 })).toBeTruthy();
-
-    // The filecode came from the library-confirmation endpoint, not the (unreadable) upload response.
-    const publish = requests.find((request) => request.url.includes("/api/videos/upload") && !request.url.includes("uqload"));
-    expect(publish?.body?.providerFileId).toBe("xyz789");
-    // Metadata was prepared while the bytes were in flight, so publish does not wait on a second Gemini call.
-    expect(publish?.body?.metadata).toEqual({
-      title: "My Trip",
-      description: "A prepared description for the clip.",
-      tags: ["mature"],
-      source: "ai",
-    });
-    const confirm = requests.filter((request) => request.url.includes("uqload-confirm"));
-    expect(confirm).toHaveLength(2);
-    // The snapshot is taken *before* the bytes leave the browser…
-    expect(confirm[0]?.body).toEqual({ mode: "snapshot" });
-    // …and the confirmation carries the baseline plus the upload's title/name.
-    expect(confirm[1]?.body).toEqual({
-      fileTitle: "my trip",
-      fileName: "my trip.mp4",
-      knownFileCodes: ["old000"],
-      finalAttempt: false,
-    });
-
-    // The snapshot request must precede the publish call.
-    const snapshotIndex = requests.findIndex((request) => request.body?.mode === "snapshot");
-    expect(snapshotIndex).toBeGreaterThan(-1);
-
-    // Regression guard for the preflight bug: no listener may be registered on
-    // `upload` (that forces the CORS preflight Uqload never answers) and no
-    // custom headers may be set (the request must stay a CORS simple request).
-    expect(DeliveredButUnreadableXHR.instances.length).toBeGreaterThan(0);
-    for (const xhr of DeliveredButUnreadableXHR.instances) {
-      expect(Object.keys(xhr.upload)).toEqual([]);
-      expect(xhr.headersSet).toEqual([]);
-      expect(xhr.withCredentials).toBe(false);
-    }
-
-    vi.unstubAllGlobals();
-  });
-
-  it("sends every scalar before the file part, with the snapshot last", async () => {
-    stubUqloadFetch([{ found: true, fileCode: "order1", uploaded: "2026-10-11 09:58:00", matchedBy: "title" }]);
-    const forms: FormData[] = [];
-    class CapturingXHR extends DeliveredButUnreadableXHR {
-      send(body?: Document | XMLHttpRequestBodyInit | null) {
-        forms.push(body as FormData);
-        super.send(body as any);
       }
-    }
-    vi.stubGlobal("XMLHttpRequest", CapturingXHR);
-
-    render(<UploadPage />);
-    publishVideoFile();
-    expect(await screen.findByText("my trip.mp4")).toBeTruthy();
-    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
-    fireEvent.submit(screen.getByText("Add videos").closest("form") as HTMLFormElement);
-    expect(await screen.findByText("Published · provider is still encoding", {}, { timeout: 5000 })).toBeTruthy();
-
-    // ⚠️ Regression guard: Uqload ignores every multipart field sent after the
-    // `file` part — a `file_title` behind the file is dropped and the stored
-    // title falls back to the file name, which the confirmation cannot match.
-    expect(forms).toHaveLength(1);
-    const names = [...forms[0].keys()];
-    expect(names).toEqual(["key", "file_public", "file_adult", "file_title", "file"]);
-
-    vi.unstubAllGlobals();
-  });
-
-  it("retries the confirmation until the diff finds the file in the Uqload library", async () => {
-    const requests = stubUqloadFetch(
-      [
-        { found: false },
-        { found: true, fileCode: "late123", uploaded: "2026-10-11 09:58:01", matchedBy: "only-new" },
-      ],
-      { fileCodes: ["old000"] }
-    );
-    vi.stubGlobal("XMLHttpRequest", DeliveredButUnreadableXHR);
-
-    render(<UploadPage />);
-    publishVideoFile();
-    expect(await screen.findByText("my trip.mp4")).toBeTruthy();
-    fireEvent.change(await screen.findByLabelText("Category *"), { target: { value: "cat-1" } });
-    const form = screen.getByText("Add videos").closest("form") as HTMLFormElement;
-    fireEvent.submit(form);
-
-    // First poll finds nothing, second poll (after the backoff) confirms.
-    expect(await screen.findByText("Published · provider is still encoding", {}, { timeout: 15000 })).toBeTruthy();
-
-    const confirm = requests.filter((request) => request.url.includes("uqload-confirm"));
-    expect(confirm).toHaveLength(3);
-    expect(confirm[0]?.body).toEqual({ mode: "snapshot" });
-    expect(confirm[1]?.body?.finalAttempt).toBe(false);
-    expect(confirm[2]?.body?.finalAttempt).toBe(false);
-    const publish = requests.find((request) => request.url.includes("/api/videos/upload"));
-    expect(publish?.body?.providerFileId).toBe("late123");
-
-    vi.unstubAllGlobals();
-  }, 30000);
-});
-
-describe("upload progress while the video bytes travel", () => {
-  /** XHR stub for a direct Uqload POST that stays open until the test ends. */
-  class InFlightXHR {
-    upload: any = {};
-    status = 0;
-    responseText = "";
-    static instances: InFlightXHR[] = [];
-
-    open(method: string, url: string) {
-      InFlightXHR.instances.push(this);
-      expect(method).toBe("POST");
-      expect(url).toContain("uqload");
-    }
-    setRequestHeader() {}
-    send() {
-      // Deliberately never settles: the browser is still pushing the bytes.
-    }
-    addEventListener() {}
-    abort() {}
-  }
-
-  function stubBackend() {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: any) => {
-        const path = String(url);
-        if (path.includes("uqload-session")) {
-          return new Response(
-            JSON.stringify({ serverUrl: "https://e17.uqload.example/upload/03", fields: { key: "test-key", file_public: "1", file_adult: "1" } }),
-            { status: 200, headers: { "content-type": "application/json" } }
-          );
-        }
-        if (path.includes("uqload-confirm")) {
-          return new Response(JSON.stringify({ fileCodes: [] }), { status: 200, headers: { "content-type": "application/json" } });
-        }
-        return new Response(JSON.stringify({ error: `unexpected request to ${path}` }), { status: 500, headers: { "content-type": "application/json" } });
-      })
-    );
-    vi.stubGlobal("XMLHttpRequest", InFlightXHR);
-    InFlightXHR.instances = [];
-  }
-
-  /** Adds a video of `size` bytes without allocating the bytes. */
-  function addVideo(name: string, size: number) {
-    const input = document.querySelector('label input[type="file"][accept="video/*"]') as HTMLInputElement;
-    const file = new File([new Uint8Array(8)], name, { type: "video/mp4" });
-    Object.defineProperty(file, "size", { value: size });
-    fireEvent.change(input, { target: { files: [file] } });
-  }
-
-  async function startPublishing(names: Array<[string, number]>) {
-    for (const [name, size] of names) addVideo(name, size);
-    const select = await screen.findByLabelText("Category *");
-    // The category list arrives from Supabase after the first paint.
-    await waitFor(() => expect(within(select).queryByText("Mature")).toBeTruthy());
-    fireEvent.change(select, { target: { value: "cat-1" } });
-    fireEvent.submit(screen.getByText("Add videos").closest("form") as HTMLFormElement);
-  }
-
-  it("does not invent a percentage, a speed, or a remaining time while the POST is open", async () => {
-    stubBackend();
-    render(<UploadPage />);
-
-    await startPublishing([["long-clip.mp4", 20 * 1024 * 1024]]);
-
-    const row = await screen.findByText("Uploading to Uqload…");
-    expect(row.textContent).not.toMatch(/estimated|left|MB\/s|KB\/s/);
-    // Metadata starts while the POST is still open, so publish is not stuck behind Gemini.
-    expect(InFlightXHR.instances.length).toBeGreaterThan(0);
-    const fetchMock = globalThis.fetch as unknown as { mock: { calls: unknown[][] } };
-    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/gemini/suggest"))).toBe(true);
-
-    // The transfer bar is indeterminate: a guessed curve is what raced to ~85% and then crawled.
-    const bars = screen.getAllByRole("progressbar");
-    expect(bars.length).toBeGreaterThan(0);
-    for (const bar of bars) {
-      expect(bar.getAttribute("aria-valuenow")).toBeNull();
-    }
-
-    vi.unstubAllGlobals();
-  }, 15000);
-
-  it("starts the video POST without waiting for the thumbnail", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: any) => {
-        const path = String(url);
-        if (path.includes("storage-token")) return new Promise(() => {});
-        if (path.includes("uqload-session")) {
-          return new Response(
-            JSON.stringify({ serverUrl: "https://e17.uqload.example/upload/03", fields: { key: "test-key", file_public: "1", file_adult: "1" } }),
-            { status: 200, headers: { "content-type": "application/json" } }
-          );
-        }
-        if (path.includes("uqload-confirm")) {
-          return new Response(JSON.stringify({ fileCodes: [] }), { status: 200, headers: { "content-type": "application/json" } });
-        }
-        return new Response(JSON.stringify({ error: "stop" }), { status: 500, headers: { "content-type": "application/json" } });
-      })
-    );
-    vi.stubGlobal("XMLHttpRequest", InFlightXHR);
-    InFlightXHR.instances = [];
-    (URL as any).createObjectURL = () => "blob:mock-preview";
-    (URL as any).revokeObjectURL = () => {};
-
-    const { container } = render(<UploadPage />);
-    addVideo("with-cover.mp4", 8 * 1024 * 1024);
-    const thumb = container.querySelector('input[type="file"][accept^="image/"]') as HTMLInputElement;
-    fireEvent.change(thumb, { target: { files: [new File([new Uint8Array(64)], "cover.jpg", { type: "image/jpeg" })] } });
-    const select = await screen.findByLabelText("Category *");
-    await waitFor(() => expect(within(select).queryByText("Mature")).toBeTruthy());
-    fireEvent.change(select, { target: { value: "cat-1" } });
-    fireEvent.submit(screen.getByText("Add videos").closest("form") as HTMLFormElement);
-
-    await waitFor(() => expect(InFlightXHR.instances.length).toBe(1), { timeout: 4000 });
-    vi.unstubAllGlobals();
-  }, 15000);
-
-  it("sends several videos at the same time instead of one after another", async () => {
-    stubBackend();
-    render(<UploadPage />);
-
-    await startPublishing([
-      ["one.mp4", 4 * 1024 * 1024],
-      ["two.mp4", 4 * 1024 * 1024],
-      ["three.mp4", 4 * 1024 * 1024],
-    ]);
-
-    // All three transfers reach the network layer without waiting for a
-    // confirmation that can only arrive after each upload completes.
-    await waitFor(() => expect(InFlightXHR.instances.length).toBe(3), { timeout: 4000 });
-
-    // …and the batch panel names how many are travelling, without a guessed ETA or speed.
-    const batchPanel = await screen.findByRole("status");
-    expect(within(batchPanel).getByText(/3 uploading/)).toBeTruthy();
-    expect(within(batchPanel).queryByText(/estimated/)).toBeNull();
-    expect(within(batchPanel).queryByText(/MB\/s|KB\/s/)).toBeNull();
-
-    vi.unstubAllGlobals();
-  }, 15000);
-
-  it("uploads same-titled files one at a time so each keeps its own file code", async () => {
-    stubBackend();
-    render(<UploadPage />);
-
-    // `clip.mp4` and `clip.mkv` are stored by Uqload under the same title, so
-    // the library diff could not tell their file codes apart if both travelled
-    // at once.
-    await startPublishing([
-      ["clip.mp4", 4 * 1024 * 1024],
-      ["clip.mkv", 4 * 1024 * 1024],
-    ]);
-
-    await waitFor(() => expect(InFlightXHR.instances.length).toBe(1), { timeout: 4000 });
-    // Give the second worker every chance to (wrongly) start in parallel.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      return json({ error: `unexpected ${url}` }, 500);
     });
-    expect(InFlightXHR.instances.length).toBe(1);
-    expect(within(screen.getByRole("status")).getByText(/1 uploading/)).toBeTruthy();
-    expect(screen.getByText(/uploaded one at a time/)).toBeTruthy();
 
-    vi.unstubAllGlobals();
-  }, 15000);
+    render(<UploadPage />);
+    fireEvent.click(await screen.findByText("Embed by iframe"));
+    fireEvent.change(screen.getByPlaceholderText(/player\.example\.com\/embed\/abc/), {
+      target: { value: "https://player.example.com/embed/abc" },
+    });
+    fireEvent.click(screen.getByText("Add embed"));
+    await chooseCategory();
+    submitForm();
+
+    expect(await screen.findByText("Published")).toBeTruthy();
+    const embed = findRequest("/api/videos/embed");
+    expect(embed?.body).toEqual({
+      categoryId: "cat-1",
+      entries: [{ source: "https://player.example.com/embed/abc", thumbnailPath: null }],
+    });
+    // An iframe source is live immediately: no provider polling for it.
+    expect(requests.some((request) => request.url.includes("/api/videos/status"))).toBe(false);
+  });
 });

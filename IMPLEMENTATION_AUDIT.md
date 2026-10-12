@@ -1,5 +1,13 @@
 # IMPLEMENTATION_AUDIT.md — Erobabe Pre-Implementation Audit (10 Oct 2026)
 
+> **Historical document.** This is the pre-implementation audit written before the
+> Next.js migration, and it is kept as the record of the decisions taken then.
+> Where it names Uqload as the intended video host, that decision has since been
+> superseded: Uqload's integration was removed on 2026-10-12 and replaced by
+> UFOLOAD — see the migration section at the top of `IMPLEMENTATION_REPORT.md`
+> and `DEPLOYMENT.md` section D. The audit's reasoning about hosting policy and
+> provider replaceability still applies.
+
 > **Note (2026-10-11):** this is the historical pre-implementation audit of the original
 > Vite SPA. References to Bcon Global and Groq below describe the providers as they
 > existed at audit time. The active application has since migrated to NOWPayments for

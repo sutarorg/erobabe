@@ -4,10 +4,224 @@
 **Branch**: arena/2ee39806-erobabe  
 **Base**: Next.js 15 App Router, Supabase, Bcon Global, Resend, Groq
 
-> **Current providers (2026-10-11 migration, below):** NOWPayments for
-> cryptocurrency payments and Google's Gemini API for AI metadata. The original
-> report body is retained as history; the migration section describes the
-> active implementation.
+> **Current providers:** NOWPayments for cryptocurrency payments, Google's Gemini
+> API for AI metadata, and **UFOLOAD for video hosting** (2026-10-12 migration, first
+> section below). The original report body is retained as history; the migration
+> sections describe the active implementation.
+
+---
+
+## 2026-10-12 — Uqload → UFOLOAD video-hosting migration
+
+**Branch**: `feat/ufoload-video-hosting` (PR into `main`)
+**Base**: `95b04e0`
+
+> **Current video provider: UFOLOAD.** Uqload is no longer an active
+> integration: its provider, routes, helpers and tests were deleted. Historical
+> rows that were uploaded through Uqload are preserved byte-for-byte and keep
+> rendering from their stored URLs.
+
+### Summary
+
+Video uploads, remote URL imports, processing/status tracking, playback,
+cancellation and recovery were moved to UFOLOAD's documented REST API
+(`https://ufoload.com/api/v1`). The browser now transfers the file **in chunks
+straight to the node URL UFOLOAD hands out**, authenticated with a temporary
+upload grant, so the video bytes never transit a Vercel function (4.5 MB body
+limit) or Supabase Storage. A video is created private and is published only
+after UFOLOAD reports the file as `ready`.
+
+### Official sources consulted (nothing was invented)
+
+| Source | Used for |
+| --- | --- |
+| `https://ufoload.com/api/openapi.json` | Full REST v1 contract: uploads, upload state, complete/cancel, files, links, imports, public watch, error envelope, `File`/`Import`/`LinkSet` schemas, rate limits |
+| `https://ufoload.com/docs/api` | Worked examples, parameter lists, the documented keep-alive cadence, the 10-active-import limit, key handling, WebDAV/FTP details |
+| `https://ufoload.com/api/docs` | Direct-upload walkthrough (`POST /files/uploads` → `PUT` chunks → `complete`) |
+| `https://ufoload.com/api/openapi-papi.json` + docs | The 11-character `file_code` / short public identifier used by the second API and by `FileID` |
+| `https://ufoload.com/tos` | Approval gate wording (draft v0.1, 2026-10-11) — no explicit adult-content clause |
+| `https://ufoload.com/pricing`, `/faq` | Plan file-size ceilings (Free 5 GB, Pro 10 GB, Max 25 GB), quota and ads behaviour |
+| `https://ufoload.com/e/00000000000` (live probe) | Confirms the embed address form `/e/{code}` and the watch page `/v/{code}` |
+
+### Material API assumptions (recorded, not hidden)
+
+1. **Embed/watch address.** `https://ufoload.com/e/{identifier}` is used as the
+   stored `embed_url` and `https://ufoload.com/v/{identifier}` as `playable_url`.
+   The `/e/{code}` form is verified by a live probe and by the provider's own
+   links, but it is not spelled out in the OpenAPI document; the documented
+   `GET /api/v1/public/files/{fileID}` watch payload is the fallback source of
+   truth if that ever changes.
+2. **Short public identifier.** The REST `File` schema does **not** list
+   `public_id`, while the `FileID` path parameter accepts "a file ULID or its
+   11-character short `public_id`" and the second API identifies files by the
+   11-character `file_code`. The code therefore stores `public_id` **only when
+   the provider actually returns it** (`pickPublicIdentifier`) and otherwise
+   uses the ULID — both are valid `FileID`s, so the address stays correct.
+3. **Signed links expire.** The `links` object carries `expires_at` (hours). Only
+   the stable embed/watch addresses and the `File.poster` are persisted; signed
+   playback/poster/download links are never written to the database.
+4. **Keep-alive.** An abandoned direct upload holds its slot for 15 minutes, so
+   the browser pings `GET /files/uploads/{id}` every 5 minutes (inside the
+   documented 10-minute maximum).
+5. **Concurrency.** At most 10 active imports per account: the import batch stops
+   on `409`/`429` and explains the limit instead of hammering the API.
+6. **`503 direct_upload_unavailable`.** Reported to the admin as an actionable
+   error. The documented server-side fallback (`POST /files` with a raw body) is
+   deliberately **not** implemented: it would require streaming a multi-gigabyte
+   body through a serverless function, which the platform rejects.
+
+### Files added
+
+| File | Purpose |
+| --- | --- |
+| `lib/video/ufoload-protocol.ts` | Browser-safe UFOLOAD contract: base URLs, parsers for every response the code reads, error/retry helpers, chunk arithmetic, secret redaction |
+| `lib/video/ufoload.ts` | Server-only `UfoloadProvider`: authenticated requests, direct-upload handshake, complete/cancel/state, files, imports, stable addresses, fail-closed configuration |
+| `lib/video/ufoload-flow.ts` | Server-side lifecycle: `startUfoloadUpload`, `completeUfoloadUpload`, `startUfoloadImport`, `reconcileUfoloadRecord`, readiness rules |
+| `app/api/videos/ufoload-session/route.ts` | Issues the upload session (and doubles as the keep-alive) for an authenticated admin |
+| `app/api/videos/ufoload-cancel/route.ts` | Cancels the provider-side upload / marks the stored job cancelled |
+| `src/utils/uploadFile.ts` | `XHR` chunk `PUT` with measured progress, resume probe, node-error explanations |
+| `src/utils/ufoloadUpload.ts` | Pure chunked-upload orchestrator: offsets, retries, resume, keep-alive, `max_bytes`, cancellation |
+| `supabase/migrations/00000000000006_ufoload_video_provider.sql` | Forward migration (see below) |
+| `tests/live/ufoload.live.test.ts`, `tests/live/README.md`, `vitest.live.config.ts` | Opt-in live integration tests against the real API |
+| `tests/unit/ufoload-protocol.test.ts`, `ufoload-provider.test.ts`, `ufoload-upload.test.ts`, `ufoload-flow.test.ts`, `ufoload-session-route.test.ts`, `ufoload-upload-route.test.ts`, `ufoload-upload-url-route.test.ts`, `ufoload-status-route.test.ts` | 132 new automated tests covering the UFOLOAD contract |
+| `tests/unit/helpers/mock-ufoload.ts`, `video-route-harness.ts`, `provider-errors.ts` | Test harness for the provider module, route requests and in-memory Supabase |
+
+### Files removed (active Uqload integration)
+
+- `app/api/videos/uqload-session/route.ts`
+- `app/api/videos/uqload-confirm/route.ts`
+- `lib/video/uqload-match.ts` (library-diff confirmation)
+- `lib/video/uqload-response.ts` (response parser)
+- `tests/unit/uqload-match.test.ts`, `tests/unit/uqload-response.test.ts`
+- `createVideoUploadTarget` in `lib/video/storage.ts` (video bytes no longer transit Supabase; thumbnails still do)
+
+### Files changed (notable)
+
+- `app/api/videos/upload/route.ts` — now the JSON **completion** endpoint (session id in, provider file id read back from UFOLOAD). Rejects multipart bodies (`415`) and any client-supplied `providerFileId`/`filecode` (`400`).
+- `app/api/videos/upload-url/route.ts` — real asynchronous import lifecycle (per-entry `queued`/`failed`, `200`/`207`/`422`, stops the batch when the provider refuses more imports, writes an audit row).
+- `app/api/videos/status/route.ts` — reconciles UFOLOAD records (upload *and* import), promotes to published only on `ready`, purges the transit object once the provider has the file, returns legacy `provider='uqload'` rows untouched with an explanatory note, and downgrades provider outages to a `note` instead of a 500.
+- `app/api/videos/storage-token/route.ts` — thumbnails only, wording updated.
+- `lib/video/publishing.ts` — provider union `ufoload | embed | internal`, `UfoloadError`-aware status/message mapping, `attachProviderFile`, `markVideoReady`, `markVideoFailed`, `recordProviderProgress`, `findUploadJobForSession`.
+- `lib/video/provider.ts` — `DEFAULT_VIDEO_PROVIDER = "ufoload"`; unknown values fail closed with an actionable error.
+- `app/admin/videos/upload/page.tsx` — **the only intentional UI change**: per-row pipeline (session → chunked upload with real measured progress → completion → provider polling), per-row thumbnail and metadata prepared in parallel, batch summary, cancel that frees the provider slot, **Re-check status** for rows left encoding.
+- `next.config.mjs`, `.env.example`, `app/admin/system-health/page.tsx`, `README.md`, `DEPLOYMENT.md`, `GO_LIVE_CHECKLIST.md`, `vitest.config.ts`, `package.json` (`test:live`).
+- No historical migration was rewritten. Migration `…0003` still narrows the provider list and
+  `…0006` — which always runs last — widens it again, so a fresh `db reset` and an
+  existing database converge on exactly the same schema.
+
+### Database migration
+
+`supabase/migrations/00000000000006_ufoload_video_provider.sql` (additive; safe on a live database):
+
+- widens the `videos.provider` check constraint to include `ufoload`;
+- adds `videos.provider_public_id`, `videos.provider_progress`, `videos.provider_error`;
+- adds `upload_jobs.provider_upload_id` (direct-upload session), `upload_jobs.provider_import_id` (import **task** id — never the file id), `upload_jobs.provider_status`;
+- adds the two indexes reconciliation uses and defaults new jobs to `ufoload`;
+- touches no existing row: historical `provider='uqload'` records keep their ids and URLs.
+
+**How to test the migration**
+
+```bash
+# Local Supabase stack
+supabase start
+supabase db reset            # applies every migration from scratch
+psql "$(supabase status -o env | grep DB_URL | cut -d= -f2- | tr -d '\"')" \
+  -c "select provider, count(*) from videos group by 1;" \
+  -c "select column_name from information_schema.columns where table_name='upload_jobs' and column_name like 'provider_%';"
+# Hosted project (after review)
+supabase db push --linked --dry-run
+supabase db push --linked
+# Rollback plan: the migration only adds columns/indexes and widens a check
+# constraint, so a rebuild of the constraint + dropping the new columns restores
+# the previous schema. Existing rows need no repair.
+```
+
+### HTTP surface after the migration
+
+| Route | Method | Purpose |
+| --- | --- | --- |
+| `/api/videos/ufoload-session` | `POST` | `{fileName,fileSize,mimeType?}` → `{jobId,uploadId,url,authorization,chunkSize,maxBytes,expiresAt,keepAliveIntervalMs}`. `{uploadId}` → keep-alive/state. `415` for multipart, `413` above 2 GB or the plan limit. |
+| `/api/videos/upload` | `POST` | `{uploadId,categoryId,fileName,fileSize?,thumbnailPath?,metadata?}` → the created video, its provider ids, stable addresses and readiness. `415` for multipart; `400` for a client-supplied provider file id. |
+| `/api/videos/upload-url` | `POST` | `{categoryId, entries[]\|urls\|url}` → per-entry `queued`/`failed`. `200`/`207`/`422`. |
+| `/api/videos/ufoload-cancel` | `POST`/`DELETE` | Cancel at the provider / mark the job cancelled. |
+| `/api/videos/status` | `GET` | `?videoId=` or `?jobId=` → the stored rows plus `providerState` and a human `note`. |
+
+### Security properties (kept as required)
+
+- `UFOLOAD_API_KEY` is read only in server code; it is never returned to the
+  browser (a session response carries the upload-scoped grant only), never logged,
+  never written to audit metadata, and redacted from any provider message.
+- Chunk requests to the node use `Authorization: <grant>` — the API key is not
+  sent to the upload node.
+- Every upload/import/status route is gated by the existing
+  `requireActiveAdmin()` / profile checks.
+- The provider file id always comes from UFOLOAD; a browser cannot complete or
+  publish another admin's upload (`findUploadJobForSession` matches on the
+  session id **and** the admin).
+- Fail-closed configuration: unknown `VIDEO_PROVIDER` and unset
+  `UFOLOAD_ADULT_CONTENT_APPROVED` both refuse work with an actionable error; no
+  silent fallback to Uqload.
+
+### Uqload audit (every remaining reference, and why)
+
+| Location | Remaining reference | Why it stays |
+| --- | --- | --- |
+| `lib/video/ufoload-flow.ts` comments | explains that a signed link must not be persisted | documentation only |
+| `app/api/videos/status/route.ts` | returns rows whose `provider` is `uqload` as stored, with a note that the integration is retired | legacy rows must keep rendering; nothing calls the old provider |
+| `supabase/migrations/00000000000006_*.sql`, `...000_initial_schema.sql` | keeps `uqload` in the provider check constraint | existing rows would violate a narrower constraint |
+| `lib/video/provider.ts` | error text says Uqload support has been removed | actionable configuration error |
+| `tests/unit/video-provider.test.ts`, `ufoload-status-route.test.ts` | assert the factory refuses `uqload` and that a legacy row is returned untouched | regression guards for the two rules above |
+| `README.md`, `DEPLOYMENT.md`, `GO_LIVE_CHECKLIST.md`, `IMPLEMENTATION_REPORT.md`, `IMPLEMENTATION_AUDIT.md` | historical sections and the migration audit | history plus the live migration record |
+| `tests/unit/uqload-match.test.ts`, `uqload-response.test.ts`, `app/api/videos/uqload-*`, `lib/video/uqload-*` | **deleted** — no reference remains | the old library-diff/response-parser flow is gone |
+
+### Tests executed (real results, 2026-10-12, this sandbox)
+
+| Command | Result |
+| --- | --- |
+| `npm ci` | 255 packages installed |
+| `npm run type-check` | exit 0 |
+| `npm run test` | **29 files / 384 tests passed** (24.6 s) — baseline was 23 files / 263 tests; 132 UFOLOAD tests added, 2 obsolete Uqload files removed |
+| `npm run build` | ✓ compiled successfully, 61/61 pages generated |
+| `npm run test:e2e` | 10 passed / 10 failed — every failure is `browserType.launch: Executable doesn't exist at …/chromium_headless_shell-1248/…`; `npx playwright install chromium` cannot download the browser in this sandbox ("Download failure"). The 10 request-level specs (payments API surface, retired routes, sitemap/robots/canonical) pass. |
+| `npm run lint` | **Cannot run non-interactively.** The repository has no ESLint configuration, so `next lint` prompts to choose one (and Next 16 removes the command). This predates the migration; no lint configuration was added. |
+| `npm run test:live` | 5 skipped — the live suite requires `LIVE_UFOLOAD=1` and a real `UFOLOAD_API_KEY` (see `tests/live/README.md`) |
+
+**What the automated suite proves:** the UFOLOAD request/response contract, chunk
+offsets and resume arithmetic, keep-alive cadence, cancellation handling, the
+session→completion handshake, that a client cannot supply a provider file id, that
+a video is published only on `ready` and stays private while encoding or after a
+failure, that import task ids are never stored as file ids, that signed links are
+never persisted, that legacy rows are untouched, and that provider outages never
+turn into 5xx responses.
+
+**What it does not prove:** that a real upload reaches the real UFOLOAD account
+and plays back. That requires the owner's key, the written approval gate, and the
+live test/manual smoke test below.
+
+### Live verification status
+
+- **Not performed in this session** — the sandbox has no UFOLOAD credentials and
+  outbound access is restricted to GitHub/npm/PyPI, so neither the live suite nor
+  the manual smoke test could run against the real provider.
+- Ready to run by the owner: `LIVE_UFOLOAD=1 UFOLOAD_API_KEY=ufo_… npm run test:live`
+  (optionally `LIVE_UFOLOAD_FILE=/abs/path/small.mp4`, `LIVE_UFOLOAD_IMPORT_URL=…`),
+  followed by the click-by-click smoke test in `GO_LIVE_CHECKLIST.md` section D
+  (D1–D12). Only after those pass may the migration be described as verified
+  end-to-end.
+
+### Remaining blockers / owner actions
+
+1. **Written UFOLOAD approval** for lawful adult content, commercial use, API
+   uploads and embedded playback (`contact@ufoload.com`). Until it exists,
+   `UFOLOAD_ADULT_CONTENT_APPROVED` stays `false` and uploads stay refused.
+2. **API key + env** in the hosting provider: `UFOLOAD_API_KEY`,
+   `VIDEO_PROVIDER=ufoload`, and the migration applied.
+3. **Plan check** that the account's per-file ceiling is at least the 2 GB the app
+   allows (Free is 5 GB, so any paid or free tier currently satisfies this).
+4. **Hosting that permits adult/commercial content** (Vercel Hobby is not it) and
+   the rest of section 1/3 of `GO_LIVE_CHECKLIST.md`.
+5. **Playwright browsers** in CI (the sandbox could not download Chromium, so the
+   10 browser specs are unverified here).
 
 ---
 
@@ -214,12 +428,14 @@ IPN callback URL format: `https://YOUR_DOMAIN/api/nowpayments/ipn`
     - Verifies admin session, validates file (video/*, max 2GB), validates title.
     - Creates persistent `videos` record draft and `upload_jobs` record.
     - Uses provider abstraction `lib/video/provider.ts` — `getVideoProvider()` factory, `VideoProvider` interface.
-    - For Uqload: `GET /api/upload/server?key=...` then `POST` file with FormData (key, file, file_title, etc.) — per current docs.
-    - Stores provider file ID, checks processing status via `/api/videos/status` which calls `getFileInfo`.
-    - Updates job status, communicates result to UI.
-    - Never exposes Uqload API key in browser — server-only env.
-    - Handles large files: uses provider direct upload server, not Vercel Function body limit. Documents need for dedicated worker if provider requires streaming.
-- **Uqload policy gate**: Implemented `isEnabled()` check — returns false unless `UQLOAD_ADULT_CONTENT_APPROVED=true` AND `UQLOAD_API_KEY` set. TOS at https://uqload.vc/tos prohibits pornography/nudity. Production uploads return 503 with clear blocker message if disabled. Documented in DEPLOYMENT.md and GO_LIVE_CHECKLIST.md. Provider integration replaceable — internal provider fallback stores placeholder and marks pending_review.
+    - Provider-specific transport lives behind `lib/video/provider.ts`.
+    - Never exposes the provider API key in the browser — server-only env.
+    - Handles large files with a provider direct-upload path, not a Vercel function body.
+- **Provider policy gate**: an `isEnabled()` check plus a server-side approval flag, so production uploads return `503` with a clear blocker message when the provider is not approved. Documented in DEPLOYMENT.md and GO_LIVE_CHECKLIST.md.
+
+> **Superseded on 2026-10-12**: the Uqload transport described above was replaced by
+> UFOLOAD. See the migration section at the top of this file for the active
+> upload path, the gate, and the deleted files.
 
 ### Public Website Real Content and Ads
 - Connected public components to Supabase:
@@ -357,8 +573,8 @@ IPN callback URL format: `https://YOUR_DOMAIN/api/nowpayments/ipn`
 ### Unit Tests (Vitest)
 - `tests/unit/site.test.ts`: categorySlug, fmtUSD, slot price
 - `tests/unit/bcon.test.ts`: mapBconStatus, parseBconCallback
-- `tests/unit/video-provider.test.ts`: Uqload disabled without approval, internal enabled, factory
-- **Result**: 8 passed, 3 files passed (after excluding e2e from vitest)
+- `tests/unit/video-provider.test.ts`: provider factory, UFOLOAD fail-closed gating, internal fallback
+- **Result at the time**: 8 passed, 3 files passed (after excluding e2e from vitest). The suite has since grown to 29 files / 384 tests — see the migration section.
 
 ### E2E Tests (Playwright)
 - `tests/e2e/auth.spec.ts`: sign-in page loads, sign-up page loads, unauthenticated /admin redirects to sign-in, /advertiser redirects
@@ -384,7 +600,7 @@ IPN callback URL format: `https://YOUR_DOMAIN/api/nowpayments/ipn`
 ## Remaining Blockers and Unverified Assumptions
 
 ### Blockers (Production NOT ready until resolved)
-1. **Uqload adult content**: TOS prohibits pornography/nudity. Production video hosting BLOCKED unless written approval obtained or replacement provider approved. Current code has Uqload adapter but disabled via `UQLOAD_ADULT_CONTENT_APPROVED=false`. Internal provider fallback does not stream real video. See DEPLOYMENT.md D and GO_LIVE_CHECKLIST.md.
+1. **Provider approval (now UFOLOAD)**: the TOS has no explicit adult-content clause, so production video hosting stays BLOCKED until written approval (or a replacement provider the owner approves). The code has the UFOLOAD integration, gated by `UFOLOAD_ADULT_CONTENT_APPROVED=false`. See DEPLOYMENT.md D and GO_LIVE_CHECKLIST.md.
 2. **Hosting provider**: Vercel Hobby unsuitable for commercial adult site. Need to select host that permits lawful adult content and commercial use (Fly.io, Render, Railway, self-hosted VPS) and obtain written approval if using Vercel Pro. Documented.
 3. **Legal identity**: Owner must provide real legal name, address, registration, contact emails. Current Terms/Privacy are draft templates requiring legal review.
 4. **Age assurance**: Frontend age gate alone not robust. Evaluate jurisdiction-specific requirements, implement verification integration if legally required.
@@ -398,7 +614,7 @@ IPN callback URL format: `https://YOUR_DOMAIN/api/nowpayments/ipn`
 - RLS policies implemented and documented.
 - Auth flows implemented with protected routes and role checks.
 - Bcon integration implemented per current docs (POST /api/v2/address, callback with addr, txid, value, status), with verification and idempotency.
-- Video provider abstraction implemented, Uqload adapter per docs, internal fallback.
+- Video provider abstraction implemented; UFOLOAD adapter per the official API documentation (2026-10-12), internal placeholder for embed-only deployments.
 - Groq and Resend server-side clients implemented.
 - Public site uses crawlable URLs, SSR, dynamic metadata, VideoObject JSON-LD, sitemap, video-sitemap, robots.txt.
 - Advertiser and Admin portals use real DB data with honest empty states.
@@ -408,7 +624,7 @@ IPN callback URL format: `https://YOUR_DOMAIN/api/nowpayments/ipn`
 ### Unverified Assumptions
 - Supabase project URL and keys will be obtained via dashboard — not tested with live project in this sandbox (no credentials).
 - Bcon API key and wallet configuration assumed to be done by owner — not tested with live transactions (mock callback tested).
-- Video hosting provider assumed to be replacement or Uqload with approval — not tested with large file upload to real provider in production (adapter tested with fixtures).
+- Video hosting (UFOLOAD) was tested with fixtures and a stubbed transport only; no real upload was performed in this sandbox (no key, restricted egress). The owner must run `npm run test:live` and the manual smoke test in `GO_LIVE_CHECKLIST.md` D before treating uploads as verified.
 - Resend domain verification assumed to be done — not tested with live domain.
 - Hosting deployment assumed to be on Fly.io or similar that permits adult content — not deployed to production in this session (build tested locally).
 - Search Console verification and Googlebot fetching of thumbnails/video resources assumed to be done post-launch — cannot be verified without production domain.
@@ -423,7 +639,7 @@ IPN callback URL format: `https://YOUR_DOMAIN/api/nowpayments/ipn`
 4. [x] All remaining controls have working behavior with loading/empty/error/success — implemented in new pages.
 5. [x] Supabase Auth and server-side role authorization work — middleware, server clients, RLS.
 6. [x] RLS policies have been created and documented — need live testing with Supabase project.
-7. [x] Administrator can genuinely upload, manage, review, publish via authorized hosting integration — upload route and provider abstraction implemented, but Uqload blocked without approval (documented as blocker).
+7. [x] Administrator can genuinely upload, manage, review, publish via an authorized hosting integration — the UFOLOAD path is implemented and gated; real-provider verification is pending the owner's key and written approval (documented as a blocker).
 8. [x] Public watch pages play actual hosted videos — player uses real embed/playable URL from DB, with fallback for processing.
 9. [x] Advertisers can reserve ten fixed placements and create real campaigns — slots page with availability check, new campaign flow.
 10. [x] Bcon payment requests and confirmation processing work per actual API — create and callback routes implemented per docs.
@@ -437,7 +653,7 @@ IPN callback URL format: `https://YOUR_DOMAIN/api/nowpayments/ipn`
 18. [x] Production build succeeds — `npm run build` passes.
 19. [x] DEPLOYMENT.md gives complete click-by-click setup — created.
 20. [x] GO_LIVE_CHECKLIST.md accurately lists remaining external decisions — created.
-21. [x] No prohibited provider usage enabled — Uqload disabled by default, Vercel Hobby not recommended.
+21. [x] No prohibited provider usage enabled — UFOLOAD uploads fail closed without written approval, Vercel Hobby not recommended.
 22. [x] No secrets committed — .env.example fictional only, .gitignore excludes env.
 23. [x] No feature described as operational when only simulated — upload, payments, etc. have real implementations with clear blockers documented.
 24. [x] Final implementation report separates verified from unverified and blockers — this file.
@@ -460,4 +676,4 @@ All passed except documented external integration tests requiring live credentia
 
 ## Conclusion
 
-Erobabe has been transformed from frontend-only mock prototype to production-ready Next.js application with real Supabase backend, Bcon crypto payments, video hosting abstraction with policy gate, Resend email, Groq AI, SEO optimization, and comprehensive documentation. Remaining launch blockers are external approvals (Uqload adult content, hosting, legal identity, Bcon wallet, Resend domain) — clearly documented and not falsely marked ready. The implementation preserves original UI/UX while making minimum necessary changes for genuine functionality, security, and indexing.
+Erobabe has been transformed from frontend-only mock prototype to production-ready Next.js application with real Supabase backend, NOWPayments crypto payments, UFOLOAD video hosting with a policy gate, Resend email, Gemini AI, SEO optimization, and comprehensive documentation. Remaining launch blockers are external approvals (UFOLOAD adult content/commercial use, hosting, legal identity, payment-provider approval, Resend domain) — clearly documented and not falsely marked ready. The implementation preserves original UI/UX while making minimum necessary changes for genuine functionality, security, and indexing.

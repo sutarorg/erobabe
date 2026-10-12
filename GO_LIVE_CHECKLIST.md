@@ -21,19 +21,75 @@ This checklist lists all external decisions, approvals, and configurations that 
 
 ---
 
-## 2. Video Hosting — CRITICAL BLOCKER
+## 2. Video Hosting (UFOLOAD) — CRITICAL BLOCKER
 
-- [ ] **Uqload written approval**: Uqload TOS (https://uqload.vc/tos) prohibits pornography, nudity, sexual content. Obtain written confirmation that lawful adult content, commercial use, API upload, and intended playback (embed or direct) are permitted. Keep email/letter on file.
-  - If approval obtained: set `UQLOAD_API_KEY`, `UQLOAD_ADULT_CONTENT_APPROVED=true`, `VIDEO_PROVIDER=uqload`, test upload, document approval date and contact.
-  - If NOT obtained: **Production video hosting is BLOCKED**. Do not enable Uqload for adult content.
-- [ ] **Replacement provider approved**: If Uqload not approved, owner must approve replacement (Bunny.net Stream, Cloudflare Stream, Mux, or self-hosted S3 + transcoding). Verify replacement provider's Acceptable Use Policy explicitly permits adult content and commercial use.
-- [ ] **Provider adapter implemented**: `lib/video/provider.ts` must have working adapter for chosen provider (Uqload adapter exists but disabled, internal adapter is fallback).
-- [ ] **Large-file upload architecture**: Verify uploads not routed through Vercel Function body limit. Use provider direct upload server or dedicated worker on host that permits adult content.
-- [ ] **Thumbnail stability**: Thumbnails must be stable URLs, not short-lived signed URLs, so Googlebot can fetch for video sitemap.
-- [ ] **Playback verification**: Test actual playback on desktop and mobile, handle expired URLs, blocked embeds, provider outages gracefully.
-- [ ] **Sitemap inclusion**: Only published, cleared, approved, public videos in sitemap and video-sitemap. Verify unpublished videos disappear.
+- [ ] **UFOLOAD written approval**: UFOLOAD's Terms of Service (https://ufoload.com/tos,
+  draft v0.1 dated 2026-10-11) prohibit unlawful, infringing, malware, violence and
+  non-consensual material and reserve discretionary enforcement, but do not contain an
+  explicit adult-content clause. Obtain written confirmation from `contact@ufoload.com`
+  that **lawful adult content, commercial use, API uploads and embedded playback** are
+  permitted on this account, and keep the reply on file with its date and contact.
+  - If approval obtained: set `UFOLOAD_API_KEY`, `UFOLOAD_ADULT_CONTENT_APPROVED=true`,
+    `VIDEO_PROVIDER=ufoload`, run the upload smoke test in section D, and record the
+    approval date and contact here: ______________________
+  - If NOT obtained: **Production video hosting is BLOCKED.** Leave
+    `UFOLOAD_ADULT_CONTENT_APPROVED=false` — the app refuses every upload with a `503`
+    naming the variable, and refuses to record the provider as approved.
+- [ ] **Replacement provider approved** (only if UFOLOAD declines): owner approves a
+  provider whose Acceptable Use Policy explicitly permits adult content and commercial
+  use (Bunny.net Stream, Cloudflare Stream, Mux, or self-hosted S3 + transcoding).
+- [ ] **Provider adapter implemented**: `lib/video/provider.ts` resolves only `ufoload`
+  (real uploads) and `internal` (embeds only); any other `VIDEO_PROVIDER` value fails
+  closed with an actionable error — Uqload support has been removed.
+- [ ] **Plan limits match the app limits**: UFOLOAD per-file ceilings (Free 5 GB,
+  Pro 10 GB, Max 25 GB) must be at least the app's 2 GB `MAX_VIDEO_SIZE`; the UI shows a
+  clear `413` when either limit is exceeded.
+- [ ] **Large-file upload architecture**: video bytes go browser → UFOLOAD node in
+  chunks (Vercel functions reject bodies above 4.5 MB). Verify a multi-hundred-MB file
+  uploads without touching Supabase or a function body.
+- [ ] **Concurrency**: UFOLOAD allows at most 10 active URL imports per account; the
+  import batch stops with an explanation instead of hammering the API. Direct uploads
+  hold a slot for 15 minutes if abandoned — the browser pings the provider during long
+  transfers.
+- [ ] **Thumbnail stability**: thumbnails are stable public URLs (Supabase
+  `video-thumbnails`, or the provider's own stable poster) — never signed/expiring URLs,
+  so Googlebot can fetch them for the video sitemap.
+- [ ] **Playback verification**: test actual playback on desktop and mobile; confirm the
+  embed address is the stable `https://ufoload.com/e/{code}` form and that provider
+  outages are surfaced as notes instead of breaking the watch page.
+- [ ] **Sitemap inclusion**: only published, cleared, approved, public videos appear in
+  `sitemap.xml` / `video-sitemap.xml`; videos still encoding at the provider do not.
 
----
+### D. Click-by-click manual smoke test (UFOLOAD, on the real account)
+
+Run this after the migration and before launch. It is the only procedure that proves
+the *admin UI* end-to-end — the automated suite cannot (it has no real provider key).
+
+1. Deploy with `VIDEO_PROVIDER=ufoload`, `UFOLOAD_API_KEY` set, and
+   `UFOLOAD_ADULT_CONTENT_APPROVED` **false**. Open `/admin/videos/upload`.
+2. Pick a category, choose a small real video file, press **Generate AI metadata &
+   publish**. Expect an inline error naming `UFOLOAD_ADULT_CONTENT_APPROVED` and **no**
+   request to UFOLOAD. This proves the fail-closed gate.
+3. Set `UFOLOAD_ADULT_CONTENT_APPROVED=true` (only with written approval) and redeploy.
+   Confirm `/admin/system-health` shows *Video Provider* = `ufoload (approved)`.
+4. Repeat step 2 with a small (10–50 MB) file. Watch the row: *Requesting an upload
+   session…* → *Uploading to UFOLOAD — N%* → *Completing the upload…* → *UFOLOAD is
+   encoding…* → *Published · UFOLOAD has the video ready to play*.
+5. In the UFOLOAD dashboard, confirm the file exists with the title Gemini generated.
+6. Open Admin → **Videos** → the new row; confirm it is `published`, and that
+   `provider_file_id` is a ULID while `embed_url` is `https://ufoload.com/e/{code}`.
+7. Open the public `/video/[slug]` page in a private window: the video must play.
+8. Press **Cancel** during a larger upload: the row returns to *Cancelled — ready to
+   publish*, and the UFOLOAD dashboard shows no leftover partial upload.
+9. Test a URL import: *Upload by link* → paste a public direct `.mp4` URL → publish.
+   The row reports *Import started — UFOLOAD is downloading the link…*, then either
+   publishes once ready or settles on *still encoding* with a **Re-check status** button.
+   Press that button after a few minutes; the row publishes when the provider is ready.
+10. Check `upload_jobs`: the import row stores the task id in `provider_import_id`, and
+    `provider_file_id` stays `null` until the provider returns the created file.
+11. Publish an iframe embed: it appears immediately (no provider involved) and the
+    generic `/api/videos/embed` route is used.
+12. Record the evidence (screenshot + `provider_file_id`) in this checklist.
 
 ## 3. Hosting — CRITICAL BLOCKER
 
@@ -164,7 +220,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 
 ## 11. Remaining Launch Blockers (Documented)
 
-- [ ] **Uqload adult content approval**: BLOCKED — TOS prohibits pornography/nudity. Need written approval or replacement provider. See DEPLOYMENT.md D.
+- [ ] **UFOLOAD adult content / commercial approval**: BLOCKED — the TOS has no explicit adult-content clause, so written confirmation (or a replacement provider) is required. See DEPLOYMENT.md D.
 - [ ] **Hosting approval**: BLOCKED if using Vercel Hobby or host that prohibits adult/commercial. Need approval and documentation.
 - [ ] **Legal identity**: BLOCKED — owner must provide real business details.
 - [ ] **Age assurance**: Evaluate jurisdiction-specific requirements, implement verification integration if required.
@@ -182,7 +238,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 4. [ ] All remaining controls have working behavior with loading/empty/error/success states.
 5. [ ] Supabase Auth and server-side role authorization work.
 6. [ ] RLS policies tested.
-7. [ ] Admin can genuinely upload, manage, review, publish approved videos via authorized hosting integration.
+7. [ ] Admin can genuinely upload, manage, review, publish approved videos via the authorized UFOLOAD integration (or another provider the owner approved in writing).
 8. [ ] Public watch pages play actual hosted videos.
 9. [ ] Advertisers can reserve ten fixed placements and create real campaigns.
 10. [ ] NOWPayments payment requests, signed-IPN verification, and confirmation processing work per actual API.
@@ -196,7 +252,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 18. [ ] Production build succeeds.
 19. [ ] DEPLOYMENT.md gives complete click-by-click setup.
 20. [ ] GO_LIVE_CHECKLIST.md accurately lists remaining external decisions (this file).
-21. [ ] No prohibited provider usage enabled (Uqload without approval, Vercel Hobby commercial).
+21. [ ] No prohibited provider usage enabled (UFOLOAD uploads without written approval, Vercel Hobby commercial).
 22. [ ] No secrets committed.
 23. [ ] No feature described as operational when only simulated.
 24. [ ] Final implementation report separates verified results from unverified assumptions and remaining blockers.

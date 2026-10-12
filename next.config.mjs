@@ -14,7 +14,9 @@ const nextConfig = {
       { protocol: 'https', hostname: 'i.postimg.cc' },
       { protocol: 'https', hostname: 'images.pexels.com' },
       { protocol: 'https', hostname: '**.supabase.co' },
-      { protocol: 'https', hostname: '**.uqload.vc' },
+      // UFOLOAD posters and generated thumbnails.
+      { protocol: 'https', hostname: 'ufoload.com' },
+      { protocol: 'https', hostname: '**.ufoload.com' },
       { protocol: 'https', hostname: '**.resend.com' },
     ],
   },
