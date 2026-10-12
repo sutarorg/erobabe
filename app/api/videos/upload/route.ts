@@ -6,6 +6,7 @@ import {
   createUploadJob,
   failUpload,
   httpErrorStatus,
+  isPreparedMetadata,
   publishVideo,
   requireActiveAdmin,
 } from "@/lib/video/publishing";
@@ -73,6 +74,7 @@ export async function POST(req: NextRequest) {
       categoryId,
       provider: "uqload",
       thumbnailUrl,
+      prepared: isPreparedMetadata(body.metadata) ? body.metadata : null,
     });
     const job = await createUploadJob({
       service,

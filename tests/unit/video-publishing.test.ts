@@ -126,6 +126,47 @@ describe("createGeneratedVideo metadata", () => {
     expect(fake.db.tags.length).toBeGreaterThan(0);
   });
 
+  it("skips a second Gemini call when metadata was prepared while the file was uploading", async () => {
+    geminiState.suggest = async () => {
+      throw new Error("suggestVideoMetadata should not run");
+    };
+
+    const prepared = {
+      title: "Already Written",
+      description: "Prepared while the bytes were in flight.",
+      tags: ["mature", "4k"],
+      source: "ai" as const,
+    };
+    const { video, metadata } = await createGeneratedVideo({
+      service: dbState.client as never,
+      userId: "admin-1",
+      sourceName: "clip.mp4",
+      categoryId: CATEGORY_ID,
+      provider: "uqload",
+      prepared,
+    });
+
+    expect(geminiState.calls).toBe(0);
+    expect(metadata.source).toBe("ai");
+    expect(metadata.title).toBe("Already Written");
+    expect(video.title).toBe("Already Written");
+  });
+
+  it("ignores prepared metadata that is not usable and asks Gemini instead", async () => {
+    geminiState.suggest = async () => aiSuggestion();
+    const { metadata } = await createGeneratedVideo({
+      service: dbState.client as never,
+      userId: "admin-1",
+      sourceName: "clip.mp4",
+      categoryId: CATEGORY_ID,
+      provider: "uqload",
+      prepared: { title: "x", description: "", tags: [], source: "ai" },
+    });
+
+    expect(geminiState.calls).toBe(1);
+    expect(metadata.title).toBe("Evening in Velvet");
+  });
+
   it("falls back when Gemini returns an unusable field, such as a blank title", async () => {
     geminiState.suggest = async () => aiSuggestion({ title: "   " });
     const { metadata } = await createGeneratedVideo({

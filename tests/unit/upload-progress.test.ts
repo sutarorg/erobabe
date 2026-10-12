@@ -5,9 +5,13 @@ import {
   estimateTransferFraction,
   formatBytesPerSecond,
   formatEta,
+  formatLiveBytesPerSecond,
+  formatUploadStatus,
   ratePerActiveUpload,
   readRememberedLinkRate,
   rememberLinkRate,
+  transferPercent,
+  windowedBytesPerSecond,
 } from "@/src/utils/uploadProgress";
 
 function memoryStorage(): Storage {
@@ -98,6 +102,51 @@ describe("parallel transfers share one uplink", () => {
     expect(ratePerActiveUpload(6 * 1024 * 1024, 1)).toBe(6 * 1024 * 1024);
     // Never divides by zero or by a fraction of a transfer.
     expect(ratePerActiveUpload(6 * 1024 * 1024, 0)).toBe(6 * 1024 * 1024);
+  });
+});
+
+describe("measured transfer speed", () => {
+  it("omits a rate until a full second of observed bytes exists", () => {
+    const samples = [
+      { at: 1_000, bytes: 0 },
+      { at: 1_400, bytes: 500_000 },
+    ];
+    expect(windowedBytesPerSecond(samples, 1_400, 1000)).toBeNull();
+    expect(windowedBytesPerSecond([], 1_400, 1000)).toBeNull();
+  });
+
+  it("reports the bytes actually sent in the last second, not a remembered seed", () => {
+    const samples = [
+      { at: 0, bytes: 0 },
+      { at: 1_000, bytes: 2 * 1024 * 1024 },
+      { at: 2_000, bytes: 3 * 1024 * 1024 },
+    ];
+    // The last second moved 1 MiB, even if an older sample (or a 2 MiB/s seed) says otherwise.
+    expect(windowedBytesPerSecond(samples, 2_000, 1000)).toBe(1024 * 1024);
+    expect(windowedBytesPerSecond(samples, 2_000, 1000)).not.toBe(DEFAULT_LINK_BYTES_PER_SECOND);
+  });
+
+  it("counts a stall as a slower rate instead of freezing the last burst", () => {
+    const samples = [
+      { at: 0, bytes: 0 },
+      { at: 1_000, bytes: 1024 * 1024 },
+    ];
+    // One second later, no new bytes: the window is measured against `now`.
+    expect(windowedBytesPerSecond(samples, 2_000, 1000)).toBe(0);
+  });
+
+  it("maps observed bytes to a linear percent that does not ease off near the end", () => {
+    expect(transferPercent(0, 100)).toBe(0);
+    expect(transferPercent(85, 100)).toBe(85);
+    expect(transferPercent(100, 100)).toBe(100);
+    expect(transferPercent(50, 0)).toBe(0);
+  });
+
+  it("omits speed from the row when nothing was measured", () => {
+    expect(formatUploadStatus(40, null)).toBe("Uploading to Uqload — 40%");
+    expect(formatUploadStatus(40, null)).not.toMatch(/measuring|estimated|MB\/s/);
+    expect(formatUploadStatus(12, 1.5 * 1024 * 1024)).toBe(`Uploading to Uqload — 12% · ${formatLiveBytesPerSecond(1.5 * 1024 * 1024)}`);
+    expect(formatLiveBytesPerSecond(1.5 * 1024 * 1024)).toBe("1.5 MB/s");
   });
 });
 
