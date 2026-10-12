@@ -1,5 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { inspectNowpaymentsSetup } from "@/lib/nowpayments/client";
+import { StreamtapeProvider } from "@/lib/video/streamtape";
+import { redactSecrets } from "@/lib/video/streamtape-protocol";
 import { getSiteUrl } from "@/lib/site";
 import NowpaymentsCheck from "./NowpaymentsCheck";
 
@@ -40,24 +42,49 @@ export default async function SystemHealthAdmin() {
     }
   }
 
-  const providerName = (process.env.VIDEO_PROVIDER || "ufoload").trim().toLowerCase();
-  const providerKnown = providerName === "ufoload" || providerName === "internal";
-  const providerApproved =
-    providerName === "ufoload" ? process.env.UFOLOAD_ADULT_CONTENT_APPROVED === "true" : providerName === "internal";
+  const providerName = (process.env.VIDEO_PROVIDER || "streamtape").trim().toLowerCase();
+  const providerKnown = providerName === "streamtape" || providerName === "internal";
+  const providerApproved = providerName === "streamtape" ? process.env.STREAMTAPE_ADULT_CONTENT_ALLOWED === "true" : providerName === "internal";
+  const relayConfigured = Boolean((process.env.STREAMTAPE_RELAY_URL || "").trim());
+  const relaySecretSet = (process.env.STREAMTAPE_RELAY_SECRET || "").trim().length >= 16;
+
+  /**
+   * A real authenticated reachability probe (`GET /account/info`) — the same
+   * standard System Health applies to NOWPayments. Credentials are never
+   * displayed, and an environment flag alone is never reported as healthy.
+   */
+  let accountCheck: Awaited<ReturnType<StreamtapeProvider["checkAccount"]>> | null = null;
+  if (providerName === "streamtape" && process.env.STREAMTAPE_LOGIN && process.env.STREAMTAPE_API_KEY) {
+    accountCheck = await new StreamtapeProvider().checkAccount();
+  }
+
   const videoProviderStatus = !providerKnown
     ? "Misconfigured"
-    : !process.env.UFOLOAD_API_KEY && providerName === "ufoload"
-      ? "API key missing"
-      : providerApproved
-        ? `${providerName} (approved)`
-        : `${providerName} (blocked — see DEPLOYMENT.md)`;
+    : providerName === "internal"
+      ? "internal (embeds only)"
+      : !process.env.STREAMTAPE_LOGIN || !process.env.STREAMTAPE_API_KEY
+        ? "Credentials missing"
+        : !providerApproved
+          ? "streamtape (blocked — see DEPLOYMENT.md)"
+          : accountCheck === null
+            ? "streamtape (configured — not probed)"
+            : accountCheck.ok
+              ? "streamtape · API reachable"
+              : "streamtape · API unreachable";
+
   const videoProviderDetail = !providerKnown
-    ? `VIDEO_PROVIDER="${providerName}" is not supported — uploads fail closed. Set it to "ufoload" (or "internal" for embed-only deployments).`
+    ? `VIDEO_PROVIDER="${providerName}" is not supported — uploads fail closed. Set it to "streamtape" (or "internal" for embed-only deployments).`
     : providerName === "internal"
       ? "Embed-only placeholder: no video hosting, no local uploads."
-      : providerApproved
-        ? "Direct chunked uploads and URL imports go to UFOLOAD; videos stay private until the provider reports them ready."
-        : "UFOLOAD uploads are refused until UFOLOAD_API_KEY is set and written adult-content/commercial approval is recorded (UFOLOAD_ADULT_CONTENT_APPROVED=true).";
+      : !process.env.STREAMTAPE_LOGIN || !process.env.STREAMTAPE_API_KEY
+        ? "Set STREAMTAPE_LOGIN and STREAMTAPE_API_KEY (server-only) from the Streamtape account panel → Account Settings → API/FTP credentials."
+        : !providerApproved
+          ? "Uploads are refused until STREAMTAPE_ADULT_CONTENT_ALLOWED=true is set after verifying Streamtape's terms, copyright policy and the account's content settings (DEPLOYMENT.md §D)."
+          : accountCheck && !accountCheck.ok
+            ? redactSecrets(accountCheck.error, [process.env.STREAMTAPE_API_KEY, process.env.STREAMTAPE_LOGIN])
+            : accountCheck
+              ? `GET /account/info succeeded in ${accountCheck.latencyMs} ms. Relay ${relayConfigured ? "configured" : "MISSING (STREAMTAPE_RELAY_URL)"}${relayConfigured && !relaySecretSet ? " — STREAMTAPE_RELAY_SECRET is missing/weak" : ""}. Upload conversion still requires a real transfer; this check only proves credentials and connectivity.`
+              : "Credentials present; reachability not probed.";
 
   const checks = [
     { name: "Database", status: dbStatus, latency: dbLatency, desc: "Supabase PostgreSQL" },

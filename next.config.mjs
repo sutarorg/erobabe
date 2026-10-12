@@ -14,7 +14,12 @@ const nextConfig = {
       { protocol: 'https', hostname: 'i.postimg.cc' },
       { protocol: 'https', hostname: 'images.pexels.com' },
       { protocol: 'https', hostname: '**.supabase.co' },
-      // UFOLOAD posters and generated thumbnails.
+      // Streamtape player pages and splash thumbnails.
+      { protocol: 'https', hostname: 'streamtape.com' },
+      { protocol: 'https', hostname: '**.streamtape.com' },
+      { protocol: 'https', hostname: 'tapecontent.net' },
+      { protocol: 'https', hostname: '**.tapecontent.net' },
+      // Retired UFOLOAD posters on legacy videos — historical rows keep rendering.
       { protocol: 'https', hostname: 'ufoload.com' },
       { protocol: 'https', hostname: '**.ufoload.com' },
       { protocol: 'https', hostname: '**.resend.com' },

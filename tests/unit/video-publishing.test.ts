@@ -142,7 +142,7 @@ describe("createGeneratedVideo metadata", () => {
       userId: "admin-1",
       sourceName: "clip.mp4",
       categoryId: CATEGORY_ID,
-      provider: "ufoload",
+      provider: "streamtape",
       prepared,
     });
 
@@ -159,7 +159,7 @@ describe("createGeneratedVideo metadata", () => {
       userId: "admin-1",
       sourceName: "clip.mp4",
       categoryId: CATEGORY_ID,
-      provider: "ufoload",
+      provider: "streamtape",
       prepared: { title: "x", description: "", tags: [], source: "ai" },
     });
 

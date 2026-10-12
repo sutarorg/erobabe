@@ -2,13 +2,13 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 
 /**
- * Configuration for the *live* UFOLOAD tests.
+ * Configuration for the *live* Streamtape tests.
  *
  * These talk to the real API with a real key, so they are never part of
  * `npm run test` (the default config excludes `tests/live/**`). Run them
  * deliberately:
  *
- *   LIVE_UFOLOAD=1 UFOLOAD_API_KEY=ufo_... npm run test:live
+ *   LIVE_STREAMTAPE=1 STREAMTAPE_LOGIN=... STREAMTAPE_API_KEY=... npm run test:live
  *
  * Read `tests/live/README.md` first — one of the tests uploads a file.
  */

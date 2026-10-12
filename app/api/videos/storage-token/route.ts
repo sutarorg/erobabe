@@ -5,9 +5,10 @@ import { createThumbnailUploadTarget } from "@/lib/video/storage";
 /**
  * Issues a short-lived signed upload URL for a thumbnail image.
  *
- * Video files must not be posted here — they go directly to UFOLOAD from the
- * browser via `/api/videos/ufoload-session`. Thumbnails are small enough to
- * live in Supabase Storage and keep using a signed upload URL.
+ * Video files must not be posted here — they go from the browser through the
+ * upload relay to Streamtape (`/api/videos/streamtape-session`). Thumbnails
+ * are small enough to live in Supabase Storage and keep using a signed upload
+ * URL.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -27,8 +28,8 @@ export async function POST(req: NextRequest) {
     if (body.kind && body.kind !== "thumbnail") {
       return NextResponse.json(
         {
-          error: "Video files upload directly to UFOLOAD",
-          details: "Request /api/videos/ufoload-session and PUT the file's chunks to the returned upload URL. This route only issues thumbnail upload URLs.",
+          error: "Video files upload to Streamtape through the upload relay",
+          details: "Request /api/videos/streamtape-session and POST the multipart file to the uploadUrl it returns. This route only issues thumbnail upload URLs.",
         },
         { status: 410 }
       );

@@ -1,22 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getVideoProvider } from "@/lib/video/provider";
-import { UfoloadProvider } from "@/lib/video/ufoload";
-import { reconcileUfoloadRecord } from "@/lib/video/ufoload-flow";
+import { StreamtapeProvider } from "@/lib/video/streamtape";
+import { reconcileStreamtapeRecord } from "@/lib/video/streamtape-flow";
 import { errorMessageFrom, errorStatusFrom } from "@/lib/video/publishing";
 import { removeTransitObject } from "@/lib/video/storage";
+import { redactSecrets } from "@/lib/video/streamtape-protocol";
 
 /**
  * Reads (and reconciles) the state of an upload job or video.
  *
- * For UFOLOAD records this is the only place a video becomes public: the stored
- * row is compared against the provider's own file/import state, and the row is
- * promoted only when UFOLOAD reports `ready`. A file that failed conversion
- * keeps its actionable reason and stays private.
+ * For Streamtape records this is the only place a video becomes public: the
+ * stored row is compared against the provider's own file/import state, and the
+ * row is promoted only when Streamtape reports the file converted. A file that
+ * failed conversion keeps its actionable reason and stays private.
  *
- * Records that predate the migration (`provider: "uqload"`) are returned as
- * stored, untouched: their playback/embed URLs still render, but nothing talks
- * to the retired provider.
+ * Records from retired integrations (`provider: "ufoload"` / `"uqload"`) are
+ * returned as stored, untouched: their playback/embed URLs still render, but
+ * nothing contacts the retired provider APIs.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -72,16 +73,16 @@ export async function GET(req: NextRequest) {
     let providerState: "ready" | "processing" | "failed" | null = null;
     let note: string | null = null;
 
-    if (video.provider === "ufoload") {
+    if (video.provider === "streamtape") {
       try {
-        const providerFactory = getVideoProvider("ufoload");
-        if (!(providerFactory instanceof UfoloadProvider)) throw new Error("UFOLOAD provider is not available");
-        const provider = providerFactory;
+        const factory = getVideoProvider("streamtape");
+        if (!(factory instanceof StreamtapeProvider)) throw new Error("Streamtape provider is not available");
+        const provider = factory;
 
         if (!provider.isEnabled()) {
-          note = provider.disabledReason() || "UFOLOAD is not configured";
+          note = provider.disabledReason() || "Streamtape is not configured";
         } else {
-          const outcome = await reconcileUfoloadRecord({ service, userId: user.id, provider, video, job });
+          const outcome = await reconcileStreamtapeRecord({ service, userId: user.id, provider, video, job });
           providerInfo = "providerInfo" in outcome ? outcome.providerInfo ?? null : null;
           providerState = outcome.state;
 
@@ -95,7 +96,7 @@ export async function GET(req: NextRequest) {
 
           if (outcome.state === "failed") note = outcome.error;
           else if (outcome.state === "processing") note = outcome.note;
-          else note = "UFOLOAD confirmed this video is ready.";
+          else note = "Streamtape confirmed this video is ready.";
 
           // The provider has the file now — drop any transit copy (best effort).
           if (outcome.state === "ready" && job?.storage_path) {
@@ -103,19 +104,30 @@ export async function GET(req: NextRequest) {
             await service.from("upload_jobs").update({ storage_path: null }).eq("id", job.id);
           }
         }
-      } catch (error: any) {
+      } catch (error: unknown) {
         // A provider hiccup must never 500 the admin UI: report it as a note
         // and leave the stored row exactly as it is.
-        console.warn(`[video-status] UFOLOAD reconciliation failed: ${errorMessageFrom(error, "unknown error")}`);
-        note = errorMessageFrom(error, "Could not reach UFOLOAD for this video.");
+        console.warn(
+          `[video-status] Streamtape reconciliation failed: ${redactSecrets(errorMessageFrom(error, "unknown error"), [
+            process.env.STREAMTAPE_API_KEY,
+            process.env.STREAMTAPE_LOGIN,
+          ])}`
+        );
+        note = redactSecrets(errorMessageFrom(error, "Could not reach Streamtape for this video."), [
+          process.env.STREAMTAPE_API_KEY,
+          process.env.STREAMTAPE_LOGIN,
+        ]);
       }
+    } else if (video.provider === "ufoload") {
+      note =
+        "This video was uploaded through the retired UFOLOAD integration. Its stored playback data is kept as-is and is not refreshed.";
     } else if (video.provider === "uqload") {
       note =
         "This video was uploaded to the retired Uqload integration. Its stored playback data is kept as-is and is not refreshed.";
     }
 
     return NextResponse.json({ video, job, providerInfo, providerState, note });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return NextResponse.json({ error: errorMessageFrom(error, "Status check failed") }, { status: errorStatusFrom(error) });
   }
 }

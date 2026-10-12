@@ -3,7 +3,7 @@
 This document gives complete, verified steps to deploy Erobabe from zero to production. It covers Supabase, NOWPayments, video hosting, Gemini, Resend, GitHub, hosting, domain, env vars, testing, and rollback.
 
 **Date**: October 10, 2026  
-**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, Gemini, UFOLOAD video hosting (gated behind written approval).
+**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, Gemini, Streamtape video hosting (gated behind owner policy verification) with a standalone upload relay.
 
 ---
 
@@ -26,7 +26,7 @@ This document gives complete, verified steps to deploy Erobabe from zero to prod
 - Playwright browsers: `npx playwright install`
 
 ### Decisions requiring owner authorization before production
-1. **Video hosting provider**: UFOLOAD's TOS (https://ufoload.com/tos) does not spell out an adult-content clause, so you MUST obtain written confirmation from the provider that lawful adult content, commercial use, API uploads and embedded playback are permitted (`contact@ufoload.com`), OR approve a replacement provider (Bunny.net Stream, Cloudflare Stream, Mux, or self-hosted S3 + transcoding). Without this, production video hosting is BLOCKED. See section D.
+1. **Video hosting provider**: Streamtape's Terms (https://streamtape.com/terms-and-conditions) neither permit nor ban lawful adult content explicitly, so the owner MUST verify the terms, copyright policy and account content settings (and ideally get Streamtape's written answer) before setting `STREAMTAPE_ADULT_CONTENT_ALLOWED=true`. The upload relay (`relay/streamtape-relay.mjs`) must also be deployed on an always-on Node host. Without both, production video hosting is BLOCKED. See section D.
 2. **Hosting provider**: Vercel Hobby is limited to personal non-commercial use and its Acceptable Use Policy restricts objectionable content. Do NOT deploy commercial Erobabe to Vercel Hobby. Choose a host whose terms explicitly permit adult content and commercial use. Document approval.
 3. **Legal identity**: Operator must provide real legal name, business address, registration, contact emails, age-verification procedures. Do not publish fictional identity.
 4. **Age assurance**: Evaluate jurisdiction-specific requirements (e.g., UK, EU, US state laws). Frontend age gate alone is not robust assurance. Implement required verification integration where legally required.
@@ -125,7 +125,7 @@ In Supabase Dashboard → **Edge Functions** → **Secrets**, add:
 - `GEMINI_API_KEY`
 - `NOWPAYMENTS_API_KEY`
 - `NOWPAYMENTS_IPN_SECRET`
-- `UFOLOAD_API_KEY` (server-only; see the approval gate in section D)
+- `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY`, `STREAMTAPE_RELAY_SECRET` (server-only; see the policy gate in section D)
 - `SITE_URL`
 
 ### 10. Create initial administrator using secure documented process
@@ -376,147 +376,177 @@ shows `finished` for that address and amount) — see "Rollback and recovery".
 
 ## D. Video-Hosting Setup
 
-### Active provider: UFOLOAD
+### Active provider: Streamtape (UFOLOAD is retired)
 
-Videos are uploaded **directly from the admin browser to UFOLOAD** in chunks. The
-bytes never pass through a Vercel function (which rejects bodies above 4.5 MB)
-and never touch Supabase Storage. Supabase only stores the thumbnail, through the
-existing signed-upload route.
+Videos are uploaded **browser → streaming relay → Streamtape upload node**. The
+bytes never pass through a Vercel/Next.js function (request bodies above 4.5 MB
+are rejected) and never touch Supabase Storage. Supabase only stores thumbnails
+(existing signed-upload route) and metadata.
 
-Official documentation used by the implementation:
+Why a relay instead of a direct browser upload: Streamtape documents
+`GET /file/ul` → multipart `POST` to the returned node URL, but does **not**
+document the node's CORS behaviour, response body, or limits, and none of that
+could be proven from the build environment (see `docs/STREAMTAPE_MIGRATION.md`
+§2–§3). A browser can only read the node's reply if the node sends CORS headers,
+so the relay removes that unknown instead of shipping a guess. If the live suite
+and the browser acceptance spec later prove direct upload works, the relay can be
+dropped without touching the data model.
 
-- API reference: https://ufoload.com/docs/api
-- OpenAPI definition: https://ufoload.com/api/openapi.json
-- Terms: https://ufoload.com/tos · Pricing: https://ufoload.com/pricing
+Official documentation used by the implementation (fetched 2026-10-12):
 
-### Policy gate — written approval is a launch blocker
+- API reference: https://streamtape.com/api
+- Terms: https://streamtape.com/terms-and-conditions · Copyright: https://streamtape.com/copyright
+- Credentials: https://streamtape.com/accpanel → *Account Settings*
 
-UFOLOAD's Terms of Service (draft v0.1, dated 2026-10-11) prohibit unlawful,
-infringing, malware, violence and non-consensual material, and reserve
-discretionary enforcement — including withholding payouts. They do **not**
-contain an explicit adult-content clause, so an API key alone does not mean that
-lawful adult content, commercial use, API uploads or embedded playback are
-permitted on the account.
+### Policy gate — owner verification is a launch blocker
 
-**Before enabling production uploads, you must EITHER:**
+Streamtape's Terms prohibit sexual content involving minors and any content that
+violates third-party rights, require you to hold the rights/consent for what you
+publish, and reserve the right to remove content at any time. They contain **no
+explicit clause permitting or banning lawful adult content**, so being able to
+generate an API key does not mean your use is permitted.
 
-1. Obtain written confirmation from UFOLOAD (`contact@ufoload.com`) that lawful
-   adult content, commercial use, API uploads and embedded playback are permitted
-   for this account, keep the confirmation on file with its date and contact, and
-   only then set `UFOLOAD_ADULT_CONTENT_APPROVED=true`; **OR**
-2. Have the owner approve a different provider whose current terms explicitly
-   permit adult, commercial content, and implement it behind
-   `lib/video/provider.ts`.
+**Before enabling production uploads, the owner must:**
 
-**Fail-closed gate.** While `UFOLOAD_ADULT_CONTENT_APPROVED` is anything other
-than `"true"`, every upload/import route answers `503` with an actionable message
-that names this variable, and nothing is sent to UFOLOAD. `VIDEO_PROVIDER`
-accepts only `ufoload` (real uploads) and `internal` (embeds only, no hosting);
-any other value throws a configuration error instead of quietly falling back to
-the retired Uqload integration.
+1. Read the current Terms and Copyright Policy and, if in doubt, ask Streamtape
+   support in writing whether lawful adult content, commercial use, API uploads
+   and embedded playback are permitted for this account; keep the answer on file.
+2. Check the account panel for content/embedding settings that apply to the account.
+3. Confirm rights, consent and age documentation for the catalog.
+4. Only then set `STREAMTAPE_ADULT_CONTENT_ALLOWED=true`.
 
-### Setup steps (UFOLOAD)
+**Fail-closed gate.** While `STREAMTAPE_ADULT_CONTENT_ALLOWED` is anything other
+than `"true"` — or credentials are missing — every upload/import route answers
+`503` with an actionable message naming the variable, and nothing is sent to
+Streamtape. `VIDEO_PROVIDER` accepts only `streamtape` and `internal` (embeds
+only); `ufoload`, `uqload` and any typo throw a configuration error instead of
+falling back.
 
-1. Create the account at https://ufoload.com.
-2. Open the dashboard → **Developers** and copy the API key (starts with `ufo_`,
-   shown only once). Keep it server-side.
-3. Check the plan's file-size ceiling and pick the matching limit:
-   Free 5 GB · Pro 10 GB · Max 25 GB. The application enforces its own 2 GB
-   ceiling in addition to the provider's `max_bytes`, and the admin UI reports a
-   clear `413` when a file exceeds either.
-4. Set these environment variables in the hosting provider (see `.env.example`):
-   - `UFOLOAD_API_KEY=ufo_...` — **server-only**; never `NEXT_PUBLIC_*`, never in a
-     browser response, commit, log or audit row.
-   - `UFOLOAD_ADULT_CONTENT_APPROVED=true` — only after the written confirmation.
-   - `VIDEO_PROVIDER=ufoload` — the active integration.
-5. Run the database migration `supabase/migrations/00000000000006_ufoload_video_provider.sql`.
-   It is additive: the `ufoload` provider value, `videos.provider_public_id`,
-   `videos.provider_progress`, `videos.provider_error`, and
-   `upload_jobs.provider_upload_id` / `provider_import_id` / `provider_status`.
-   Existing rows — including historical `provider='uqload'` videos — are left
-   exactly as they are and keep playing from their stored URLs.
-6. Open Admin → **System Health**: *Video Provider* must read `ufoload
-   (approved)`. Anything else names what is missing.
-7. Upload one real test video from `/admin/videos/upload`, wait for the row to
-   say *Published*, and open it on the public `/video/[slug]` page (see
-   `GO_LIVE_CHECKLIST.md` section D for the click-by-click checklist).
+### Setup steps
 
-### Endpoints the code calls (verified against the official documentation)
+1. Create/sign in to the Streamtape account.
+2. User Panel → **Account Settings** → copy **API Login** and **API Key/Password**.
+   Keep them server-side. Optionally create a folder in the file manager and note
+   its id for `STREAMTAPE_FOLDER_ID`.
+3. Verify the account's real per-file size limit (not stated in the API docs; a
+   2021 community README claims 15 GB) and set `STREAMTAPE_MAX_UPLOAD_BYTES`
+   accordingly. The app enforces this limit before any bytes move.
+4. **Deploy the relay** (`relay/streamtape-relay.mjs`, zero dependencies, Node ≥ 18):
+   ```bash
+   STREAMTAPE_RELAY_SECRET=<same random >=16 chars as the app> \
+   STREAMTAPE_RELAY_ALLOWED_ORIGINS=https://erobabe.com \
+   RELAY_PORT=8787 node relay/streamtape-relay.mjs
+   ```
+   Requirements: an always-on host (VPS, Docker, Fly.io, Railway, Cloud Run with
+   request timeout ≥ the longest upload, …) with **HTTPS in front**; it must **not**
+   run as a Vercel/serverless function. It holds no Streamtape credentials — it only
+   accepts HMAC-signed, expiring, single-use tokens minted by the app, and refuses
+   upload hosts outside `tapecontent.net`/`streamtape.com`
+   (`STREAMTAPE_UPLOAD_HOST_SUFFIXES` extends the list). Run **one instance** (the
+   single-use cache is in memory) or replace `makeUsedTracker` with a shared store.
+   Health check: `GET /health`.
+5. Set the app's environment variables (see `.env.example`):
+   - `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY` — **server-only**; never `NEXT_PUBLIC_*`,
+     never in a browser response, commit, log or audit row.
+   - `STREAMTAPE_FOLDER_ID` (optional), `STREAMTAPE_MAX_UPLOAD_BYTES` (recommended).
+   - `STREAMTAPE_ADULT_CONTENT_ALLOWED=true` — only after the owner verification above.
+   - `STREAMTAPE_RELAY_URL`, `STREAMTAPE_RELAY_SECRET`.
+   - `VIDEO_PROVIDER=streamtape`.
+6. Run the database migration `supabase/migrations/00000000000007_streamtape_video_provider.sql`
+   (forward-only; allows `streamtape`, defaults new jobs to it, adds a processing
+   index). Older migrations are untouched; historical `ufoload`/`uqload` rows keep
+   playing from their stored URLs and are never contacted.
+7. Open Admin → **System Health**: *Video Provider* must read `streamtape · API
+   reachable` (it performs a real `GET /account/info`). Any other state names
+   what is missing; an environment flag alone is never reported as healthy.
+8. Upload one real test video from `/admin/videos/upload` and follow
+   `GO_LIVE_CHECKLIST.md` section D.
 
-Base: `https://ufoload.com/api/v1`, authenticated with `Authorization: Bearer ufo_...`.
+**Rotating credentials.** Generate new credentials in the Streamtape panel, update
+`STREAMTAPE_LOGIN`/`STREAMTAPE_API_KEY` in the hosting secrets, redeploy, run System
+Health. To rotate the relay secret, change `STREAMTAPE_RELAY_SECRET` in the relay
+and the app **together** (in-flight sessions become invalid; admins just restart them).
+
+### Endpoints the code calls (verified against https://streamtape.com/api, 2026-10-12)
+
+Base `https://api.streamtape.com`, HTTPS only, `login` + `key` query parameters,
+envelope `{status, msg, result}` (the envelope `status` — not the HTTP status — decides
+success: 200 OK · 400 · 403 · 404 · 451 legal · 509 bandwidth · 50x).
 
 | Purpose | Request |
 | --- | --- |
-| Start a direct upload | `POST /files/uploads` `{filename, size, mime_type?}` → `201 {upload_id, url, grant, authorization, chunk_size, max_bytes, expires_at}` |
-| Send one chunk | `PUT {url}?offset=N` with `Authorization: <authorization from the grant>`; at most `chunk_size` (never above 256 MiB) |
-| Resume after an interruption | `GET {url}` → `{"offset": N}` |
-| Keep the slot alive / read state | `GET /files/uploads/{upload_id}` → `{state: pending\|completing\|completed\|failed\|aborted, file_id?}` |
-| Finish | `POST /files/uploads/{upload_id}/complete` → `{file, duplicate}`; `409 upload_busy` means "still finalizing" (the app retries) |
-| Cancel / free the slot | `DELETE /files/uploads/{upload_id}` |
-| Read / rename / delete a file | `GET` · `PATCH {name}` · `DELETE /files/{fileID}` (a ULID, or the 11-character `public_id`) |
-| Start a URL import | `POST /files/import` `{url, name?}` → `202 {import: {id, status, progress, file_id?}}` |
-| Poll / cancel an import | `GET /files/import` (matched by task id) · `DELETE /files/import/{id}` |
-| Playback | iframe `https://ufoload.com/e/{identifier}` · watch page `https://ufoload.com/v/{identifier}` (`?autoplay=0&mute=1&loop=1` supported) |
+| Health check | `GET /account/info` |
+| Upload URL | `GET /file/ul[?folder=]` → `result {url, valid_until}` (upload node, e.g. `https://tapecontent.net/xfsupload/…`) |
+| Send bytes | `POST` multipart/form-data to that URL (field `file1` per the docs' curl example) — via the relay |
+| File state | `GET /file/info?file={id}` → `result {id: {id,name,size,type,converted,status}}` |
+| Folder listing | `GET /file/listfolder[?folder=]` → `{folders, files:[{name,size,linkid,created_at,convert,…}]}` |
+| Conversion queues | `GET /file/runningconverts` (`status new\|pending`, `progress` 0–1) · `GET /file/failedconverts` (`status error`) |
+| Thumbnail | `GET /file/getsplash?file={id}` → URL string |
+| Rename / delete | `GET /file/rename` · `GET /file/delete` |
+| Remote upload | `GET /remotedl/add?url&name&folder` → `{id, folderid}` · `GET /remotedl/status?id` → `{id: {status,bytes_loaded,bytes_total,extid,url,…}}` · `GET /remotedl/remove?id` (never `all`) |
+| Playback | iframe `https://streamtape.com/e/{fileId}` (stable; download links are ticketed/expiring and are never stored) |
 
-Notes the implementation relies on:
+Not documented by Streamtape — and therefore **unverified until the live suite runs**:
+the upload node's response body, its multipart field-name tolerance, its CORS
+behaviour, the full `remotedl/status` status vocabulary, per-file/concurrency limits.
+The code never trusts a file id parsed from the node reply: it is confirmed with
+`/file/info` (name + size) or resolved from an unambiguous, unclaimed
+`/file/listfolder` match; otherwise the row stays private and `processing`.
 
-- A direct-upload grant reserves a concurrency slot; an abandoned upload holds it
-  for 15 minutes, which is why the browser pings `GET /files/uploads/{id}` every
-  5 minutes during a long transfer.
-- UFOLOAD allows at most **10 active imports** per account; the import batch stops
-  and explains itself when the provider answers `409`/`429` instead of hammering it.
-- The `links` set returned with a file is **signed and expires** (hours). Stable
-  addresses only are stored: the embed page and the provider watch page.
-- Read endpoints are rate-limited (about 20 requests/second per account); the app
-  issues one status request per row per 5 seconds and treats `429` as retryable.
+### Upload path — how files get in
 
-### Upload path — how large files get in
+1. `POST /api/videos/streamtape-session` (admin, JSON) validates name/size/limit,
+   calls `GET /file/ul`, stores an `upload_jobs` row, and returns
+   `{ uploadUrl: "{STREAMTAPE_RELAY_URL}/upload/{signed-token}", uploadId, jobId }`.
+   The token carries the node URL, session id and expiry (≤ 30 min) — the API
+   credentials never leave the server.
+2. The browser sends one multipart `POST` (XHR: measured byte progress; abort =
+   real cancel) to the relay, which streams it to the node and passes the node's
+   reply back verbatim. Streamtape documents no chunk/resume protocol, so an
+   interrupted upload is restarted, not resumed.
+3. `POST /api/videos/upload` posts the *session* id (and the node reply for
+   server-side verification — never a file id the server must believe), confirms
+   the file, generates/reuses Gemini metadata and creates the video row **private**.
+4. The admin page polls `GET /api/videos/status?jobId=…`; the server checks
+   `/file/info`, `/file/runningconverts` and `/file/failedconverts` and publishes
+   only when the file is **converted**.
+5. Cancel aborts the XHR (the relay aborts upstream) and calls
+   `POST /api/videos/streamtape-cancel`, which marks the job cancelled, makes the
+   row private and — for imports — calls `remotedl/remove?id=<task>`.
 
-Vercel functions reject any request body above **4.5 MB** with a plain-text
-`413 Request Entity Too Large` (which used to surface as
-`Unexpected token 'R', "Request En"... is not valid JSON`). Large files therefore
-never travel through one of our routes:
-
-1. `POST /api/videos/ufoload-session` (admin, JSON, a few hundred bytes) asks
-   UFOLOAD for a grant and stores the session on the `upload_jobs` row. The
-   response carries the node URL, the **upload-scoped grant** and the chunk
-   parameters — the API key stays on the server and is never returned.
-2. The browser `PUT`s the file in chunks straight to that node URL with
-   `XMLHttpRequest` (so real progress events are available), authenticated with
-   the grant. A failed chunk asks the node for its accepted offset and resumes
-   from there instead of restarting or skipping data.
-3. `POST /api/videos/upload` posts the *session* id (never a provider file id —
-   that is read back from UFOLOAD server-side), generates/reuses Gemini metadata
-   and creates the video row. The video is created **private**.
-4. The admin page polls `GET /api/videos/status?jobId=...` every 5 seconds until
-   UFOLOAD reports the file as `ready`, at which point the row is published.
-5. Cancel aborts the in-flight transfer and calls
-   `POST /api/videos/ufoload-cancel`, which drops the partial upload and frees the
-   concurrency slot.
-
-`/api/videos/upload-url` starts a URL import instead: it answers `queued` (never
-`published`), stores the provider's *task* id in `upload_jobs.provider_import_id`,
-and `/api/videos/status` resolves the task, then the created file, then `ready`.
+`/api/videos/upload-url` starts a **remote upload** (`remotedl/add`): it answers
+`queued` (never `published`), stores the task id in `upload_jobs.provider_import_id`,
+and `/api/videos/status` follows the task, then the created file, then conversion.
+Only public http(s) URLs are accepted (no localhost/private ranges/credentials).
 
 ### Thumbnails
 
 Each video — local file, iframe embed or remote URL — has its own thumbnail
 picker. A custom thumbnail is uploaded to the public `video-thumbnails` bucket
 through the existing signed-upload flow (`POST /api/videos/storage-token` →
-browser `PUT`). Thumbnails never go through UFOLOAD. When no thumbnail is chosen,
-the provider's own poster (`file.poster`, a stable address) is used.
+browser `PUT`). When none is chosen, Streamtape's splash image
+(`/file/getsplash`) is stored once the file is converted.
 
 > `POST /api/videos/storage-token` answers `410` for `kind: "video"`: video bytes
 > must not transit Supabase or a function body.
 
 ### Readiness rules
 
-- A video is published only when the provider reports the file as `ready`.
-  `processing`/`queued`/`uploading` rows stay private (and invisible to crawlers);
-  `failed` rows keep the provider's reason in `videos.provider_error` and stay private.
-- `provider_progress` shows the encoder's own percentage while it works.
-- A provider outage is reported as a note in the status response — it never turns
-  the admin page into a 500, and it never publishes anything.
+- A video is published only when `/file/info` reports `converted: true` with entry
+  status 200. `new`/`pending`/not-listed rows stay private; a `failedconverts`
+  entry, a 451 or a vanished remote task mark the row failed with the reason in
+  `videos.provider_error`, and it stays private.
+- `provider_progress` mirrors `runningconverts.progress`.
+- A provider outage is reported as a note in the status response — never a 500, and it never publishes anything.
+- The public page additionally requires `status=published`, `visibility=public`,
+  `rights_status=cleared`, `moderation_status=approved`.
+
+### Legacy UFOLOAD / Uqload videos
+
+Rows with `provider='ufoload'` or `'uqload'` are left exactly as they are: stored
+`embed_url`/`playable_url` keep rendering; `/api/videos/status` answers them as
+history and contacts no retired API. Posters under `ufoload.com` remain allowed in
+`next.config.mjs`. They are never relabelled as Streamtape.
 
 ### Supabase Storage
 
@@ -525,7 +555,7 @@ the provider's own poster (`file.poster`, a stable address) is used.
 3. Optionally create bucket `videos` (private, only if you later implement an internal provider)
 4. Set policies: allow authenticated advertisers to upload/delete only within their own `ad-creatives/<user-id>/` folder; public read is needed for creative and thumbnail display.
 
-> **Legacy**: `video-incoming` (from migration `00000000000004_video_transit_storage.sql`) is only used as a short-lived transit area if an older deployment still routes bytes there — video bytes now go straight from the browser to UFOLOAD, so the bucket is not needed. On Supabase projects with a 50 MB global file limit the migration's 2 GB bucket insert can fail; skip/ignore that bucket and do not upload video bytes to Supabase.
+> **Legacy**: `video-incoming` (from migration `00000000000004_video_transit_storage.sql`) is only used as a short-lived transit area if an older deployment still routes bytes there — video bytes now go through the streaming relay to Streamtape, so the bucket is not needed. On Supabase projects with a 50 MB global file limit the migration's 2 GB bucket insert can fail; skip/ignore that bucket and do not upload video bytes to Supabase.
 6. The campaign and publisher flows now fail clearly if their required bucket is missing. Verify both bucket names before accepting uploads.
 
 ---
@@ -689,9 +719,16 @@ fly deploy
 | `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional pin for the IPN callback URL the app sends with every payment (must be an absolute URL ending in `/api/nowpayments/ipn`) | No | Your domain | Hosting env | prod (optional) | Admin → System Health shows `URL source`: `NOWPAYMENTS_IPN_CALLBACK_URL`; an invalid value is reported as a config warning and ignored | Yes |
 | `NOWPAYMENTS_DEFAULT_PAY_CURRENCY` | Default NOWPayments asset identifier | No | One of: usdterc20, usdttrc20, usdtbsc, usdtsol, btc, eth, trx, bnbbsc, sol | Hosting env | prod | Must be enabled in the NOWPayments dashboard; checkout validates every selection server-side | Yes |
 | `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key for `x-nowpayments-sig` verification | No | NOWPayments Dashboard → Store Settings → IPN Secret Key | Hosting secrets | prod | Admin → System Health shows IPN secret set; every IPN is rejected without it | Yes |
-| `VIDEO_PROVIDER` | Video hosting integration | Yes | `ufoload` (real uploads) or `internal` (embeds only) | Hosting env | prod | `ufoload` | Yes |
-| `UFOLOAD_API_KEY` | UFOLOAD API key (`ufo_...`) | Yes (for uploads) | https://ufoload.com dashboard → Developers | Hosting secrets | prod | Server-only; an upload session returns only the upload grant | Yes |
-| `UFOLOAD_ADULT_CONTENT_APPROVED` | Approval gate for adult content / commercial use / API uploads on UFOLOAD | Yes (for uploads) | Set to `true` only after written provider confirmation | Hosting env | prod | Uploads answer `503` naming this variable until it is `true` **and** the key is set | Yes |
+| `VIDEO_PROVIDER` | Video hosting integration | Yes | `streamtape` (real uploads) or `internal` (embeds only); `ufoload`/unknown fail closed | Hosting env | prod | `streamtape` | Yes |
+| `STREAMTAPE_LOGIN` | Streamtape API Login | Yes (for uploads) | https://streamtape.com/accpanel → Account Settings | Hosting secrets | prod | Server-only; Admin → System Health performs a real `/account/info` check | Yes |
+| `STREAMTAPE_API_KEY` | Streamtape API Key/Password | Yes (for uploads) | https://streamtape.com/accpanel → Account Settings | Hosting secrets | prod | Server-only; redacted from every log/error/audit row | Yes |
+| `STREAMTAPE_FOLDER_ID` | Folder new uploads go into | No | Streamtape file manager | Hosting env | prod | Uploaded files appear in that folder | Yes |
+| `STREAMTAPE_ADULT_CONTENT_ALLOWED` | Content-policy gate | Yes (for uploads) | Set `true` only after the owner verified Streamtape's terms/copyright policy/account settings | Hosting env | prod | Uploads answer `503` naming this variable until it is `true` **and** credentials are set | Yes |
+| `STREAMTAPE_RELAY_URL` | Public URL of the upload relay | Yes (for uploads) | Where you deployed `relay/streamtape-relay.mjs` | Hosting env | prod | Session route answers `503 missing_relay` when unset | Yes |
+| `STREAMTAPE_RELAY_SECRET` | HMAC secret shared with the relay (≥ 16 chars) | Yes (for uploads) | Generate randomly; same value in the relay | Hosting secrets + relay env | prod | Relay answers 403 on a token it did not receive from this app | Yes |
+| `STREAMTAPE_MAX_UPLOAD_BYTES` | Largest accepted upload | Recommended | Verify the account's real limit | Hosting env | prod | Oversize files rejected with 413 before any bytes move | Yes |
+| `STREAMTAPE_UPLOAD_HOST_SUFFIXES` | Extra trusted upload-node host suffixes | No | Only if Streamtape moves its nodes | Hosting env + relay env | prod | Unexpected hosts are rejected | Yes |
+| `STREAMTAPE_MAX_ACTIVE_IMPORTS` | Cap on links per remote-upload batch | No | Default 10 | Hosting env | prod | Batches above it answer 400 | Yes |
 | `GEMINI_API_KEY` | Gemini API key for metadata suggestions | No | https://aistudio.google.com/apikey → Create API key | Hosting secrets | prod (optional) | Test via `/api/gemini/suggest` as admin | Yes |
 | `GEMINI_MODEL` | Gemini model name | No | Current docs, e.g., `gemini-flash-latest` | Hosting env | prod (optional) | Check https://ai.google.dev/gemini-api/docs for supported models | Yes |
 | `GEMINI_MAX_OUTPUT_TOKENS` | Output-token budget for one metadata suggestion | No | `2048` (default); thinking tokens count against it | Hosting env | prod (optional) | Raise it if suggestions are truncated | Yes |
@@ -700,7 +737,7 @@ fly deploy
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |
 
-**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `UFOLOAD_API_KEY`, `GEMINI_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
+**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY`, `STREAMTAPE_RELAY_SECRET`, `GEMINI_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
 
 ---
 
@@ -729,9 +766,9 @@ npx playwright test
 
 **Admin:**
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
-- [ ] Video publisher at `/admin/videos/upload` → upload multiple local files (chunked upload straight to UFOLOAD), paste a public iframe source, or import one or more public direct-video URLs
+- [ ] Video publisher at `/admin/videos/upload` → upload multiple local files (streamed through the upload relay to Streamtape), paste a public iframe source, or import one or more public direct-video URLs
 - [ ] Choose only a category and optional thumbnail; title, description, and tags are generated server-side by Gemini (`/api/gemini/suggest` contract: title, description, tags, category) before publishing
-- [ ] Publish action sets status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]` **only after UFOLOAD reports the file as ready** (rows still encoding stay private)
+- [ ] Publish action sets status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]` **only after Streamtape reports the file converted** (rows still converting stay private)
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
 - [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject
@@ -781,7 +818,7 @@ npx playwright test
 
 **Video hosting:**
 - [ ] Provider adapter abstraction exists in `lib/video/provider.ts`
-- [ ] UFOLOAD adapter: direct upload, imports, file state, rename and delete use the documented API (`lib/video/ufoload.ts`)
+- [ ] Streamtape adapter: upload URL, file info, conversion queues, splash, remote upload, rename and delete use the documented API (`lib/video/streamtape.ts`); upload bytes go through the relay (`relay/streamtape-relay.mjs`)
 - [ ] Upload errors do not lead to false Published status — a failed encode keeps the row private (`status=draft`) with `provider_error`
 - [ ] Large file uploads never transit a Vercel Function — the browser PUTs chunks to the node URL the provider returned
 - [ ] If the approval gate or the API key is missing, uploads return 503 with a clear blocker message
@@ -844,17 +881,18 @@ update invoices set status='paid', paid_at=now() where number='...';
 
 **Video hosting outage:**
 1. Check provider status page
-2. If UFOLOAD is unavailable, the admin page reports it as a note on the row and pauses publishing; do **not** switch `VIDEO_PROVIDER` to an unknown value (the factory fails closed). `VIDEO_PROVIDER=internal` disables new uploads and is for embed-only deployments.
+2. If Streamtape is unavailable (or returns 509 bandwidth-exceeded), the admin page reports it as a note on the row and pauses publishing; do **not** switch `VIDEO_PROVIDER` to an unknown value (the factory fails closed). `VIDEO_PROVIDER=internal` disables new uploads and is for embed-only deployments.
 3. Existing published videos remain accessible because their stored embed/watch URLs do not expire
 
 ---
 
 ## Unresolved Provider Approvals and Blockers
 
-1. **UFOLOAD adult content / commercial use**: The TOS (draft v0.1) has no explicit adult-content clause, so production uploads stay disabled until UFOLOAD confirms in writing that lawful adult content, commercial use, API uploads and embedded playback are permitted — then set `UFOLOAD_ADULT_CONTENT_APPROVED=true`. This is a launch blocker — see `GO_LIVE_CHECKLIST.md`.
-2. **Vercel Hobby**: Not suitable for commercial adult site. Hosting decision required — see `GO_LIVE_CHECKLIST.md`.
-3. **Age assurance**: Frontend gate alone not robust. Legal review required for jurisdiction-specific verification.
-4. **Legal identity**: Owner must provide real business details before publishing Terms/Privacy.
+1. **Streamtape content policy**: the Terms have no explicit adult-content clause (neither permitting nor banning), so production uploads stay disabled until the owner has verified the terms, copyright policy and account settings (ideally with Streamtape's written answer) — then set `STREAMTAPE_ADULT_CONTENT_ALLOWED=true`. Launch blocker — see `GO_LIVE_CHECKLIST.md`.
+2. **Upload relay + live acceptance**: the relay must be deployed, and a real upload → conversion → publish → playback run has to be performed on staging (`docs/STREAMTAPE_MIGRATION.md` §7, `tests/live/README.md`). Browser CORS toward Streamtape's node is unproven; the relay is the supported path.
+3. **Vercel Hobby**: Not suitable for commercial adult site. Hosting decision required — see `GO_LIVE_CHECKLIST.md`.
+4. **Age assurance**: Frontend gate alone not robust. Legal review required for jurisdiction-specific verification.
+5. **Legal identity**: Owner must provide real business details before publishing Terms/Privacy.
 5. **NOWPayments approval and wallet**: Owner must obtain written confirmation that NOWPayments permits this adult-entertainment business and its advertising use, then configure the payout wallet and enable the accepted coins.
 6. **Resend domain**: Must verify DNS before emails deliver reliably.
 

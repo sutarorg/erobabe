@@ -1,5 +1,10 @@
 # IMPLEMENTATION_AUDIT.md — Erobabe Pre-Implementation Audit (10 Oct 2026)
 
+> **Update (2026-10-12):** UFOLOAD has itself been replaced by **Streamtape** (browser →
+> upload relay → Streamtape). The Streamtape research, architecture decision, verified
+> endpoint table and unresolved unknowns are in `docs/STREAMTAPE_MIGRATION.md`; setup is in
+> `DEPLOYMENT.md` section D. References to UFOLOAD below are historical.
+
 > **Historical document.** This is the pre-implementation audit written before the
 > Next.js migration, and it is kept as the record of the decisions taken then.
 > Where it names Uqload as the intended video host, that decision has since been

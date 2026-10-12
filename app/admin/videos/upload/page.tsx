@@ -17,8 +17,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { getJson, postJson } from "@/src/utils/api";
 import { splitEmbedEntries, splitUrlEntries } from "@/lib/video/entries";
-import { uploadWithProgress, putUploadChunk, fetchAcceptedOffset } from "@/src/utils/uploadFile";
-import { uploadFileInChunks } from "@/src/utils/ufoloadUpload";
+import { uploadWithProgress, uploadMultipartWithProgress, describeUploadEndpointError } from "@/src/utils/uploadFile";
 import { formatEta, formatUploadStatus, transferPercent } from "@/src/utils/uploadProgress";
 
 type Category = { id: string; label: string };
@@ -49,13 +48,13 @@ type Item = {
   metadataWarning?: string;
   title?: string;
   slug?: string;
-  /** UFOLOAD direct-upload session, when one has been opened for this row. */
+  /** Streamtape upload session id, when one has been opened for this row. */
   uploadId?: string;
   /** Upload job row the server created for this session. */
   jobId?: string;
   /** Video row — set once the upload/import has been attached to a video. */
   videoId?: string;
-  /** UFOLOAD import task id (kept separate from the provider file id). */
+  /** Streamtape remote-import task id (kept separate from the provider file id). */
   importId?: string;
 };
 
@@ -66,7 +65,7 @@ const VIDEO_EXTENSION = /\.(mp4|webm|mov|m4v|mkv|avi|wmv|flv|ts|mpg|mpeg|3gp)$/i
 /**
  * How many videos move through the pipeline at the same time.
  *
- * Each UFOLOAD upload carries its own upload id, so parallel transfers can no
+ * Each Streamtape upload carries its own session id, so parallel transfers can no
  * longer be confused with each other (the old library-diff confirmation had to
  * serialise same-titled files). Three concurrent transfers keep a normal uplink
  * busy; a single video uses the whole link.
@@ -78,7 +77,7 @@ const UPLOAD_SHARE = 90;
 const COMPLETING_PERCENT = 94;
 const PUBLISHING_PERCENT = 98;
 
-/** How often a row re-checks the provider while UFOLOAD is still encoding. */
+/** How often a row re-checks the provider while Streamtape is still converting. */
 const PROVIDER_POLL_ATTEMPTS = 24;
 const PROVIDER_POLL_INTERVAL_MS = 5000;
 
@@ -143,7 +142,7 @@ class UploadAbortedErrorLike extends Error {
 
 /**
  * One bar per queued video. Determinate while bytes are actually moving (the
- * UFOLOAD transfer reports every chunk), pulsing while we wait on the provider.
+ * Streamtape transfer reports real bytes), pulsing while we wait on the provider.
  */
 export function ProgressBar({
   percent,
@@ -379,7 +378,7 @@ export default function UploadPage() {
   }
 
   /**
-   * Watches a job until UFOLOAD reports the file ready (or failed).
+   * Watches a job until Streamtape reports the file converted (or failed).
    *
    * A video is never treated as playable because the bytes arrived: the row
    * stays `processing` until the provider confirms. Rows that are still encoding
@@ -402,8 +401,8 @@ export default function UploadPage() {
         waiting: true,
         detail:
           attempt === 0
-            ? "UFOLOAD is encoding the video…"
-            : `UFOLOAD is still encoding the video (check ${attempt + 1} of ${PROVIDER_POLL_ATTEMPTS}, ${formatEta(
+            ? "Streamtape is converting the video…"
+            : `Streamtape is still converting the video (check ${attempt + 1} of ${PROVIDER_POLL_ATTEMPTS}, ${formatEta(
                 ((attempt + 1) * PROVIDER_POLL_INTERVAL_MS) / 1000
               )} elapsed)…`,
       });
@@ -419,7 +418,7 @@ export default function UploadPage() {
       const state = status?.providerState;
       if (state === "ready") return "ready";
       if (state === "failed") {
-        throw new Error(status?.note || "UFOLOAD could not process this video.");
+        throw new Error(status?.note || "Streamtape could not process this video.");
       }
     }
     return "processing";
@@ -437,71 +436,54 @@ export default function UploadPage() {
 
     patchItem(item.id, { phase: "uploading", percent: 0, waiting: false, detail: "Requesting an upload session…" });
 
-    // Step 1: the server asks UFOLOAD for a grant and returns only the
-    // temporary upload material (the API key stays on the server).
+    // Step 1: the server asks Streamtape for an upload node URL and wraps it
+    // in a signed relay token. The API credentials stay on the server — the
+    // browser only ever sees the relay address.
     const session = await postJson<{
       uploadId: string;
       jobId: string;
-      url: string;
-      authorization: string;
-      chunkSize: number;
+      uploadUrl: string;
+      expiresAt: string | null;
       maxBytes: number | null;
-    }>("/api/videos/ufoload-session", {
+    }>("/api/videos/streamtape-session", {
       fileName: file.name,
       fileSize: file.size,
       mimeType: file.type,
     });
-    if (!session?.url || !session?.uploadId || !session?.authorization) {
-      throw new Error("UFOLOAD did not return a usable upload session.");
+    if (!session?.uploadUrl || !session?.uploadId) {
+      throw new Error("Streamtape did not return a usable upload session.");
     }
-    preconnect(session.url);
+    if (session.maxBytes && file.size > session.maxBytes) {
+      throw new Error(`This file is larger than this deployment's upload limit (${readableSize(session.maxBytes)}).`);
+    }
+    preconnect(session.uploadUrl);
     patchItem(item.id, { uploadId: session.uploadId, jobId: session.jobId });
 
-    // Step 2: the browser PUTs the chunks straight to the exact node URL that
-    // came back, with the upload-scoped grant — never with the API key.
-    const nodeHeaders = { Authorization: session.authorization };
+    // Step 2: the browser POSTs the multipart body straight to the relay,
+    // which streams it to the Streamtape node. XHR gives measured byte-level
+    // progress and a real cancel (abort → the relay aborts upstream).
     activeTransfersRef.current += 1;
     patchItem(item.id, { detail: "Starting the transfer…" });
+    let nodeResponse = "";
     try {
-      await uploadFileInChunks({
-        file,
-        chunkSize: session.chunkSize,
-        maxBytes: session.maxBytes,
+      const uploaded = await uploadMultipartWithProgress(session.uploadUrl, file, file.name, {
+        fieldName: "file1",
         signal: controller.signal,
-        transport: {
-          putChunk: async (offset, chunk) => {
-            await putUploadChunk(session.url, offset, chunk, {
-              headers: nodeHeaders,
-              signal: controller.signal,
-              onProgress: (loadedInChunk, chunkSize, bytesPerSecond) => {
-                const sent = offset + loadedInChunk;
-                const percent = transferPercent(sent, file.size);
-                patchItem(item.id, {
-                  phase: "uploading",
-                  // Bytes own 90% of the bar; publishing owns the rest.
-                  percent: (percent / 100) * UPLOAD_SHARE,
-                  waiting: false,
-                  detail: formatUploadStatus(percent, bytesPerSecond),
-                });
-              },
-            });
-          },
-          reconcileOffset: () =>
-            fetchAcceptedOffset(session.url, { headers: nodeHeaders, signal: controller.signal }),
-          keepAlive: async () => {
-            await postJson("/api/videos/ufoload-session", { uploadId: session.uploadId });
-          },
-        },
-        onProgress: (uploaded, total) => {
-          const percent = transferPercent(uploaded, total);
-          patchItem(item.id, { percent: (percent / 100) * UPLOAD_SHARE, waiting: false });
-        },
-        onResume: (acceptedOffset) => {
+        onProgress: (progress) => {
+          const percent = transferPercent(progress.loaded, progress.total);
           patchItem(item.id, {
-            detail: `Transfer interrupted — resuming from ${readableSize(acceptedOffset)}…`,
+            phase: "uploading",
+            // Bytes own 90% of the bar; completing and publishing own the rest.
+            percent: (percent / 100) * UPLOAD_SHARE,
+            waiting: false,
+            detail: formatUploadStatus(percent, progress.bytesPerSecond),
           });
         },
       });
+      if (uploaded.status < 200 || uploaded.status >= 300) {
+        throw new Error(describeUploadEndpointError(uploaded.status, uploaded.body));
+      }
+      nodeResponse = uploaded.body;
     } finally {
       activeTransfersRef.current = Math.max(0, activeTransfersRef.current - 1);
     }
@@ -511,10 +493,10 @@ export default function UploadPage() {
     const thumbnailPath = (await thumbnailPromise) || item.thumbnailPath;
     if (thumbnailPath) patchItem(item.id, { thumbnailPath });
 
-    // Step 3: the server completes the upload with UFOLOAD and creates the
-    // video. It stays private until the provider reports the file as ready.
+    // Step 3: the server confirms the transfer with Streamtape and creates the
+    // video. It stays private until the provider reports the file converted.
     const preparedMetadata = await metadataPromise;
-    patchItem(item.id, { phase: "processing", percent: COMPLETING_PERCENT, waiting: true, detail: "Completing the upload…" });
+    patchItem(item.id, { phase: "processing", percent: COMPLETING_PERCENT, waiting: true, detail: "Finishing the upload…" });
     const json = await postJson<any>("/api/videos/upload", {
       uploadId: session.uploadId,
       jobId: session.jobId,
@@ -522,6 +504,9 @@ export default function UploadPage() {
       categoryId,
       fileName: file.name,
       fileSize: file.size,
+      // The node's verbatim reply — any candidate file id inside it is
+      // re-verified server-side; the browser is never trusted for it.
+      nodeResponse: nodeResponse.slice(0, 16 * 1024),
       ...(preparedMetadata ? { metadata: preparedMetadata } : {}),
     });
 
@@ -540,7 +525,7 @@ export default function UploadPage() {
       return;
     }
     if (json.status === "failed") {
-      throw new Error(json.providerError || "UFOLOAD could not process this video.");
+      throw new Error(json.providerError || "Streamtape could not process this video.");
     }
 
     const outcome = await waitForProvider(item, json.jobId || session.jobId, controller);
@@ -555,7 +540,7 @@ export default function UploadPage() {
       // real value and a "Re-check status" button is offered instead of an
       // endlessly pulsing bar the admin cannot act on.
       waiting: false,
-      detail: "Sent to UFOLOAD · still encoding — this row publishes itself as soon as the provider is ready.",
+      detail: "Sent to Streamtape · still converting — this row publishes itself as soon as the provider is ready.",
     });
   }
 
@@ -568,7 +553,7 @@ export default function UploadPage() {
       detail:
         json.metadataSource === "fallback"
           ? "Published · AI metadata unavailable — file-name metadata used, please review"
-          : "Published · UFOLOAD has the video ready to play",
+          : "Published · Streamtape has the video ready to play",
       title: json.metadata?.title,
       slug: json.video?.slug,
       metadataWarning: json.metadataWarning || undefined,
@@ -578,18 +563,18 @@ export default function UploadPage() {
   /** Re-checks a row that was left processing (or failed) against the provider. */
   async function recheckStatus(item: Item) {
     setError("");
-    patchItem(item.id, { phase: "processing", percent: COMPLETING_PERCENT, waiting: true, detail: "Re-checking with UFOLOAD…", error: undefined });
+    patchItem(item.id, { phase: "processing", percent: COMPLETING_PERCENT, waiting: true, detail: "Re-checking with Streamtape…", error: undefined });
     try {
       const outcome = await waitForProvider(item, item.jobId, new AbortController());
       if (outcome === "ready") {
-        patchItem(item.id, { phase: "published", percent: 100, waiting: false, detail: "Published · UFOLOAD has the video ready to play" });
+        patchItem(item.id, { phase: "published", percent: 100, waiting: false, detail: "Published · Streamtape has the video ready to play" });
         return;
       }
       patchItem(item.id, {
         phase: "processing",
         percent: PUBLISHING_PERCENT,
         waiting: true,
-        detail: "Still encoding at UFOLOAD — check again later.",
+        detail: "Still converting at Streamtape — check again later.",
       });
     } catch (recheckError: any) {
       patchItem(item.id, {
@@ -597,7 +582,7 @@ export default function UploadPage() {
         percent: 100,
         waiting: false,
         detail: "Failed",
-        error: recheckError.message || "UFOLOAD could not process this video.",
+        error: recheckError.message || "Streamtape could not process this video.",
       });
     }
   }
@@ -652,7 +637,7 @@ export default function UploadPage() {
       metadataWarning: result.metadataWarning || undefined,
       percent: COMPLETING_PERCENT,
       waiting: true,
-      detail: "Import started — UFOLOAD is downloading the link…",
+      detail: "Import started — Streamtape is downloading the link…",
     });
 
     try {
@@ -665,7 +650,7 @@ export default function UploadPage() {
           detail:
             result.metadataSource === "fallback"
               ? "Published · AI metadata unavailable — file-name metadata used, please review"
-              : "Published · UFOLOAD has the video ready to play",
+              : "Published · Streamtape has the video ready to play",
           title: result.title,
           slug: result.slug,
         });
@@ -675,11 +660,11 @@ export default function UploadPage() {
         phase: "processing",
         percent: PUBLISHING_PERCENT,
         waiting: true,
-        detail: "UFOLOAD is still importing and encoding — this row publishes itself once it is ready.",
+        detail: "Streamtape is still downloading and converting — this row publishes itself once it is ready.",
       });
     } catch (pollError: any) {
       if (pollError?.name === "UploadAbortedError") throw pollError;
-      throw new Error(pollError?.message || "UFOLOAD could not import this link.");
+      throw new Error(pollError?.message || "Streamtape could not import this link.");
     }
   }
 
@@ -773,12 +758,13 @@ export default function UploadPage() {
   }
 
   function cancelPublish() {
-    // Aborting stops every in-flight XHR/fetch and asks UFOLOAD to drop the
-    // partial upload, so a cancelled transfer does not hold a concurrency slot.
+    // Aborting stops every in-flight XHR: the relay sees the disconnect and
+    // aborts the upstream request, so Streamtape drops the partial body. The
+    // stored sessions are then marked cancelled so nothing stale can finish.
     abortRef.current?.abort();
     for (const item of itemsRef.current) {
-      if (!item.uploadId || item.phase === "published") continue;
-      postJson("/api/videos/ufoload-cancel", { uploadId: item.uploadId }).catch(() => null);
+      if (!item.jobId || item.phase === "published") continue;
+      postJson("/api/videos/streamtape-cancel", { jobId: item.jobId }).catch(() => null);
     }
   }
 
@@ -787,10 +773,10 @@ export default function UploadPage() {
       key: "files",
       label: "Upload videos",
       icon: CloudUpload,
-      description: `Files are uploaded to UFOLOAD in chunks straight from your browser — they never touch our storage bucket, and up to ${UPLOAD_CONCURRENCY} upload at once.`,
+      description: `Files stream from your browser through our upload relay straight to Streamtape — they never touch our storage bucket, and up to ${UPLOAD_CONCURRENCY} upload at once with measured byte progress.`,
     },
     { key: "embed", label: "Embed by iframe", icon: PlaySquare, description: "Publish trusted iframe sources, each with its own thumbnail." },
-    { key: "url", label: "Upload by link", icon: Link2, description: "UFOLOAD downloads direct video URLs, each with its own thumbnail." },
+    { key: "url", label: "Upload by link", icon: Link2, description: "Streamtape downloads direct video URLs, each with its own thumbnail." },
   ];
 
   const pastePlaceholder =
@@ -869,8 +855,9 @@ export default function UploadPage() {
               <Film aria-hidden="true" className="mx-auto h-6 w-6 text-ink-3" />
               <p className="mt-2 text-[13px] font-medium">Select one or more video files</p>
               <p className="mt-1 text-[11px] text-ink-3">
-                Files are uploaded to UFOLOAD in chunks, so large videos are fine, and up to {UPLOAD_CONCURRENCY} of them travel at the same time. Each
-                upload resumes from the last byte UFOLOAD confirmed, and the row stays private until the provider reports the video as ready.
+                Files stream from your browser through the upload relay straight to Streamtape, so large videos are fine, and up to {UPLOAD_CONCURRENCY} of
+                them travel at the same time. Progress shows the bytes actually sent; if a transfer is interrupted, restart it (Streamtape does not
+                support resuming a partial file). The row stays private until the provider reports the video converted.
               </p>
               <label className="mt-4 inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-line bg-card px-4 text-[12px] font-semibold hover:bg-card-hover">
                 <Plus aria-hidden="true" className="h-4 w-4" />
@@ -1089,9 +1076,9 @@ export default function UploadPage() {
       </form>
 
       <p className="mt-4 text-[11px] leading-relaxed text-ink-3">
-        A publish action uploads the video to UFOLOAD, which then encodes it. The video stays private and does not appear on the public site until the
-        provider reports it as ready — until then the row shows the encoder&apos;s progress and can be re-checked. Signed playback links expire, so only
-        UFOLOAD&apos;s stable embed address is stored.
+        A publish action uploads the video to Streamtape, which then converts it. The video stays private and does not appear on the public site until the
+        provider confirms playability — until then the row shows the converter&apos;s state and can be re-checked. Download links expire, so only
+        Streamtape&apos;s stable embed address is stored.
       </p>
     </div>
   );

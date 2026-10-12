@@ -1,13 +1,15 @@
 /**
  * Video hosting provider abstraction.
  *
- * Keep provider-specific logic out of React components. UFOLOAD is the active
- * provider; the API key never leaves the server (see `lib/video/ufoload.ts`).
+ * Keep provider-specific logic out of React components. Streamtape is the
+ * active provider; the API login/key never leave the server (see
+ * `lib/video/streamtape.ts`). Video bytes travel browser → streaming relay →
+ * Streamtape — never through a Next.js route (see `relay/streamtape-relay.mjs`).
  */
 
-import { UfoloadProvider } from "@/lib/video/ufoload";
+import { StreamtapeProvider } from "@/lib/video/streamtape";
 
-export { UfoloadProvider, requireUfoloadProvider, ufoloadApprovalFlag, ufoloadApiKey } from "@/lib/video/ufoload";
+export { StreamtapeProvider, requireStreamtapeProvider, streamtapeApprovalFlag, streamtapeCredentials } from "@/lib/video/streamtape";
 
 export interface UploadRequest {
   fileName: string;
@@ -59,7 +61,7 @@ export interface VideoProvider {
   getPlayableUrl(fileId: string): string;
 }
 
-export const DEFAULT_VIDEO_PROVIDER = "ufoload";
+export const DEFAULT_VIDEO_PROVIDER = "streamtape";
 
 /**
  * Provider factory.
@@ -67,17 +69,22 @@ export const DEFAULT_VIDEO_PROVIDER = "ufoload";
  * An unknown or missing `VIDEO_PROVIDER` fails closed with an actionable
  * configuration error. It must never silently fall back to a retired provider:
  * a typo in the environment would otherwise send new uploads somewhere nobody
- * is watching.
+ * is watching. `ufoload` is explicitly retired — legacy rows keep their stored
+ * playback/embed URLs and are answered as history by the status route.
  */
 export function getVideoProvider(name: string = process.env.VIDEO_PROVIDER || DEFAULT_VIDEO_PROVIDER): VideoProvider {
   switch (String(name || "").trim().toLowerCase()) {
-    case "ufoload":
-      return new UfoloadProvider();
+    case "streamtape":
+      return new StreamtapeProvider();
     case "internal":
       return new InternalProvider();
+    case "ufoload":
+      throw new Error(
+        'VIDEO_PROVIDER="ufoload" has been retired. New uploads use VIDEO_PROVIDER=streamtape; existing UFOLOAD videos keep their stored playback/embed URLs and remain viewable without contacting the old API.'
+      );
     default:
       throw new Error(
-        `Unknown VIDEO_PROVIDER "${name}". Set VIDEO_PROVIDER=ufoload (or "internal" for the local, non-video-hosting placeholder). Uqload support has been removed.`
+        `Unknown VIDEO_PROVIDER "${name}". Set VIDEO_PROVIDER=streamtape (or "internal" for the local, non-video-hosting placeholder). The retired UFOLOAD/Uqload integrations are not valid targets.`
       );
   }
 }
