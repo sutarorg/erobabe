@@ -1,14 +1,15 @@
 /**
- * Progress and throughput estimation for uploads whose bytes the browser
- * cannot observe.
+ * Progress helpers for admin uploads.
  *
  * A direct POST to Uqload must stay a CORS "simple request" (see
- * `uploadFile.uploadFormDirect`), so no `xhr.upload` progress events may be
- * registered — and a `fetch()` streaming body is not an option either, because
- * Uqload's upload servers speak HTTP/1.1 (Chrome refuses streamed request
- * bodies there). The admin UI therefore advances the bar from the file size
- * and the throughput this browser actually measured on previous uploads, labels
- * it as an estimate, and snaps to 100% only when the request really completes.
+ * `uploadFile.uploadFormDirect`), so the browser cannot observe bytes in
+ * flight. The admin page must not invent a percentage, a speed, or a remaining
+ * time from `estimateTransferFraction` or a remembered link rate — that curve
+ * races to ~85% and then crawls, which is not a measurement.
+ *
+ * `windowedBytesPerSecond` is the only speed the UI may show, and only from
+ * samples of bytes that were actually sent. With no samples it returns null
+ * and the speed is omitted.
  *
  * Everything here is pure except for the two `localStorage` helpers, so the
  * maths is unit-testable.
@@ -117,4 +118,65 @@ export function formatEta(seconds: number): string {
   if (minutes < 60) return `${minutes}m ${String(total % 60).padStart(2, "0")}s`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+export type ByteSample = { at: number; bytes: number };
+
+/**
+ * Throughput over the last `windowMs` of *observed* bytes.
+ *
+ * Returns `null` until the samples actually cover a full window, so the UI
+ * never prints a guessed rate for the first second. A stall (no new bytes)
+ * pulls the rate down, because the window is measured against `now`, not
+ * against the last sample.
+ */
+export function windowedBytesPerSecond(
+  samples: ReadonlyArray<ByteSample>,
+  now: number,
+  windowMs = 1000
+): number | null {
+  if (!samples.length || !Number.isFinite(now) || !Number.isFinite(windowMs) || windowMs <= 0) return null;
+  const first = samples[0];
+  if (!first || now - first.at < windowMs) return null;
+
+  const windowStart = now - windowMs;
+  let baseline: ByteSample | null = null;
+  let latest: ByteSample | null = null;
+  for (const sample of samples) {
+    if (sample.at > now) break;
+    if (sample.at <= windowStart) baseline = sample;
+    latest = sample;
+  }
+  if (!latest) return null;
+  const start = baseline ?? first;
+  const spanSeconds = (now - start.at) / 1000;
+  if (spanSeconds <= 0) return null;
+  const delta = latest.bytes - start.bytes;
+  if (!Number.isFinite(delta) || delta < 0) return null;
+  return delta / spanSeconds;
+}
+
+/** 0–100 from bytes actually sent. Linear — never eases off near the end. */
+export function transferPercent(loaded: number, total: number): number {
+  if (!Number.isFinite(loaded) || !Number.isFinite(total) || total <= 0 || loaded <= 0) return 0;
+  return Math.max(0, Math.min(100, (loaded / total) * 100));
+}
+
+/**
+ * Live speed label. One decimal on MB/s so a one-second update is visible,
+ * unlike the coarser estimate formatter.
+ */
+export function formatLiveBytesPerSecond(rate: number): string {
+  if (!Number.isFinite(rate) || rate < 0) return "—";
+  if (rate >= 1024 * 1024) return `${(rate / (1024 * 1024)).toFixed(1)} MB/s`;
+  if (rate >= 1024) return `${Math.round(rate / 1024)} KB/s`;
+  if (rate > 0) return `${Math.max(1, Math.round(rate))} B/s`;
+  return "0 KB/s";
+}
+
+/** Row copy while bytes are moving. No countdown. Speed is omitted when it was not measured. */
+export function formatUploadStatus(percent: number, bytesPerSecond: number | null): string {
+  const pct = Math.max(0, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
+  if (bytesPerSecond === null || !Number.isFinite(bytesPerSecond)) return `Uploading to Uqload — ${pct}%`;
+  return `Uploading to Uqload — ${pct}% · ${formatLiveBytesPerSecond(bytesPerSecond)}`;
 }

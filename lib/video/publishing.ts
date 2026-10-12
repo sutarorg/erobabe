@@ -88,6 +88,26 @@ export type GeneratedMetadata = {
   warning?: string;
 };
 
+/** A metadata payload the admin page prepared while the file was uploading. */
+export function isPreparedMetadata(value: unknown): value is GeneratedMetadata {
+  if (!value || typeof value !== "object") return false;
+  const meta = value as GeneratedMetadata;
+  const title = typeof meta.title === "string" ? meta.title.trim() : "";
+  const description = typeof meta.description === "string" ? meta.description.trim() : "";
+  const tags = Array.isArray(meta.tags) ? meta.tags.filter((tag) => typeof tag === "string" && tag.trim()) : [];
+  return (meta.source === "ai" || meta.source === "fallback") && title.length >= 3 && description.length > 0 && tags.length > 0;
+}
+
+function sanitizePreparedMetadata(meta: GeneratedMetadata): GeneratedMetadata {
+  return {
+    title: meta.title.replace(/\s+/g, " ").trim().slice(0, 160),
+    description: meta.description.replace(/\s+/g, " ").trim().slice(0, 1000),
+    tags: normalizeTags(meta.tags),
+    source: meta.source,
+    ...(meta.warning ? { warning: String(meta.warning).slice(0, 400) } : {}),
+  };
+}
+
 function cleanMetadata(raw: SuggestedMetadata): { title: string; description: string; tags: string[] } {
   return {
     title: raw.title?.replace(/\s+/g, " ").trim().slice(0, 160),
@@ -164,9 +184,13 @@ async function attachTags(service: ServiceClient, videoId: string, tags: string[
 }
 
 /**
- * Creates a private processing record after Gemini generated its metadata. It
- * becomes public only after an upload/embed operation succeeds and the admin
- * has clicked Publish in the UI.
+ * Creates a private processing record after metadata is ready. It becomes
+ * public only after an upload/embed operation succeeds and the admin has
+ * clicked Publish in the UI.
+ *
+ * `prepared` is metadata the admin page already fetched (via the existing
+ * suggest route) while the file bytes were in flight. Using it skips a second
+ * Gemini call after the file code is known.
  */
 export async function createGeneratedVideo({
   service,
@@ -175,6 +199,7 @@ export async function createGeneratedVideo({
   categoryId,
   provider,
   thumbnailUrl,
+  prepared,
 }: {
   service: ServiceClient;
   userId: string;
@@ -182,9 +207,16 @@ export async function createGeneratedVideo({
   categoryId: string;
   provider: "uqload" | "embed";
   thumbnailUrl?: string | null;
+  /** Already generated while the bytes were in flight — skips a second Gemini call. */
+  prepared?: GeneratedMetadata | null;
 }): Promise<{ video: GeneratedVideo; metadata: GeneratedMetadata }> {
   const category = await getCategory(service, categoryId);
-  const metadata = await generateMetadata(sourceName, category.label);
+  const preparedMetadata = prepared && isPreparedMetadata(prepared) ? sanitizePreparedMetadata(prepared) : null;
+  // Sanitizing can strip every tag. Fall back to Gemini rather than publishing an untagged row.
+  const metadata =
+    preparedMetadata && preparedMetadata.title.length >= 3 && preparedMetadata.description && preparedMetadata.tags.length
+      ? preparedMetadata
+      : await generateMetadata(sourceName, category.label);
   const slugBase = slugify(metadata.title) || "video";
   const slug = `${slugBase}-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 

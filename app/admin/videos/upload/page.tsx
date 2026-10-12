@@ -20,15 +20,7 @@ import { splitEmbedEntries, splitUrlEntries } from "@/lib/video/entries";
 import { uploadFormDirect, uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
 import { parseUqloadUploadResponse } from "@/lib/video/uqload-response";
 import { normalizeTitle } from "@/lib/video/uqload-match";
-import {
-  DEFAULT_LINK_BYTES_PER_SECOND,
-  estimateTransferFraction,
-  formatBytesPerSecond,
-  formatEta,
-  ratePerActiveUpload,
-  readRememberedLinkRate,
-  rememberLinkRate,
-} from "@/src/utils/uploadProgress";
+import { formatEta } from "@/src/utils/uploadProgress";
 
 type Category = { id: string; label: string };
 type UploadMode = "files" | "embed" | "url";
@@ -76,31 +68,15 @@ const VIDEO_EXTENSION = /\.(mp4|webm|mov|m4v|mkv|avi|wmv|flv|ts|mpg|mpeg|3gp)$/i
  *
  * The old pipeline was strictly sequential: with five files, the second one
  * only started after the first had been uploaded, confirmed, and published.
- * Three concurrent transfers keep a normal uplink busy without starving any
- * single file (see `ratePerActiveUpload`).
+ * Three concurrent transfers keep a normal uplink busy. A single video uses
+ * the whole link — nothing else is scheduled beside it.
  */
 const UPLOAD_CONCURRENCY = 3;
 
-/**
- * A thumbnail this small uploads before the video starts, so its real byte
- * progress can drive the first slice of the bar. Bigger ones are pushed in the
- * background while the video bytes travel, so they never hold up the upload.
- */
-const THUMBNAIL_INLINE_MAX_BYTES = 1024 * 1024;
-
-/** Bar windows (percent) for the four legs of a file upload. */
-const THUMBNAIL_WINDOW = 8;
-const TRANSFER_FROM = 10;
-const TRANSFER_TO = 88;
+/** Bar windows for the steps that are actually countable (library checks, then publish). */
 const CONFIRM_FROM = 90;
 const CONFIRM_TO = 96;
 const METADATA_FROM = 97;
-
-/**
- * Rough fixed cost per video besides its own bytes: session, library snapshot,
- * the confirmation window, and Gemini metadata. Only used for the batch ETA.
- */
-const PER_ITEM_OVERHEAD_SECONDS = 8;
 
 /**
  * How often to poll the Uqload library for a just-sent upload, and how long to
@@ -163,6 +139,23 @@ function secureUploadServerUrl(serverUrl: string): string {
   return serverUrl;
 }
 
+/** Opens the upload-server connection while the library snapshot is still in flight. */
+function preconnect(url: string) {
+  if (typeof document === "undefined") return;
+  try {
+    const origin = new URL(url).origin;
+    if (document.querySelector(`link[data-preconnect="${origin}"]`)) return;
+    const link = document.createElement("link");
+    link.rel = "preconnect";
+    link.href = origin;
+    link.crossOrigin = "anonymous";
+    link.dataset.preconnect = origin;
+    document.head.appendChild(link);
+  } catch {
+    // A bad URL must not block the upload.
+  }
+}
+
 /** Sleeps until the abort signal fires (rejecting with UploadAbortedError) or the delay elapses. */
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -183,9 +176,10 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 /**
- * One bar per queued video. A determinate bar (with the percentage spelled out)
- * while a known or estimated amount of work is left, and a pulsing full bar for
- * the few steps that genuinely have nothing to measure.
+ * One bar per queued video. A determinate bar only when the remaining work is
+ * counted (library checks). A pulsing bar while the bytes are in flight — a
+ * direct Uqload POST cannot report how many bytes have left, and a guessed
+ * curve is what used to race to ~85% and then crawl.
  */
 export function ProgressBar({
   percent,
@@ -240,20 +234,8 @@ export default function UploadPage() {
   const abortRef = useRef<AbortController | null>(null);
   /** Items published with file-name metadata because Gemini was unavailable. */
   const fallbackRef = useRef(0);
-  /**
-   * Uplink throughput this browser measured on previous uploads. Only used to
-   * seed the estimate shown while the bytes are travelling — the bar switches to
-   * real provider confirmation as soon as the request completes.
-   */
-  const linkRateRef = useRef(DEFAULT_LINK_BYTES_PER_SECOND);
-  /** `setInterval` ids for the per-item transfer meters, keyed by item id. */
-  const metersRef = useRef(new Map<string, number>());
-  /** How many transfers are in flight right now (they share one uplink). */
+  /** How many transfers are in flight right now. */
   const activeTransfersRef = useRef(0);
-
-  useEffect(() => {
-    linkRateRef.current = readRememberedLinkRate() ?? DEFAULT_LINK_BYTES_PER_SECOND;
-  }, []);
 
   useEffect(() => {
     const supabase = createClient();
@@ -279,59 +261,6 @@ export default function UploadPage() {
   const patchItem = useCallback((id: string, patch: Partial<Item>) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }, []);
-
-  const stopTransferMeter = useCallback((id: string) => {
-    const timer = metersRef.current.get(id);
-    if (timer === undefined) return;
-    window.clearInterval(timer);
-    metersRef.current.delete(id);
-  }, []);
-
-  const stopAllTransferMeters = useCallback(() => {
-    for (const timer of metersRef.current.values()) window.clearInterval(timer);
-    metersRef.current.clear();
-  }, []);
-
-  /**
-   * Advances one row's bar while its video bytes are on the wire.
-   *
-   * Uqload's upload server answers no CORS preflight, so the browser cannot say
-   * how many bytes have been sent (registering a progress listener would turn
-   * the request into a preflighted one that Uqload never answers). The meter
-   * therefore moves on an estimate built from the file size and this browser's
-   * measured throughput, reports the implied speed and remaining time, and is
-   * always replaced by the real confirmation as soon as the request settles.
-   */
-  const startTransferMeter = useCallback(
-    (id: string, fileSize: number, activeUploads: number) => {
-      stopTransferMeter(id);
-      const perUploadRate = ratePerActiveUpload(linkRateRef.current, activeUploads);
-      const expectedMs = Math.max(1, (fileSize / perUploadRate) * 1000);
-      const startedAt = Date.now();
-      const tick = () => {
-        const elapsed = Date.now() - startedAt;
-        const fraction = estimateTransferFraction(elapsed, expectedMs);
-        const percent = TRANSFER_FROM + (TRANSFER_TO - TRANSFER_FROM) * fraction;
-        // Same number the bar renders — one percentage per row, never two.
-        const eta =
-          elapsed > expectedMs
-            ? `taking longer than estimated (${formatEta(elapsed / 1000)} so far)`
-            : `about ${formatEta((expectedMs - elapsed) / 1000)} left (estimated)`;
-        patchItem(id, {
-          phase: "uploading",
-          percent,
-          waiting: false,
-          detail: `Uploading to Uqload — ${Math.round(percent)}% · ${formatBytesPerSecond(perUploadRate)} · ${eta}`,
-        });
-      };
-      tick();
-      metersRef.current.set(id, window.setInterval(tick, 500));
-    },
-    [patchItem, stopTransferMeter]
-  );
-
-  /** Never leave a meter ticking after the grid unmounts. */
-  useEffect(() => () => stopAllTransferMeters(), [stopAllTransferMeters]);
 
   function makeFileItem(file: File): Item {
     return {
@@ -526,49 +455,61 @@ export default function UploadPage() {
     );
   }
 
+  /**
+   * Asks the existing suggest route for metadata while the file is still
+   * travelling. A failure just means publish falls back to server-side
+   * generation — it must never delay the first video byte.
+   */
+  function beginMetadata(fileName: string): Promise<{ title: string; description: string; tags: string[]; source: "ai" } | null> {
+    const label = categories.find((category) => category.id === categoryId)?.label || "";
+    return postJson<{ suggestion?: { title?: string; description?: string; tags?: unknown } }>("/api/gemini/suggest", {
+      fileName: fileName.slice(0, 240),
+      title: fileName.replace(/\.[^.]+$/, "").slice(0, 160),
+      category: label.slice(0, 80),
+    })
+      .then((result) => {
+        const suggestion = result?.suggestion;
+        const title = typeof suggestion?.title === "string" ? suggestion.title.trim() : "";
+        const description = typeof suggestion?.description === "string" ? suggestion.description.trim() : "";
+        const tags = Array.isArray(suggestion?.tags)
+          ? suggestion.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
+          : [];
+        if (title.length < 3 || !description || tags.length === 0) return null;
+        return { title, description, tags, source: "ai" as const };
+      })
+      .catch(() => null);
+  }
+
   async function publishFileItem(item: Item, controller: AbortController) {
     if (!item.file) throw new Error("Missing file");
     const file = item.file;
 
-    // `item` is a snapshot taken when publishing started, so the resolved
-    // thumbnail path has to be carried in a local — reading it back off `item`
-    // would silently drop the thumbnail.
-    let thumbnailPath = item.thumbnailPath;
-
-    patchItem(item.id, { phase: "uploading", percent: 1, waiting: false, detail: "Preparing the upload…" });
-
-    // Everything that must happen before the first video byte moves — the
-    // thumbnail in Supabase Storage, the Uqload upload server, and the library
-    // snapshot the confirmation diffs against — runs in parallel instead of one
-    // after another, so the bytes start flowing several round trips sooner.
-    //
-    // The snapshot still has to *finish* before the POST starts: it is the diff
-    // baseline, so a file that landed while it was being read would be treated
-    // as pre-existing and never confirmed.
-    const smallThumbnail = Boolean(item.thumbnail && item.thumbnail.size <= THUMBNAIL_INLINE_MAX_BYTES);
-    const thumbnailPromise = uploadThumbnailFile(item, controller, (percent) => {
-      if (smallThumbnail) patchItem(item.id, { percent: Math.round(percent * (THUMBNAIL_WINDOW / 100)) });
-    });
-    // A big thumbnail keeps uploading *behind* the video bytes instead of
-    // holding them back; the swallow-catch only prevents a warning if this leg
-    // fails while the caller is already erroring out elsewhere.
+    // Metadata and the thumbnail travel beside the video bytes. Neither is
+    // allowed to hold the first video byte — that wait is what made a single
+    // file feel slow before a megabyte had left.
+    const metadataPromise = beginMetadata(file.name);
+    const thumbnailPromise = uploadThumbnailFile(item, controller, () => {});
     thumbnailPromise.catch(() => {});
 
+    patchItem(item.id, { phase: "uploading", percent: 0, waiting: true, detail: "Preparing the upload…" });
+
+    // The snapshot still has to *finish* before the POST starts: it is the diff
+    // baseline, so a file that landed while it was being read would be treated
+    // as pre-existing and never confirmed. The session URL is preconnected as
+    // soon as it arrives so that wait is not also a TLS handshake.
     const [session, knownCodes] = await Promise.all([
       postJson<{ serverUrl: string; fields: Record<string, string> }>("/api/videos/uqload-session", {
         fileName: file.name,
         fileSize: file.size,
         mimeType: file.type,
+      }).then((next) => {
+        if (next?.serverUrl) preconnect(secureUploadServerUrl(next.serverUrl));
+        return next;
       }),
       snapshotUqloadLibrary(),
     ]);
     if (!session?.serverUrl) throw new Error("Uqload did not return an upload server");
     patchItem(item.id, { knownCodes });
-
-    if (item.thumbnail && smallThumbnail) {
-      thumbnailPath = await thumbnailPromise;
-      if (thumbnailPath) patchItem(item.id, { thumbnailPath, percent: THUMBNAIL_WINDOW });
-    }
 
     const fileTitle = file.name.replace(/\.[^.]+$/, "").slice(0, 160) || file.name;
 
@@ -584,39 +525,23 @@ export default function UploadPage() {
       form.append("snapshot", item.thumbnail, item.thumbnail.name);
     }
 
-    // No byte progress is possible for a direct upload — registering an
-    // upload progress listener would force a CORS preflight that Uqload does
-    // not answer, cancelling the request before a single byte is sent. The
-    // meter below estimates the remaining time from this browser's measured
-    // throughput, and the row switches to real provider confirmation the moment
-    // the request settles.
-    const transferStartedAt = Date.now();
+    // A direct POST cannot report bytes: an `xhr.upload` listener would force
+    // a CORS preflight that Uqload never answers, and the upload would never
+    // start. The row stays indeterminate — no guessed percentage, no remembered
+    // "speed", no remaining-time estimate. Those were the 85% stall.
     activeTransfersRef.current += 1;
-    const concurrentTransfers = activeTransfersRef.current;
-    startTransferMeter(item.id, file.size, concurrentTransfers);
+    patchItem(item.id, { phase: "uploading", percent: 0, waiting: true, detail: "Uploading to Uqload…" });
     let outcome;
     try {
       outcome = await uploadFormDirect(secureUploadServerUrl(session.serverUrl), form, { signal: controller.signal });
     } finally {
       activeTransfersRef.current = Math.max(0, activeTransfersRef.current - 1);
-      stopTransferMeter(item.id);
     }
 
-    // Learn this browser's real uplink speed for the next estimate: the
-    // observed per-file rate is scaled back up by how many transfers shared the
-    // link, and a suspiciously fast "upload" (a connection that died in under a
-    // second) is ignored rather than allowed to poison the estimate.
-    const transferSeconds = (Date.now() - transferStartedAt) / 1000;
-    if (transferSeconds >= 1) {
-      linkRateRef.current = rememberLinkRate((file.size / transferSeconds) * concurrentTransfers) ?? linkRateRef.current;
-    }
-
-    // A large thumbnail travelled behind the video bytes — collect it now; it
-    // has to be in storage before the video row is created.
-    if (item.thumbnail && !smallThumbnail) {
-      thumbnailPath = await thumbnailPromise;
-      if (thumbnailPath) patchItem(item.id, { thumbnailPath });
-    }
+    // The thumbnail has to be in storage before the video row is created, but
+    // it travelled behind the video bytes instead of in front of them.
+    const thumbnailPath = (await thumbnailPromise) || item.thumbnailPath;
+    if (thumbnailPath) patchItem(item.id, { thumbnailPath });
 
     let fileCode: string;
     if (outcome.responseText) {
@@ -646,18 +571,29 @@ export default function UploadPage() {
       });
     }
 
-    await publishKnownFile(item, fileCode, thumbnailPath);
+    await publishKnownFile(item, fileCode, thumbnailPath, await metadataPromise);
   }
 
   /** Publishes an item whose file code is already known (fresh or re-checked). */
-  async function publishKnownFile(item: Item, fileCode: string, thumbnailPath: string | null) {
-    patchItem(item.id, { phase: "processing", percent: METADATA_FROM, detail: "Generating AI metadata…" });
+  async function publishKnownFile(
+    item: Item,
+    fileCode: string,
+    thumbnailPath: string | null,
+    prepared?: { title: string; description: string; tags: string[]; source: "ai" } | null
+  ) {
+    patchItem(item.id, {
+      phase: "processing",
+      percent: METADATA_FROM,
+      waiting: !prepared,
+      detail: prepared ? "Publishing…" : "Generating AI metadata…",
+    });
     const json = await postJson<any>("/api/videos/upload", {
       providerFileId: fileCode,
       thumbnailPath: thumbnailPath || null,
       categoryId,
       fileName: item.file?.name || item.source,
       fileSize: item.file?.size,
+      ...(prepared ? { metadata: prepared } : {}),
     });
 
     if (json.metadataSource === "fallback") fallbackRef.current += 1;
@@ -779,7 +715,6 @@ export default function UploadPage() {
     abortRef.current = controller;
     fallbackRef.current = 0;
     activeTransfersRef.current = 0;
-    stopAllTransferMeters();
 
     // Reset anything that failed on a previous attempt.
     for (const item of pending) {
@@ -802,10 +737,7 @@ export default function UploadPage() {
           if (item.kind === "file") await publishFileItem(item, controller);
           else await publishSourceItem(item, controller);
         } catch (publishError: any) {
-          if (publishError instanceof UploadAbortedError) {
-            stopTransferMeter(item.id);
-            return;
-          }
+          if (publishError instanceof UploadAbortedError) return;
           failures += 1;
           patchItem(item.id, {
             phase: "failed",
@@ -821,7 +753,6 @@ export default function UploadPage() {
 
     await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
 
-    stopAllTransferMeters();
     activeTransfersRef.current = 0;
     setRunning(false);
     abortRef.current = null;
@@ -872,30 +803,11 @@ export default function UploadPage() {
   const batchSerialized = hasDuplicateUploadTitles(items);
   /** Items the batch no longer has to wait for: published or failed. */
   const finishedCount = items.filter((item) => item.phase === "published" || item.phase === "failed").length;
-  const pendingItems = items.filter((item) => item.phase !== "published" && item.phase !== "failed");
 
-  /** Mean of the per-video bars — the honest "how far is the batch" number. */
+  /** Mean of the per-video bars. In-flight transfers stay at 0 until bytes can actually be counted. */
   const batchPercent = items.length
     ? items.reduce((sum, item) => sum + (item.phase === "published" ? 100 : Math.max(0, item.percent)), 0) / items.length
     : 0;
-
-  /**
-   * Batch ETA: everything still to push, minus the part of an in-flight
-   * transfer the estimated bar says has already gone, plus the fixed per-video
-   * cost (session, snapshot, confirmation window, Gemini metadata) amortised
-   * over the workers running in parallel.
-   */
-  const remainingBatchBytes = pendingItems.reduce((sum, item) => {
-    const size = item.file?.size ?? 0;
-    if (!size) return sum;
-    const sent = activeTransfersRef.current > 0 && item.percent > TRANSFER_FROM && item.percent <= TRANSFER_TO
-      ? (item.percent - TRANSFER_FROM) / (TRANSFER_TO - TRANSFER_FROM)
-      : 0;
-    return sum + size * (1 - sent);
-  }, 0);
-  const batchEtaSeconds =
-    remainingBatchBytes / Math.max(1, linkRateRef.current) +
-    Math.ceil(pendingItems.length / UPLOAD_CONCURRENCY) * PER_ITEM_OVERHEAD_SECONDS;
 
   return (
     <div className="max-w-5xl">
@@ -959,10 +871,8 @@ export default function UploadPage() {
               <Film aria-hidden="true" className="mx-auto h-6 w-6 text-ink-3" />
               <p className="mt-2 text-[13px] font-medium">Select one or more video files</p>
               <p className="mt-1 text-[11px] text-ink-3">
-                Files upload directly to Uqload, so large videos are fine, and up to {UPLOAD_CONCURRENCY} of them travel at the same time. Each row
-                shows its own progress bar with the throughput and time remaining, then switches to the provider’s confirmation. Uqload’s upload
-                server doesn’t answer the CORS preflight a byte-accurate bar would need, so the transfer percentage is an estimate based on this
-                browser’s measured upload speed.
+                Files upload directly to Uqload, so large videos are fine, and up to {UPLOAD_CONCURRENCY} of them travel at the same time. The row does
+                not guess a percentage or a time remaining while the file is in flight — that estimate used to race ahead and then stall.
               </p>
               <label className="mt-4 inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-line bg-card px-4 text-[12px] font-semibold hover:bg-card-hover">
                 <Plus aria-hidden="true" className="h-4 w-4" />
@@ -1161,20 +1071,15 @@ export default function UploadPage() {
             <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-ink-3">
               <span className="font-medium text-ink-2">
                 {finishedCount} of {items.length} finished
-                {activeTransfersRef.current > 0
-                  ? ` · ${activeTransfersRef.current} uploading at ~${formatBytesPerSecond(
-                      ratePerActiveUpload(linkRateRef.current, activeTransfersRef.current)
-                    )}`
-                  : ""}
+                {activeTransfersRef.current > 0 ? ` · ${activeTransfersRef.current} uploading` : ""}
               </span>
-              <span className="tabular-nums">about {formatEta(batchEtaSeconds)} left (estimated)</span>
             </div>
             {batchSerialized && (
               <p className="mt-1 text-[10.5px] text-ink-3">
                 Some files share a title, so they are uploaded one at a time — that keeps each Uqload file code matched to the right video.
               </p>
             )}
-            <ProgressBar percent={batchPercent} phase="uploading" />
+            <ProgressBar percent={batchPercent} phase="uploading" waiting={activeTransfersRef.current > 0 && batchPercent < 1} />
           </div>
         )}
 
@@ -1184,8 +1089,8 @@ export default function UploadPage() {
 
       <p className="mt-4 text-[11px] leading-relaxed text-ink-3">
         A publish action makes the video public immediately. Uqload may still be encoding a newly uploaded or imported file; the public player becomes
-        playable as soon as the provider finishes processing. While a file travels to Uqload the row shows an estimated transfer percentage, the
-        throughput, and the time remaining; each finished upload teaches the page this browser&apos;s real upload speed, so the next estimate is closer.
+        playable as soon as the provider finishes processing. A direct upload cannot report bytes to the browser, so the row does not guess a
+        percentage, a speed, or a time remaining. The bar moves again once the library confirms the file.
       </p>
     </div>
   );

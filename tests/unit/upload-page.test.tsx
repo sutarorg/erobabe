@@ -373,6 +373,19 @@ describe("direct Uqload upload from the browser (CORS-free simple request)", () 
           confirmCalls += 1;
           return new Response(JSON.stringify(response), { status: 200, headers: { "content-type": "application/json" } });
         }
+        if (path.includes("/api/gemini/suggest")) {
+          return new Response(
+            JSON.stringify({
+              suggestion: {
+                title: "My Trip",
+                description: "A prepared description for the clip.",
+                tags: ["mature"],
+                category: "Mature",
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
         if (path.includes("/api/videos/upload")) {
           return new Response(
             JSON.stringify({ video: { slug: "uq-clip" }, metadata: { title: "My Trip" }, processing: true }),
@@ -405,8 +418,15 @@ describe("direct Uqload upload from the browser (CORS-free simple request)", () 
     expect(await screen.findByText("Published · provider is still encoding", {}, { timeout: 5000 })).toBeTruthy();
 
     // The filecode came from the library-confirmation endpoint, not the (unreadable) upload response.
-    const publish = requests.find((request) => request.url.includes("/api/videos/upload"));
+    const publish = requests.find((request) => request.url.includes("/api/videos/upload") && !request.url.includes("uqload"));
     expect(publish?.body?.providerFileId).toBe("xyz789");
+    // Metadata was prepared while the bytes were in flight, so publish does not wait on a second Gemini call.
+    expect(publish?.body?.metadata).toEqual({
+      title: "My Trip",
+      description: "A prepared description for the clip.",
+      tags: ["mature"],
+      source: "ai",
+    });
     const confirm = requests.filter((request) => request.url.includes("uqload-confirm"));
     expect(confirm).toHaveLength(2);
     // The snapshot is taken *before* the bytes leave the browser…
@@ -555,26 +575,62 @@ describe("upload progress while the video bytes travel", () => {
     fireEvent.submit(screen.getByText("Add videos").closest("form") as HTMLFormElement);
   }
 
-  const estimatedPercent = () => {
-    const text = screen.getByText(/Uploading to Uqload —/).textContent || "";
-    return Number(text.match(/—\s*(\d+)%/)?.[1] ?? 0);
-  };
-
-  it("moves the bar and reports an estimated speed and time while the POST is open", async () => {
+  it("does not invent a percentage, a speed, or a remaining time while the POST is open", async () => {
     stubBackend();
     render(<UploadPage />);
 
-    // 20 MB on a ~2 MB/s link: several seconds of estimated transfer.
     await startPublishing([["long-clip.mp4", 20 * 1024 * 1024]]);
 
-    const first = await screen.findByText(/Uploading to Uqload —/);
-    expect(first.textContent).toMatch(/MB\/s/);
-    expect(first.textContent).toMatch(/estimated/);
+    const row = await screen.findByText("Uploading to Uqload…");
+    expect(row.textContent).not.toMatch(/estimated|left|MB\/s|KB\/s/);
+    // Metadata starts while the POST is still open, so publish is not stuck behind Gemini.
+    expect(InFlightXHR.instances.length).toBeGreaterThan(0);
+    const fetchMock = globalThis.fetch as unknown as { mock: { calls: unknown[][] } };
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/api/gemini/suggest"))).toBe(true);
 
-    const startedAt = estimatedPercent();
-    // The estimate keeps moving instead of leaving the row on a frozen bar.
-    await waitFor(() => expect(estimatedPercent()).toBeGreaterThan(startedAt), { timeout: 4000 });
+    // The transfer bar is indeterminate: a guessed curve is what raced to ~85% and then crawled.
+    const bars = screen.getAllByRole("progressbar");
+    expect(bars.length).toBeGreaterThan(0);
+    for (const bar of bars) {
+      expect(bar.getAttribute("aria-valuenow")).toBeNull();
+    }
 
+    vi.unstubAllGlobals();
+  }, 15000);
+
+  it("starts the video POST without waiting for the thumbnail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: any) => {
+        const path = String(url);
+        if (path.includes("storage-token")) return new Promise(() => {});
+        if (path.includes("uqload-session")) {
+          return new Response(
+            JSON.stringify({ serverUrl: "https://e17.uqload.example/upload/03", fields: { key: "test-key", file_public: "1", file_adult: "1" } }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          );
+        }
+        if (path.includes("uqload-confirm")) {
+          return new Response(JSON.stringify({ fileCodes: [] }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ error: "stop" }), { status: 500, headers: { "content-type": "application/json" } });
+      })
+    );
+    vi.stubGlobal("XMLHttpRequest", InFlightXHR);
+    InFlightXHR.instances = [];
+    (URL as any).createObjectURL = () => "blob:mock-preview";
+    (URL as any).revokeObjectURL = () => {};
+
+    const { container } = render(<UploadPage />);
+    addVideo("with-cover.mp4", 8 * 1024 * 1024);
+    const thumb = container.querySelector('input[type="file"][accept^="image/"]') as HTMLInputElement;
+    fireEvent.change(thumb, { target: { files: [new File([new Uint8Array(64)], "cover.jpg", { type: "image/jpeg" })] } });
+    const select = await screen.findByLabelText("Category *");
+    await waitFor(() => expect(within(select).queryByText("Mature")).toBeTruthy());
+    fireEvent.change(select, { target: { value: "cat-1" } });
+    fireEvent.submit(screen.getByText("Add videos").closest("form") as HTMLFormElement);
+
+    await waitFor(() => expect(InFlightXHR.instances.length).toBe(1), { timeout: 4000 });
     vi.unstubAllGlobals();
   }, 15000);
 
@@ -592,11 +648,11 @@ describe("upload progress while the video bytes travel", () => {
     // confirmation that can only arrive after each upload completes.
     await waitFor(() => expect(InFlightXHR.instances.length).toBe(3), { timeout: 4000 });
 
-    // …and the batch panel names how many are travelling right now, with an
-    // overall ETA for the whole set.
+    // …and the batch panel names how many are travelling, without a guessed ETA or speed.
     const batchPanel = await screen.findByRole("status");
     expect(within(batchPanel).getByText(/3 uploading/)).toBeTruthy();
-    expect(within(batchPanel).getByText(/left \(estimated\)/)).toBeTruthy();
+    expect(within(batchPanel).queryByText(/estimated/)).toBeNull();
+    expect(within(batchPanel).queryByText(/MB\/s|KB\/s/)).toBeNull();
 
     vi.unstubAllGlobals();
   }, 15000);
