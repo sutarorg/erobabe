@@ -1,25 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getVideoProvider, UqloadProvider } from "@/lib/video/provider";
-import {
-  completeUploadJob,
-  createGeneratedVideo,
-  createUploadJob,
-  failUpload,
-  httpErrorStatus,
-  isPreparedMetadata,
-  publishVideo,
-  requireActiveAdmin,
-} from "@/lib/video/publishing";
+import { errorMessageFrom, errorStatusFrom, httpErrorStatus, isPreparedMetadata, requireActiveAdmin } from "@/lib/video/publishing";
+import { completeUfoloadUpload } from "@/lib/video/ufoload-flow";
+import { UfoloadProvider } from "@/lib/video/ufoload";
 import { resolveThumbnailUrl } from "@/lib/video/storage";
 
-/** Gemini metadata plus a Uqload title edit can take a few seconds. */
+/** Metadata generation plus the provider's completion handshake. */
 export const maxDuration = 60;
 
 /**
- * Publishes a video the browser has already uploaded directly to Uqload.
+ * Finishes a UFOLOAD direct upload and attaches it to a video.
  *
- * The request is JSON only (`providerFileId`, category, optional thumbnail
- * path). Video bytes never pass through this host.
+ * The request is JSON and carries only the *session* id the server itself
+ * handed out earlier (`/api/videos/ufoload-session`). The provider file id is
+ * read back from UFOLOAD during completion, so a browser can neither invent one
+ * nor complete another admin's upload.
+ *
+ * The video is created private and stays private until UFOLOAD reports the file
+ * as `ready`; the admin UI polls `/api/videos/status` until that happens.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -27,9 +24,9 @@ export async function POST(req: NextRequest) {
     if (contentType.includes("multipart/form-data")) {
       return NextResponse.json(
         {
-          error: "Video files can no longer be posted to this route",
+          error: "Video files must not be posted to this route",
           details:
-            "Ask /api/videos/uqload-session for an upload server, POST the file directly to Uqload, then send the returned filecode here as providerFileId.",
+            "Ask /api/videos/ufoload-session for an upload session, PUT the file's chunks to the returned upload URL, then send the uploadId here.",
         },
         { status: 415 }
       );
@@ -39,103 +36,99 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => null);
     if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid request" }, { status: 400 });
 
-    const categoryId = String(body.categoryId || "").trim();
-    const providerFileId = String(body.providerFileId || body.filecode || body.file_code || "").trim();
-    const fileName = String(body.fileName || "uploaded-video").slice(0, 240);
-    const fileSize = Number.isFinite(Number(body.fileSize)) ? Number(body.fileSize) : null;
-    const thumbnailUrl = resolveThumbnailUrl(service, user.id, body.thumbnailPath ?? null);
-
-    if (!categoryId) return NextResponse.json({ error: "Choose a category" }, { status: 400 });
-    if (!providerFileId) {
+    if (body.providerFileId || body.filecode || body.file_code) {
       return NextResponse.json(
         {
-          error: "Uqload file code is required",
-          details: "Upload the video directly to Uqload first, then POST the filecode as providerFileId.",
+          error: "Provider file ids are not accepted from the browser",
+          details:
+            "Complete the upload with the uploadId returned by /api/videos/ufoload-session — the file id is read back from UFOLOAD server-side.",
         },
         { status: 400 }
       );
     }
 
-    const provider = getVideoProvider("uqload");
-    if (!provider.isEnabled() || !(provider instanceof UqloadProvider)) {
+    const uploadId = String(body.uploadId || "").trim();
+    if (!uploadId) {
       return NextResponse.json(
         {
-          error: "Uqload upload is not enabled",
-          details: "Set UQLOAD_API_KEY and UQLOAD_ADULT_CONTENT_APPROVED=true only after obtaining the provider approval required for this content.",
+          error: "uploadId is required",
+          details: "Start the upload at /api/videos/ufoload-session before completing it here.",
         },
-        { status: 503 }
+        { status: 400 }
       );
     }
 
-    const generated = await createGeneratedVideo({
+    const categoryId = String(body.categoryId || "").trim();
+    if (!categoryId) return NextResponse.json({ error: "Choose a category" }, { status: 400 });
+
+    const fileName = String(body.fileName || "").replace(/\s+/g, " ").trim().slice(0, 240) || "uploaded-video";
+    const fileSize = Number.isFinite(Number(body.fileSize)) ? Number(body.fileSize) : null;
+
+    let thumbnailUrl: string | null = null;
+    try {
+      // Only a thumbnail this admin uploaded through the signed-upload route
+      // resolves; anything else is a bad request, not a server failure.
+      thumbnailUrl = resolveThumbnailUrl(service, user.id, body.thumbnailPath ?? null);
+    } catch (error) {
+      return NextResponse.json(
+        { error: errorMessageFrom(error, "Invalid thumbnail upload") },
+        { status: 400 }
+      );
+    }
+
+    const provider = new UfoloadProvider();
+    provider.assertEnabled();
+
+    const result = await completeUfoloadUpload({
       service,
       userId: user.id,
-      sourceName: fileName,
+      provider,
+      uploadId,
       categoryId,
-      provider: "uqload",
+      fileName,
+      fileSize,
       thumbnailUrl,
       prepared: isPreparedMetadata(body.metadata) ? body.metadata : null,
     });
-    const job = await createUploadJob({
-      service,
-      videoId: generated.video.id,
-      userId: user.id,
-      fileName,
-      fileSize: fileSize || undefined,
+
+    await service.from("audit_logs").insert({
+      actor_id: user.id,
+      action: "video_published_from_upload",
+      target_type: "video",
+      target_id: result.video.id,
+      level: "info",
+      metadata: {
+        provider: "ufoload",
+        file_name: fileName,
+        file_size: fileSize,
+        provider_file_id: result.providerFileId,
+        provider_status: result.providerStatus,
+        metadata_source: result.metadata.source,
+      },
     });
 
-    try {
-      const video = await publishVideo({
-        service,
-        videoId: generated.video.id,
-        userId: user.id,
-        providerFileId,
-        playableUrl: provider.getPlayableUrl(providerFileId),
-        embedUrl: provider.getEmbedUrl(providerFileId),
-        thumbnailUrl,
-      });
-      await completeUploadJob(service, job.id, providerFileId);
-
-      provider
-        .editFile(providerFileId, {
-          title: generated.metadata.title,
-          description: generated.metadata.description,
-          tags: generated.metadata.tags.join(", "),
-        })
-        .catch(() => {});
-
-      await service.from("audit_logs").insert({
-        actor_id: user.id,
-        action: "video_published_from_upload",
-        target_type: "video",
-        target_id: generated.video.id,
-        level: "info",
-        metadata: {
-          provider: "uqload",
-          file_name: fileName,
-          file_size: fileSize,
-          provider_file_id: providerFileId,
-          metadata_source: generated.metadata.source,
-        },
-      });
-
-      return NextResponse.json({
-        videoId: generated.video.id,
-        jobId: job.id,
-        providerFileId,
-        status: video.status,
-        video,
-        metadata: generated.metadata,
-        metadataSource: generated.metadata.source,
-        ...(generated.metadata.warning ? { metadataWarning: generated.metadata.warning } : {}),
-        processing: true,
-      });
-    } catch (uploadError: any) {
-      await failUpload({ service, videoId: generated.video.id, jobId: job.id, message: uploadError.message || "Uqload upload failed" });
-      throw uploadError;
-    }
+    return NextResponse.json({
+      videoId: result.video.id,
+      jobId: result.jobId,
+      providerFileId: result.providerFileId,
+      providerPublicId: result.providerPublicId,
+      providerStatus: result.providerStatus,
+      embedUrl: result.embedUrl,
+      playableUrl: result.playableUrl,
+      status: result.readiness,
+      video: result.video,
+      metadata: result.metadata,
+      metadataSource: result.metadata.source,
+      ...(result.metadata.warning ? { metadataWarning: result.metadata.warning } : {}),
+      // `processing` is expected: UFOLOAD still has to encode the file.
+      processing: result.readiness !== "ready",
+      progress: result.progress,
+      ...(result.error ? { providerError: result.error } : {}),
+    });
   } catch (error: any) {
-    const status = httpErrorStatus(error.message || "");
-    return NextResponse.json({ error: error.message || "Upload failed" }, { status });
+    return NextResponse.json(
+      { error: errorMessageFrom(error, "Upload failed"), ...(error?.code ? { code: error.code } : {}) },
+      { status: errorStatusFrom(error) || httpErrorStatus(error?.message || "") }
+    );
   }
 }

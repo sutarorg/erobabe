@@ -90,3 +90,14 @@ export async function postJson<T = any>(url: string, payload: unknown): Promise<
   }
   return readApiResponse<T>(response);
 }
+
+/** GETs one of our API routes and returns the decoded body. */
+export async function getJson<T = any>(url: string): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { Accept: "application/json" } });
+  } catch {
+    throw new ApiError("Network error — the request never reached the server. Check your connection and try again.", 0);
+  }
+  return readApiResponse<T>(response);
+}

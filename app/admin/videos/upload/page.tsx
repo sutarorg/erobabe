@@ -15,12 +15,11 @@ import {
   X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { postJson } from "@/src/utils/api";
+import { getJson, postJson } from "@/src/utils/api";
 import { splitEmbedEntries, splitUrlEntries } from "@/lib/video/entries";
-import { uploadFormDirect, uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
-import { parseUqloadUploadResponse } from "@/lib/video/uqload-response";
-import { normalizeTitle } from "@/lib/video/uqload-match";
-import { formatEta } from "@/src/utils/uploadProgress";
+import { uploadWithProgress, putUploadChunk, fetchAcceptedOffset } from "@/src/utils/uploadFile";
+import { uploadFileInChunks } from "@/src/utils/ufoloadUpload";
+import { formatEta, formatUploadStatus, transferPercent } from "@/src/utils/uploadProgress";
 
 type Category = { id: string; label: string };
 type UploadMode = "files" | "embed" | "url";
@@ -50,44 +49,38 @@ type Item = {
   metadataWarning?: string;
   title?: string;
   slug?: string;
-  /**
-   * Uqload library file codes captured right before this item's upload — the
-   * diff base the confirmation (and the "Re-check library" action) works from.
-   * `null` means the snapshot failed, so the confirmation must not guess.
-   */
-  knownCodes?: string[] | null;
+  /** UFOLOAD direct-upload session, when one has been opened for this row. */
+  uploadId?: string;
+  /** Upload job row the server created for this session. */
+  jobId?: string;
+  /** Video row — set once the upload/import has been attached to a video. */
+  videoId?: string;
+  /** UFOLOAD import task id (kept separate from the provider file id). */
+  importId?: string;
 };
 
 const THUMBNAIL_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024;
-const MAX_UQLOAD_SNAPSHOT = 300 * 1024;
 const VIDEO_EXTENSION = /\.(mp4|webm|mov|m4v|mkv|avi|wmv|flv|ts|mpg|mpeg|3gp)$/i;
 
 /**
  * How many videos move through the pipeline at the same time.
  *
- * The old pipeline was strictly sequential: with five files, the second one
- * only started after the first had been uploaded, confirmed, and published.
- * Three concurrent transfers keep a normal uplink busy. A single video uses
- * the whole link — nothing else is scheduled beside it.
+ * Each UFOLOAD upload carries its own upload id, so parallel transfers can no
+ * longer be confused with each other (the old library-diff confirmation had to
+ * serialise same-titled files). Three concurrent transfers keep a normal uplink
+ * busy; a single video uses the whole link.
  */
 const UPLOAD_CONCURRENCY = 3;
 
-/** Bar windows for the steps that are actually countable (library checks, then publish). */
-const CONFIRM_FROM = 90;
-const CONFIRM_TO = 96;
-const METADATA_FROM = 97;
+/** Bytes own the first 90% of the bar; completing and publishing take the rest. */
+const UPLOAD_SHARE = 90;
+const COMPLETING_PERCENT = 94;
+const PUBLISHING_PERCENT = 98;
 
-/**
- * How often to poll the Uqload library for a just-sent upload, and how long to
- * wait between polls. Polls back off because Uqload meters `file/list`
- * requests — one request per poll, plus a single pre-upload snapshot per file —
- * but the whole window is deliberately short: the file normally appears within
- * a second or two, and the previous schedule (2s + 2.5s + 3s…) kept the admin
- * waiting up to ~40s after the bytes had already left.
- */
-const UQLOAD_CONFIRM_ATTEMPTS = 11;
-const UQLOAD_CONFIRM_BACKOFF_MS = [400, 700, 1000, 1300, 1600, 1900, 2200, 2500, 2800, 3100];
+/** How often a row re-checks the provider while UFOLOAD is still encoding. */
+const PROVIDER_POLL_ATTEMPTS = 24;
+const PROVIDER_POLL_INTERVAL_MS = 5000;
 
 function isVideoFile(file: File) {
   return file.type.startsWith("video/") || VIDEO_EXTENSION.test(file.name);
@@ -104,42 +97,7 @@ function newId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-/**
- * True when two queued files would land in Uqload under the same title —
- * `clip.mp4` and `clip.mkv` both become `clip`.
- *
- * Uqload stores the title derived from the file name and never returns the
- * upload server's response to the browser, so an upload is claimed by diffing
- * the library against a pre-upload snapshot and ranking the new entries by
- * title. Two identical titles could therefore be matched to the wrong — or
- * even the same — file code if both files were in flight together, so such a
- * batch falls back to one upload at a time.
- */
-function hasDuplicateUploadTitles(items: Item[]): boolean {
-  const seen = new Set<string>();
-  for (const item of items) {
-    if (!item.file) continue;
-    const key = normalizeTitle(item.file.name);
-    if (seen.has(key)) return true;
-    seen.add(key);
-  }
-  return false;
-}
-
-/**
- * Uqload serves its upload servers over HTTPS. An `http://` endpoint on an
- * `https://` admin page is blocked as mixed content before a single byte
- * leaves, which looks exactly like the CORS-hidden response the confirmation
- * step exists for. Upgrade it instead of failing silently.
- */
-function secureUploadServerUrl(serverUrl: string): string {
-  if (typeof window !== "undefined" && window.location.protocol === "https:" && serverUrl.startsWith("http://")) {
-    return `https://${serverUrl.slice("http://".length)}`;
-  }
-  return serverUrl;
-}
-
-/** Opens the upload-server connection while the library snapshot is still in flight. */
+/** Opens the upload-node connection while the session request is still in flight. */
 function preconnect(url: string) {
   if (typeof document === "undefined") return;
   try {
@@ -156,11 +114,11 @@ function preconnect(url: string) {
   }
 }
 
-/** Sleeps until the abort signal fires (rejecting with UploadAbortedError) or the delay elapses. */
+/** Sleeps until the abort signal fires or the delay elapses. */
 function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
-      reject(new UploadAbortedError());
+      reject(new UploadAbortedErrorLike());
       return;
     }
     const timer = setTimeout(() => {
@@ -169,17 +127,23 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new UploadAbortedError());
+      reject(new UploadAbortedErrorLike());
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
+/** Local marker so this file does not need the class from the uploader module. */
+class UploadAbortedErrorLike extends Error {
+  constructor() {
+    super("Upload cancelled");
+    this.name = "UploadAbortedError";
+  }
+}
+
 /**
- * One bar per queued video. A determinate bar only when the remaining work is
- * counted (library checks). A pulsing bar while the bytes are in flight — a
- * direct Uqload POST cannot report how many bytes have left, and a guessed
- * curve is what used to race to ~85% and then crawl.
+ * One bar per queued video. Determinate while bytes are actually moving (the
+ * UFOLOAD transfer reports every chunk), pulsing while we wait on the provider.
  */
 export function ProgressBar({
   percent,
@@ -389,72 +353,6 @@ export default function UploadPage() {
     return target.storagePath;
   }
 
-  /** A snapshot of the account's file codes, taken before the bytes are sent. */
-  async function snapshotUqloadLibrary(): Promise<string[] | null> {
-    try {
-      const result = await postJson<{ fileCodes?: string[] }>("/api/videos/uqload-confirm", { mode: "snapshot" });
-      return Array.isArray(result?.fileCodes) ? result.fileCodes : null;
-    } catch {
-      // Without a snapshot the confirmation can still match by title — it just
-      // refuses to fall back to "the newest new file" at the deadline.
-      return null;
-    }
-  }
-
-  /**
-   * Confirms a video the browser just POSTed straight to Uqload and returns
-   * its file code.
-   *
-   * Uqload's upload server does not send CORS headers, so the browser cannot
-   * read the JSON response that carries the file code. Instead the upload is
-   * confirmed server-side by diffing the account library against the
-   * pre-upload snapshot. Uqload ignores multipart fields sent after the `file`
-   * part, so the stored title is derived from the file name — the title can
-   * rank candidates, but it never identifies the file on its own.
-   */
-  async function confirmUqloadUpload(opts: {
-    fileTitle: string;
-    fileName: string;
-    knownCodes: string[] | null;
-    controller: AbortController;
-    /** Called before each poll so the row can show how far the check has got. */
-    onAttempt?: (attempt: number, attempts: number, elapsedSeconds: number) => void;
-  }): Promise<string> {
-    let lastPollError: unknown = null;
-    const startedAt = Date.now();
-
-    for (let attempt = 0; attempt < UQLOAD_CONFIRM_ATTEMPTS; attempt++) {
-      if (opts.controller.signal.aborted) throw new UploadAbortedError();
-      if (attempt > 0) {
-        const delay = UQLOAD_CONFIRM_BACKOFF_MS[Math.min(attempt - 1, UQLOAD_CONFIRM_BACKOFF_MS.length - 1)];
-        await abortableSleep(delay, opts.controller.signal);
-      }
-      opts.onAttempt?.(attempt + 1, UQLOAD_CONFIRM_ATTEMPTS, (Date.now() - startedAt) / 1000);
-
-      try {
-        const result = await postJson<{ found: boolean; fileCode?: string }>("/api/videos/uqload-confirm", {
-          fileTitle: opts.fileTitle,
-          fileName: opts.fileName,
-          knownFileCodes: opts.knownCodes,
-          finalAttempt: attempt === UQLOAD_CONFIRM_ATTEMPTS - 1,
-        });
-        if (result?.found && result.fileCode) return String(result.fileCode);
-      } catch (pollError) {
-        if (pollError instanceof UploadAbortedError) throw pollError;
-        // Transient failure (network blip, cold function) — retry below, but
-        // remember it: if every check failed the message must say so instead
-        // of blaming the upload (e.g. a metered/API error on file/list).
-        lastPollError = pollError;
-        continue;
-      }
-    }
-    const pollNote =
-      lastPollError instanceof Error && lastPollError.message ? ` Last library check failed: ${lastPollError.message}` : "";
-    throw new Error(
-      `Uqload has not confirmed this file in your library. Use “Re-check library” — if it never shows up there, the upload did not reach your Uqload account.${pollNote}`
-    );
-  }
-
   /**
    * Asks the existing suggest route for metadata while the file is still
    * travelling. A failure just means publish falls back to server-side
@@ -480,60 +378,130 @@ export default function UploadPage() {
       .catch(() => null);
   }
 
+  /**
+   * Watches a job until UFOLOAD reports the file ready (or failed).
+   *
+   * A video is never treated as playable because the bytes arrived: the row
+   * stays `processing` until the provider confirms. Rows that are still encoding
+   * when the polling window ends stay usable — the admin can re-check later.
+   */
+  async function waitForProvider(
+    item: Item,
+    jobId: string | undefined,
+    controller: AbortController,
+    startPercent = COMPLETING_PERCENT
+  ): Promise<"ready" | "failed" | "processing"> {
+    for (let attempt = 0; attempt < PROVIDER_POLL_ATTEMPTS; attempt++) {
+      if (controller.signal.aborted) throw new UploadAbortedErrorLike();
+      if (attempt > 0 || startPercent === COMPLETING_PERCENT) {
+        await abortableSleep(PROVIDER_POLL_INTERVAL_MS, controller.signal);
+      }
+      patchItem(item.id, {
+        phase: "processing",
+        percent: Math.min(PUBLISHING_PERCENT, startPercent + attempt),
+        waiting: true,
+        detail:
+          attempt === 0
+            ? "UFOLOAD is encoding the video…"
+            : `UFOLOAD is still encoding the video (check ${attempt + 1} of ${PROVIDER_POLL_ATTEMPTS}, ${formatEta(
+                ((attempt + 1) * PROVIDER_POLL_INTERVAL_MS) / 1000
+              )} elapsed)…`,
+      });
+
+      let status: any;
+      try {
+        status = await getJson<any>(`/api/videos/status?${jobId ? `jobId=${encodeURIComponent(jobId)}` : `videoId=${encodeURIComponent(item.videoId || "")}`}`);
+      } catch (pollError: any) {
+        if (pollError?.status === 401 || pollError?.status === 403) throw pollError;
+        continue;
+      }
+
+      const state = status?.providerState;
+      if (state === "ready") return "ready";
+      if (state === "failed") {
+        throw new Error(status?.note || "UFOLOAD could not process this video.");
+      }
+    }
+    return "processing";
+  }
+
   async function publishFileItem(item: Item, controller: AbortController) {
     if (!item.file) throw new Error("Missing file");
     const file = item.file;
 
     // Metadata and the thumbnail travel beside the video bytes. Neither is
-    // allowed to hold the first video byte — that wait is what made a single
-    // file feel slow before a megabyte had left.
+    // allowed to hold the first video byte.
     const metadataPromise = beginMetadata(file.name);
     const thumbnailPromise = uploadThumbnailFile(item, controller, () => {});
     thumbnailPromise.catch(() => {});
 
-    patchItem(item.id, { phase: "uploading", percent: 0, waiting: true, detail: "Preparing the upload…" });
+    patchItem(item.id, { phase: "uploading", percent: 0, waiting: false, detail: "Requesting an upload session…" });
 
-    // The snapshot still has to *finish* before the POST starts: it is the diff
-    // baseline, so a file that landed while it was being read would be treated
-    // as pre-existing and never confirmed. The session URL is preconnected as
-    // soon as it arrives so that wait is not also a TLS handshake.
-    const [session, knownCodes] = await Promise.all([
-      postJson<{ serverUrl: string; fields: Record<string, string> }>("/api/videos/uqload-session", {
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: file.type,
-      }).then((next) => {
-        if (next?.serverUrl) preconnect(secureUploadServerUrl(next.serverUrl));
-        return next;
-      }),
-      snapshotUqloadLibrary(),
-    ]);
-    if (!session?.serverUrl) throw new Error("Uqload did not return an upload server");
-    patchItem(item.id, { knownCodes });
-
-    const fileTitle = file.name.replace(/\.[^.]+$/, "").slice(0, 160) || file.name;
-
-    // ⚠️ Scalars must be appended BEFORE the file part: Uqload ignores every
-    // multipart field that arrives after `file` — a `file_title` sent behind
-    // the file is dropped and the stored title falls back to the file name.
-    // `snapshot` stays last, exactly like Uqload's own curl sample.
-    const form = new FormData();
-    for (const [name, value] of Object.entries(session.fields || {})) form.append(name, value);
-    form.append("file_title", fileTitle);
-    form.append("file", file, file.name);
-    if (item.thumbnail && item.thumbnail.size <= MAX_UQLOAD_SNAPSHOT) {
-      form.append("snapshot", item.thumbnail, item.thumbnail.name);
+    // Step 1: the server asks UFOLOAD for a grant and returns only the
+    // temporary upload material (the API key stays on the server).
+    const session = await postJson<{
+      uploadId: string;
+      jobId: string;
+      url: string;
+      authorization: string;
+      chunkSize: number;
+      maxBytes: number | null;
+    }>("/api/videos/ufoload-session", {
+      fileName: file.name,
+      fileSize: file.size,
+      mimeType: file.type,
+    });
+    if (!session?.url || !session?.uploadId || !session?.authorization) {
+      throw new Error("UFOLOAD did not return a usable upload session.");
     }
+    preconnect(session.url);
+    patchItem(item.id, { uploadId: session.uploadId, jobId: session.jobId });
 
-    // A direct POST cannot report bytes: an `xhr.upload` listener would force
-    // a CORS preflight that Uqload never answers, and the upload would never
-    // start. The row stays indeterminate — no guessed percentage, no remembered
-    // "speed", no remaining-time estimate. Those were the 85% stall.
+    // Step 2: the browser PUTs the chunks straight to the exact node URL that
+    // came back, with the upload-scoped grant — never with the API key.
+    const nodeHeaders = { Authorization: session.authorization };
     activeTransfersRef.current += 1;
-    patchItem(item.id, { phase: "uploading", percent: 0, waiting: true, detail: "Uploading to Uqload…" });
-    let outcome;
+    patchItem(item.id, { detail: "Starting the transfer…" });
     try {
-      outcome = await uploadFormDirect(secureUploadServerUrl(session.serverUrl), form, { signal: controller.signal });
+      await uploadFileInChunks({
+        file,
+        chunkSize: session.chunkSize,
+        maxBytes: session.maxBytes,
+        signal: controller.signal,
+        transport: {
+          putChunk: async (offset, chunk) => {
+            await putUploadChunk(session.url, offset, chunk, {
+              headers: nodeHeaders,
+              signal: controller.signal,
+              onProgress: (loadedInChunk, chunkSize, bytesPerSecond) => {
+                const sent = offset + loadedInChunk;
+                const percent = transferPercent(sent, file.size);
+                patchItem(item.id, {
+                  phase: "uploading",
+                  // Bytes own 90% of the bar; publishing owns the rest.
+                  percent: (percent / 100) * UPLOAD_SHARE,
+                  waiting: false,
+                  detail: formatUploadStatus(percent, bytesPerSecond),
+                });
+              },
+            });
+          },
+          reconcileOffset: () =>
+            fetchAcceptedOffset(session.url, { headers: nodeHeaders, signal: controller.signal }),
+          keepAlive: async () => {
+            await postJson("/api/videos/ufoload-session", { uploadId: session.uploadId });
+          },
+        },
+        onProgress: (uploaded, total) => {
+          const percent = transferPercent(uploaded, total);
+          patchItem(item.id, { percent: (percent / 100) * UPLOAD_SHARE, waiting: false });
+        },
+        onResume: (acceptedOffset) => {
+          patchItem(item.id, {
+            detail: `Transfer interrupted — resuming from ${readableSize(acceptedOffset)}…`,
+          });
+        },
+      });
     } finally {
       activeTransfersRef.current = Math.max(0, activeTransfersRef.current - 1);
     }
@@ -543,111 +511,93 @@ export default function UploadPage() {
     const thumbnailPath = (await thumbnailPromise) || item.thumbnailPath;
     if (thumbnailPath) patchItem(item.id, { thumbnailPath });
 
-    let fileCode: string;
-    if (outcome.responseText) {
-      // Readable response (same-origin proxy, or Uqload adds CORS headers).
-      fileCode = parseUqloadUploadResponse(outcome.responseText).filecode;
-    } else {
-      // The bytes left the browser but the response is unreadable (Uqload
-      // omits CORS headers) — confirm the upload against the library snapshot.
-      fileCode = await confirmUqloadUpload({
-        fileTitle,
-        fileName: file.name,
-        knownCodes,
-        controller,
-        onAttempt: (attempt, attempts, elapsedSeconds) => {
-          const progress = attempt / attempts;
-          patchItem(item.id, {
-            percent: CONFIRM_FROM + (CONFIRM_TO - CONFIRM_FROM) * progress,
-            waiting: false,
-            detail:
-              attempt === 1
-                ? `Sent — checking your Uqload library for the file…`
-                : `Sent — still waiting for Uqload to list the file (check ${attempt} of ${attempts}, ${formatEta(
-                    elapsedSeconds
-                  )})…`,
-          });
-        },
-      });
-    }
-
-    await publishKnownFile(item, fileCode, thumbnailPath, await metadataPromise);
-  }
-
-  /** Publishes an item whose file code is already known (fresh or re-checked). */
-  async function publishKnownFile(
-    item: Item,
-    fileCode: string,
-    thumbnailPath: string | null,
-    prepared?: { title: string; description: string; tags: string[]; source: "ai" } | null
-  ) {
-    patchItem(item.id, {
-      phase: "processing",
-      percent: METADATA_FROM,
-      waiting: !prepared,
-      detail: prepared ? "Publishing…" : "Generating AI metadata…",
-    });
+    // Step 3: the server completes the upload with UFOLOAD and creates the
+    // video. It stays private until the provider reports the file as ready.
+    const preparedMetadata = await metadataPromise;
+    patchItem(item.id, { phase: "processing", percent: COMPLETING_PERCENT, waiting: true, detail: "Completing the upload…" });
     const json = await postJson<any>("/api/videos/upload", {
-      providerFileId: fileCode,
+      uploadId: session.uploadId,
+      jobId: session.jobId,
       thumbnailPath: thumbnailPath || null,
       categoryId,
-      fileName: item.file?.name || item.source,
-      fileSize: item.file?.size,
-      ...(prepared ? { metadata: prepared } : {}),
+      fileName: file.name,
+      fileSize: file.size,
+      ...(preparedMetadata ? { metadata: preparedMetadata } : {}),
     });
 
     if (json.metadataSource === "fallback") fallbackRef.current += 1;
+    patchItem(item.id, {
+      videoId: json.videoId,
+      jobId: json.jobId,
+      title: json.metadata?.title,
+      slug: json.video?.slug,
+      metadataWarning: json.metadataWarning || undefined,
+      percent: PUBLISHING_PERCENT,
+    });
 
+    if (json.status === "ready") {
+      finishItem(item, json);
+      return;
+    }
+    if (json.status === "failed") {
+      throw new Error(json.providerError || "UFOLOAD could not process this video.");
+    }
+
+    const outcome = await waitForProvider(item, json.jobId || session.jobId, controller);
+    if (outcome === "ready") {
+      finishItem(item, json);
+      return;
+    }
+    patchItem(item.id, {
+      phase: "processing",
+      percent: PUBLISHING_PERCENT,
+      // Not `waiting`: the row is no longer being polled, so the bar shows the
+      // real value and a "Re-check status" button is offered instead of an
+      // endlessly pulsing bar the admin cannot act on.
+      waiting: false,
+      detail: "Sent to UFOLOAD · still encoding — this row publishes itself as soon as the provider is ready.",
+    });
+  }
+
+  /** Marks a row published with the same wording the old flow used. */
+  function finishItem(item: Item, json: any) {
     patchItem(item.id, {
       phase: "published",
       percent: 100,
+      waiting: false,
       detail:
         json.metadataSource === "fallback"
           ? "Published · AI metadata unavailable — file-name metadata used, please review"
-          : json.processing
-            ? "Published · provider is still encoding"
-            : "Published",
+          : "Published · UFOLOAD has the video ready to play",
       title: json.metadata?.title,
       slug: json.video?.slug,
       metadataWarning: json.metadataWarning || undefined,
     });
   }
 
-  /**
-   * Claims a file that landed in the Uqload library after the confirmation
-   * window closed — without re-uploading the bytes.
-   */
-  async function recheckLibrary(item: Item) {
-    if (!item.file) return;
-    const fileTitle = item.file.name.replace(/\.[^.]+$/, "").slice(0, 160) || item.file.name;
+  /** Re-checks a row that was left processing (or failed) against the provider. */
+  async function recheckStatus(item: Item) {
     setError("");
-    patchItem(item.id, {
-      phase: "processing",
-      percent: CONFIRM_FROM,
-      waiting: false,
-      detail: "Re-checking the Uqload library…",
-      error: undefined,
-    });
+    patchItem(item.id, { phase: "processing", percent: COMPLETING_PERCENT, waiting: true, detail: "Re-checking with UFOLOAD…", error: undefined });
     try {
-      const fileCode = await confirmUqloadUpload({
-        fileTitle,
-        fileName: item.file.name,
-        knownCodes: item.knownCodes ?? null,
-        controller: new AbortController(),
-        onAttempt: (attempt, attempts, elapsedSeconds) => {
-          patchItem(item.id, {
-            percent: CONFIRM_FROM + (CONFIRM_TO - CONFIRM_FROM) * (attempt / attempts),
-            detail: `Re-checking the Uqload library (check ${attempt} of ${attempts}, ${formatEta(elapsedSeconds)})…`,
-          });
-        },
+      const outcome = await waitForProvider(item, item.jobId, new AbortController());
+      if (outcome === "ready") {
+        patchItem(item.id, { phase: "published", percent: 100, waiting: false, detail: "Published · UFOLOAD has the video ready to play" });
+        return;
+      }
+      patchItem(item.id, {
+        phase: "processing",
+        percent: PUBLISHING_PERCENT,
+        waiting: true,
+        detail: "Still encoding at UFOLOAD — check again later.",
       });
-      await publishKnownFile(item, fileCode, item.thumbnailPath);
     } catch (recheckError: any) {
       patchItem(item.id, {
         phase: "failed",
         percent: 100,
+        waiting: false,
         detail: "Failed",
-        error: recheckError.message || "Still not in the Uqload library",
+        error: recheckError.message || "UFOLOAD could not process this video.",
       });
     }
   }
@@ -665,29 +615,72 @@ export default function UploadPage() {
       patchItem(item.id, { thumbnailPath, percent: 55 });
     }
 
-    patchItem(item.id, { phase: "processing", percent: 70, detail: "Generating AI metadata…" });
+    patchItem(item.id, { phase: "processing", percent: 70, waiting: true, detail: "Generating AI metadata…" });
     const json = await postJson<any>(endpoint, {
       categoryId,
       entries: [{ [payloadKey]: item.source, thumbnailPath: thumbnailPath || null }],
     });
     const result = json.results?.[0];
-    if (!result || result.status !== "published") {
+    if (!result || result.status === "failed") {
       throw new Error(result?.error || json.error || "Unable to publish");
     }
 
     if (result.metadataSource === "fallback") fallbackRef.current += 1;
 
+    // Embed sources are live immediately; URL imports are asynchronous.
+    if (result.status === "published") {
+      patchItem(item.id, {
+        phase: "published",
+        percent: 100,
+        waiting: false,
+        detail:
+          result.metadataSource === "fallback"
+            ? "Published · AI metadata unavailable — file-name metadata used, please review"
+            : "Published",
+        title: result.title,
+        slug: result.slug,
+        metadataWarning: result.metadataWarning || undefined,
+      });
+      return;
+    }
+
     patchItem(item.id, {
-      phase: "published",
-      percent: 100,
-      detail:
-        result.metadataSource === "fallback"
-          ? "Published · AI metadata unavailable — file-name metadata used, please review"
-          : "Published",
+      videoId: result.videoId,
+      jobId: result.jobId,
+      importId: result.importId,
       title: result.title,
-      slug: result.slug,
       metadataWarning: result.metadataWarning || undefined,
+      percent: COMPLETING_PERCENT,
+      waiting: true,
+      detail: "Import started — UFOLOAD is downloading the link…",
     });
+
+    try {
+      const outcome = await waitForProvider(item, result.jobId, controller);
+      if (outcome === "ready") {
+        patchItem(item.id, {
+          phase: "published",
+          percent: 100,
+          waiting: false,
+          detail:
+            result.metadataSource === "fallback"
+              ? "Published · AI metadata unavailable — file-name metadata used, please review"
+              : "Published · UFOLOAD has the video ready to play",
+          title: result.title,
+          slug: result.slug,
+        });
+        return;
+      }
+      patchItem(item.id, {
+        phase: "processing",
+        percent: PUBLISHING_PERCENT,
+        waiting: true,
+        detail: "UFOLOAD is still importing and encoding — this row publishes itself once it is ready.",
+      });
+    } catch (pollError: any) {
+      if (pollError?.name === "UploadAbortedError") throw pollError;
+      throw new Error(pollError?.message || "UFOLOAD could not import this link.");
+    }
   }
 
   async function publishAll(event: FormEvent) {
@@ -722,10 +715,8 @@ export default function UploadPage() {
     }
 
     // Pull from a shared queue with a few workers: the second and third video
-    // no longer wait for the first to be uploaded, confirmed, and published.
-    // Files that share a title go one at a time so each keeps its own file code.
+    // no longer wait for the first to be uploaded and published.
     const queue = [...pending];
-    const concurrency = hasDuplicateUploadTitles(pending) ? 1 : UPLOAD_CONCURRENCY;
     const settled = new Set<string>();
     let failures = 0;
 
@@ -737,7 +728,12 @@ export default function UploadPage() {
           if (item.kind === "file") await publishFileItem(item, controller);
           else await publishSourceItem(item, controller);
         } catch (publishError: any) {
-          if (publishError instanceof UploadAbortedError) return;
+          if (publishError instanceof UploadAbortedErrorLike || publishError?.name === "UploadAbortedError") return;
+          if (publishError?.status === 401 || publishError?.status === 403) {
+            failures += 1;
+            patchItem(item.id, { phase: "failed", percent: 100, waiting: false, detail: "Failed", error: publishError.message });
+            return;
+          }
           failures += 1;
           patchItem(item.id, {
             phase: "failed",
@@ -751,7 +747,7 @@ export default function UploadPage() {
       }
     };
 
-    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, queue.length) }, worker));
 
     activeTransfersRef.current = 0;
     setRunning(false);
@@ -777,9 +773,13 @@ export default function UploadPage() {
   }
 
   function cancelPublish() {
-    // Aborting stops every in-flight XHR/fetch; the summary in `publishAll`
-    // then reports the cancellation once the workers have drained.
+    // Aborting stops every in-flight XHR/fetch and asks UFOLOAD to drop the
+    // partial upload, so a cancelled transfer does not hold a concurrency slot.
     abortRef.current?.abort();
+    for (const item of itemsRef.current) {
+      if (!item.uploadId || item.phase === "published") continue;
+      postJson("/api/videos/ufoload-cancel", { uploadId: item.uploadId }).catch(() => null);
+    }
   }
 
   const modes: { key: UploadMode; label: string; icon: typeof CloudUpload; description: string }[] = [
@@ -787,10 +787,10 @@ export default function UploadPage() {
       key: "files",
       label: "Upload videos",
       icon: CloudUpload,
-      description: `Files POST directly to Uqload from your browser — they never touch our storage bucket, and up to ${UPLOAD_CONCURRENCY} upload at once.`,
+      description: `Files are uploaded to UFOLOAD in chunks straight from your browser — they never touch our storage bucket, and up to ${UPLOAD_CONCURRENCY} upload at once.`,
     },
     { key: "embed", label: "Embed by iframe", icon: PlaySquare, description: "Publish trusted iframe sources, each with its own thumbnail." },
-    { key: "url", label: "Upload by link", icon: Link2, description: "Send direct video URLs to Uqload, each with its own thumbnail." },
+    { key: "url", label: "Upload by link", icon: Link2, description: "UFOLOAD downloads direct video URLs, each with its own thumbnail." },
   ];
 
   const pastePlaceholder =
@@ -799,12 +799,10 @@ export default function UploadPage() {
       : "https://cdn.example.com/video-one.mp4\nhttps://cdn.example.com/video-two.mp4";
 
   const publishedCount = items.filter((item) => item.phase === "published").length;
-  /** Same-title files upload one at a time (see `hasDuplicateUploadTitles`). */
-  const batchSerialized = hasDuplicateUploadTitles(items);
   /** Items the batch no longer has to wait for: published or failed. */
   const finishedCount = items.filter((item) => item.phase === "published" || item.phase === "failed").length;
 
-  /** Mean of the per-video bars. In-flight transfers stay at 0 until bytes can actually be counted. */
+  /** Mean of the per-video bars. */
   const batchPercent = items.length
     ? items.reduce((sum, item) => sum + (item.phase === "published" ? 100 : Math.max(0, item.percent)), 0) / items.length
     : 0;
@@ -871,8 +869,8 @@ export default function UploadPage() {
               <Film aria-hidden="true" className="mx-auto h-6 w-6 text-ink-3" />
               <p className="mt-2 text-[13px] font-medium">Select one or more video files</p>
               <p className="mt-1 text-[11px] text-ink-3">
-                Files upload directly to Uqload, so large videos are fine, and up to {UPLOAD_CONCURRENCY} of them travel at the same time. The row does
-                not guess a percentage or a time remaining while the file is in flight — that estimate used to race ahead and then stall.
+                Files are uploaded to UFOLOAD in chunks, so large videos are fine, and up to {UPLOAD_CONCURRENCY} of them travel at the same time. Each
+                upload resumes from the last byte UFOLOAD confirmed, and the row stays private until the provider reports the video as ready.
               </p>
               <label className="mt-4 inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-line bg-card px-4 text-[12px] font-semibold hover:bg-card-hover">
                 <Plus aria-hidden="true" className="h-4 w-4" />
@@ -1003,17 +1001,25 @@ export default function UploadPage() {
                     {item.phase === "failed" && (
                       <div className="mt-1.5 flex flex-wrap items-center gap-2">
                         <p className="text-[10.5px] text-red-300">{item.error}</p>
-                        {item.kind === "file" && (
-                          <button
-                            type="button"
-                            onClick={() => recheckLibrary(item)}
-                            disabled={running}
-                            className="rounded-md border border-line px-2 py-0.5 text-[10.5px] font-medium hover:bg-white/5 disabled:opacity-40"
-                          >
-                            Re-check library
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => recheckStatus(item)}
+                          disabled={running || !item.jobId}
+                          className="rounded-md border border-line px-2 py-0.5 text-[10.5px] font-medium hover:bg-white/5 disabled:opacity-40"
+                        >
+                          Re-check status
+                        </button>
                       </div>
+                    )}
+                    {item.phase === "processing" && !item.waiting && item.jobId && (
+                      <button
+                        type="button"
+                        onClick={() => recheckStatus(item)}
+                        disabled={running}
+                        className="mt-1.5 rounded-md border border-line px-2 py-0.5 text-[10.5px] font-medium hover:bg-white/5 disabled:opacity-40"
+                      >
+                        Re-check status
+                      </button>
                     )}
 
                     {item.phase !== "idle" && (
@@ -1074,11 +1080,6 @@ export default function UploadPage() {
                 {activeTransfersRef.current > 0 ? ` · ${activeTransfersRef.current} uploading` : ""}
               </span>
             </div>
-            {batchSerialized && (
-              <p className="mt-1 text-[10.5px] text-ink-3">
-                Some files share a title, so they are uploaded one at a time — that keeps each Uqload file code matched to the right video.
-              </p>
-            )}
             <ProgressBar percent={batchPercent} phase="uploading" waiting={activeTransfersRef.current > 0 && batchPercent < 1} />
           </div>
         )}
@@ -1088,9 +1089,9 @@ export default function UploadPage() {
       </form>
 
       <p className="mt-4 text-[11px] leading-relaxed text-ink-3">
-        A publish action makes the video public immediately. Uqload may still be encoding a newly uploaded or imported file; the public player becomes
-        playable as soon as the provider finishes processing. A direct upload cannot report bytes to the browser, so the row does not guess a
-        percentage, a speed, or a time remaining. The bar moves again once the library confirms the file.
+        A publish action uploads the video to UFOLOAD, which then encodes it. The video stays private and does not appear on the public site until the
+        provider reports it as ready — until then the row shows the encoder&apos;s progress and can be re-checked. Signed playback links expire, so only
+        UFOLOAD&apos;s stable embed address is stored.
       </p>
     </div>
   );
