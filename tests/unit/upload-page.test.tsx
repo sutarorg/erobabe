@@ -5,13 +5,14 @@ import Link from "next/link";
 /**
  * Tests for the admin publishing page (`/admin/videos/upload`).
  *
- * The page is the only UI that changed with the UFOLOAD migration, and these
+ * The page is the only UI that changed with the Streamtape migration, and these
  * tests pin the behaviour that matters:
- *   - video bytes go straight from the browser to the UFOLOAD node URL, in
- *     chunks, authenticated with the upload grant (never the API key);
- *   - the completion call carries an upload *session* id, not a file id;
- *   - a row is only shown as published once the provider reports ready;
- *   - a cancelled transfer asks UFOLOAD to free its concurrency slot.
+ *   - video bytes go in one multipart POST (XHR, measured progress) to the
+ *     relay URL the server returned — never to a Next.js route, never with
+ *     the API credentials;
+ *   - the completion call carries an upload *session* id, never a file id;
+ *   - a row is only shown as published once the provider reports it converted;
+ *   - a cancelled transfer aborts the XHR and cancels the stored sessions.
  */
 
 vi.mock("next/link", () => ({
@@ -45,21 +46,22 @@ interface RecordedRequest {
   headers: Record<string, string>;
 }
 
-interface ChunkCall {
+interface UploadCall {
   method: string;
   url: string;
-  offset: number;
-  length: number;
+  fieldName: string | null;
+  fileName: string | null;
+  fileSize: number;
   headers: Record<string, string>;
   withCredentials: boolean;
   aborted: boolean;
 }
 
-const NODE_URL = "https://upload.ufoload.com/17/_node/v1/ingest/upl_1";
-const GRANT_HEADER = "UfoGrant 5f2c1e";
+const RELAY_URL = "https://relay.example.com/upload/v1.payload.signature";
+const NODE_REPLY = JSON.stringify({ status: 200, msg: "OK", result: { id: "wg8ad12d3QiJRXG" } });
 
 let requests: RecordedRequest[] = [];
-let chunks: ChunkCall[] = [];
+let chunks: UploadCall[] = [];
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -87,15 +89,15 @@ function stubFetch(handler: (url: string, init: RequestInit) => Response | Promi
 }
 
 /**
- * XHR stub for the chunk PUTs.
+ * XHR stub for the multipart relay POST.
  *
  * `settle: false` keeps a transfer open, which is how the cancel test sees an
  * upload that is genuinely in flight.
  */
 function stubChunkXhr(options: { settle?: boolean; status?: number; responseText?: string } = {}) {
-  const { settle = true, status = 204, responseText = "" } = options;
+  const { settle = true, status = 200, responseText = NODE_REPLY } = options;
 
-  class StubChunkXhr {
+  class StubUploadXhr {
     upload: any = {};
     status = 0;
     responseText = "";
@@ -106,13 +108,11 @@ function stubChunkXhr(options: { settle?: boolean; status?: number; responseText
     onabort: (() => void) | null = null;
     ontimeout: (() => void) | null = null;
 
-    private call: ChunkCall = { method: "", url: "", offset: -1, length: 0, headers: {}, withCredentials: false, aborted: false };
+    private call: UploadCall = { method: "", url: "", fieldName: null, fileName: null, fileSize: 0, headers: {}, withCredentials: false, aborted: false };
 
     open(method: string, url: string) {
       this.call.method = method;
       this.call.url = url;
-      const parsed = new URL(url);
-      this.call.offset = Number(parsed.searchParams.get("offset"));
       chunks.push(this.call);
     }
 
@@ -126,25 +126,28 @@ function stubChunkXhr(options: { settle?: boolean; status?: number; responseText
     }
 
     send(body: any) {
-      this.call.length = Number(body?.size || 0);
+      const entries = body instanceof FormData ? Array.from(body.entries()) : [];
+      const fileEntry = entries.find(([, value]) => typeof value !== "string");
+      this.call.fieldName = fileEntry ? String(fileEntry[0]) : null;
+      this.call.fileName = fileEntry ? (fileEntry[1] as File).name : null;
+      this.call.fileSize = fileEntry ? (fileEntry[1] as File).size : 0;
       this.call.withCredentials = this.withCredentials;
       if (!settle) return;
-      // The browser reports progress before the node answers.
-      this.upload.onprogress?.({ lengthComputable: true, loaded: this.call.length, total: this.call.length });
-      this.upload.onload?.();
+      // The browser reports progress before the endpoint answers.
+      this.upload.onprogress?.({ lengthComputable: true, loaded: this.call.fileSize, total: this.call.fileSize });
       this.status = status;
       this.responseText = responseText;
       this.onload?.();
     }
   }
 
-  vi.stubGlobal("XMLHttpRequest", StubChunkXhr as unknown as typeof XMLHttpRequest);
+  vi.stubGlobal("XMLHttpRequest", StubUploadXhr as unknown as typeof XMLHttpRequest);
 }
 
 /**
  * A real (tiny) video file.
  *
- * The bytes are genuine so `Blob.slice()` reports the same size the chunk
+ * The bytes are genuine so `Blob.slice()` reports the same size the upload
  * planner used — faking `size` would desync the plan from the slices.
  */
 function videoFile(name: string, size: number) {
@@ -172,25 +175,21 @@ function uploadRoutes(overrides: Record<string, (url: string, init: RequestInit)
     for (const [fragment, answer] of Object.entries(overrides)) {
       if (url.includes(fragment)) return answer(url, init);
     }
-    if (url.includes("/api/videos/ufoload-session")) {
+    if (url.includes("/api/videos/streamtape-session")) {
       return json({
-        uploadId: "upl_1",
+        uploadId: "sess-1",
         jobId: "job-1",
-        url: NODE_URL,
-        authorization: GRANT_HEADER,
-        chunkSize: 4,
-        maxBytes: 2 * 1024 * 1024 * 1024,
+        uploadUrl: RELAY_URL,
+        maxBytes: 5 * 1024 * 1024 * 1024,
         expiresAt: "2026-10-12T14:00:00Z",
-        keepAliveIntervalMs: 300000,
       });
     }
     if (url.includes("/api/videos/upload")) {
       return json({
         videoId: "video-1",
         jobId: "job-1",
-        providerFileId: "01J6FSPD0S1N7M4HP2Y7Z1B5GE",
-        providerPublicId: "aBcD1234xyz",
-        providerStatus: "ready",
+        providerFileId: "wg8ad12d3QiJRXG",
+        providerStatus: "converted",
         status: "ready",
         processing: false,
         progress: 100,
@@ -200,7 +199,7 @@ function uploadRoutes(overrides: Record<string, (url: string, init: RequestInit)
       });
     }
     if (url.includes("/api/videos/status")) {
-      return json({ providerState: "ready", note: "UFOLOAD confirmed this video is ready.", video: {}, job: {} });
+      return json({ providerState: "ready", note: "Streamtape confirmed this video is ready.", video: {}, job: {} });
     }
     if (url.includes("/api/gemini/suggest")) {
       return json({
@@ -317,8 +316,8 @@ describe("admin publish videos page", () => {
   });
 });
 
-describe("direct UFOLOAD upload from the browser", () => {
-  it("asks for a session, PUTs the chunks to the node URL, and completes with the session id", async () => {
+describe("Streamtape upload from the browser through the relay", () => {
+  it("asks for a session, POSTs one multipart body to the relay URL, and completes with the session id", async () => {
     stubFetch(uploadRoutes());
     stubChunkXhr();
 
@@ -328,34 +327,32 @@ describe("direct UFOLOAD upload from the browser", () => {
     await chooseCategory();
     submitForm();
 
-    expect(await screen.findByText("Published · UFOLOAD has the video ready to play")).toBeTruthy();
+    expect(await screen.findByText("Published · Streamtape has the video ready to play")).toBeTruthy();
 
     // 1. The server hands out an upload-scoped session.
-    const session = findRequest("/api/videos/ufoload-session");
+    const session = findRequest("/api/videos/streamtape-session");
     expect(session?.body).toEqual({ fileName: "my trip.mp4", fileSize: 10, mimeType: "video/mp4" });
 
-    // 2. Ten bytes travel as 4 + 4 + 2, straight to the node URL, in order.
-    expect(chunks.map((chunk) => [chunk.method, chunk.offset, chunk.length])).toEqual([
-      ["PUT", 0, 4],
-      ["PUT", 4, 4],
-      ["PUT", 8, 2],
-    ]);
-    for (const chunk of chunks) {
-      expect(chunk.url.startsWith(NODE_URL)).toBe(true);
-      expect(chunk.headers.Authorization).toBe(GRANT_HEADER);
-      expect(chunk.headers["Content-Length"]).toBeUndefined();
-      expect(chunk.withCredentials).toBe(false);
-    }
+    // 2. The whole file travels in ONE multipart POST to the relay URL — not to
+    //    a Next.js route, and with no credentials or custom auth headers.
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ method: "POST", url: RELAY_URL, fieldName: "file1", fileName: "my trip.mp4", fileSize: 10, withCredentials: false });
+    expect(Object.keys(chunks[0].headers)).not.toContain("Authorization");
+    expect(Object.keys(chunks[0].headers)).not.toContain("Content-Length");
 
     // 3. Completion carries the session id — and never a provider file id.
     const completion = findRequest("/api/videos/upload");
     expect(completion?.body).toMatchObject({
-      uploadId: "upl_1",
+      uploadId: "sess-1",
       jobId: "job-1",
       categoryId: "cat-1",
       fileName: "my trip.mp4",
+      fileSize: 10,
+      // The node's verbatim reply is relayed so the SERVER can verify the id.
+      nodeResponse: NODE_REPLY,
     });
     expect(completion?.body.providerFileId).toBeUndefined();
+    expect(completion?.body.fileId).toBeUndefined();
     expect(completion?.body.filecode).toBeUndefined();
     // Metadata was prepared while the bytes travelled, so it is reused.
     expect(completion?.body.metadata).toEqual({
@@ -367,7 +364,7 @@ describe("direct UFOLOAD upload from the browser", () => {
 
     // No secret ever reaches the browser-facing requests.
     for (const request of requests) {
-      expect(JSON.stringify(request.body ?? {})).not.toMatch(/ufo_[A-Za-z0-9]{8,}/);
+      expect(JSON.stringify(request.body ?? {})).not.toMatch(/STREAMTAPE_(API_KEY|LOGIN)|login=|key=/);
     }
   });
 
@@ -381,7 +378,7 @@ describe("direct UFOLOAD upload from the browser", () => {
     submitForm();
 
     // All three requests for a session are issued without waiting for each other.
-    await waitFor(() => expect(requests.filter((request) => request.url.includes("ufoload-session"))).toHaveLength(3));
+    await waitFor(() => expect(requests.filter((request) => request.url.includes("streamtape-session"))).toHaveLength(3));
     await waitFor(() => expect(chunks.length).toBe(3));
 
     const panel = await screen.findByRole("status");
@@ -391,7 +388,7 @@ describe("direct UFOLOAD upload from the browser", () => {
     expect(within(panel).queryByText(/MB\/s|KB\/s/)).toBeNull();
   });
 
-  it("starts the first chunk before the thumbnail has finished uploading", async () => {
+  it("starts the transfer before the thumbnail has finished uploading", async () => {
     stubFetch(
       uploadRoutes({
         "storage-token": () => new Promise(() => {}) as unknown as Response,
@@ -409,8 +406,8 @@ describe("direct UFOLOAD upload from the browser", () => {
     await waitFor(() => expect(chunks.length).toBeGreaterThan(0), { timeout: 4000 });
   });
 
-  it("keeps a row that is still encoding and lets the admin re-check it", async () => {
-    // The page polls a still-encoding video every few seconds for many minutes;
+  it("keeps a row that is still converting and lets the admin re-check it", async () => {
+    // The page polls a still-converting video every few seconds for many minutes;
     // fake timers let the whole window pass without a real wait.
     stubFetch(
       uploadRoutes({
@@ -426,7 +423,7 @@ describe("direct UFOLOAD upload from the browser", () => {
             metadataSource: "ai",
             video: { slug: "my-trip-abc12345" },
           }),
-        "/api/videos/status": (_url, init) => json({ providerState: "processing", note: "UFOLOAD is still processing this video." }),
+        "/api/videos/status": (_url, init) => json({ providerState: "processing", note: "Streamtape is still processing this video." }),
       })
     );
     stubChunkXhr();
@@ -442,7 +439,7 @@ describe("direct UFOLOAD upload from the browser", () => {
       await vi.advanceTimersByTimeAsync(24 * 5000 + 5000);
     });
 
-    const terminal = screen.getByText(/still encoding — this row publishes itself/);
+    const terminal = screen.getByText(/still converting — this row publishes itself/);
     expect(terminal).toBeTruthy();
     // The row was polled with the job id the server returned.
     const polls = requests.filter((request) => request.url.includes("/api/videos/status"));
@@ -456,7 +453,7 @@ describe("direct UFOLOAD upload from the browser", () => {
       fireEvent.click(recheck);
       await vi.advanceTimersByTimeAsync(5000 + 500);
     });
-    expect(screen.getByText("Published · UFOLOAD has the video ready to play")).toBeTruthy();
+    expect(screen.getByText("Published · Streamtape has the video ready to play")).toBeTruthy();
   });
 
   it("shows the provider's failure reason on the row", async () => {
@@ -518,7 +515,7 @@ describe("direct UFOLOAD upload from the browser", () => {
     expect((await screen.findByText(/All videos were published/)).textContent).toMatch(/file-name metadata/);
   });
 
-  it("cancels the transfer and frees the provider's slot", async () => {
+  it("cancels the transfer: aborts every XHR and cancels the stored sessions", async () => {
     stubFetch(uploadRoutes());
     stubChunkXhr({ settle: false });
 
@@ -531,12 +528,45 @@ describe("direct UFOLOAD upload from the browser", () => {
     fireEvent.click(screen.getByText("Cancel"));
 
     await waitFor(() => expect(screen.getByText("Publishing cancelled. Finished items were kept.")).toBeTruthy());
-    // Every in-flight upload is cancelled provider-side…
-    const cancels = requests.filter((request) => request.url.includes("/api/videos/ufoload-cancel"));
-    expect(cancels.map((request) => request.body)).toEqual([{ uploadId: "upl_1" }, { uploadId: "upl_1" }]);
-    // …and the rows go back to a state the admin can decide about.
-    expect(screen.getAllByText("Cancelled — ready to publish")).toHaveLength(2);
+    // Every in-flight transfer is aborted (the relay then aborts upstream)…
     expect(chunks.every((chunk) => chunk.aborted)).toBe(true);
+    // …and each stored session is cancelled server-side.
+    const cancels = requests.filter((request) => request.url.includes("/api/videos/streamtape-cancel"));
+    expect(cancels.map((request) => request.body)).toEqual([{ jobId: "job-1" }, { jobId: "job-1" }]);
+    // The rows go back to a state the admin can decide about.
+    expect(screen.getAllByText("Cancelled — ready to publish")).toHaveLength(2);
+  });
+
+  it("shows the relay's error and keeps the row retryable when the node rejects the upload", async () => {
+    stubFetch(uploadRoutes());
+    stubChunkXhr({ status: 509, responseText: JSON.stringify({ status: 509, msg: "Bandwidth" }) });
+
+    render(<UploadPage />);
+    addVideoFiles([videoFile("limited.mp4", 4)]);
+    await chooseCategory();
+    submitForm();
+
+    expect(await screen.findByText(/bandwidth quota is exhausted/i)).toBeTruthy();
+    // Completion must not be attempted for a transfer that failed.
+    expect(findRequest("/api/videos/upload")).toBeUndefined();
+    expect((await screen.findByText(/could not be published/)).textContent).toMatch(/1 item/);
+  });
+
+  it("refuses files larger than the deployment limit before sending any bytes", async () => {
+    stubFetch(
+      uploadRoutes({
+        "/api/videos/streamtape-session": () => json({ uploadId: "sess-1", jobId: "job-1", uploadUrl: RELAY_URL, maxBytes: 2, expiresAt: null }),
+      })
+    );
+    stubChunkXhr();
+
+    render(<UploadPage />);
+    addVideoFiles([videoFile("too-big.mp4", 10)]);
+    await chooseCategory();
+    submitForm();
+
+    expect(await screen.findByText(/larger than this deployment's upload limit/)).toBeTruthy();
+    expect(chunks).toHaveLength(0);
   });
 });
 
@@ -561,12 +591,12 @@ describe("URL imports", () => {
           queued: 1,
           succeeded: 1,
           failed: 0,
-          note: "UFOLOAD downloads and encodes in the background.",
+          note: "Streamtape downloads and converts in the background.",
         });
       }
       if (url.includes("/api/videos/status")) {
         seen.push(url);
-        return json({ providerState: "ready", note: "UFOLOAD confirmed this video is ready." });
+        return json({ providerState: "ready", note: "Streamtape confirmed this video is ready." });
       }
       return json({ error: `unexpected ${url}` }, 500);
     });
@@ -582,8 +612,8 @@ describe("URL imports", () => {
 
     // The first poll only happens after the page's settle delay, and the row is
     // "queued" at the provider until that poll reports ready.
-    expect(await screen.findByText(/Import started — UFOLOAD is downloading the link/)).toBeTruthy();
-    expect(await screen.findByText("Published · UFOLOAD has the video ready to play", {}, { timeout: 8000 })).toBeTruthy();
+    expect(await screen.findByText(/Import started — Streamtape is downloading the link/)).toBeTruthy();
+    expect(await screen.findByText("Published · Streamtape has the video ready to play", {}, { timeout: 8000 })).toBeTruthy();
 
     const start = findRequest("/api/videos/upload-url");
     expect(start?.body).toEqual({

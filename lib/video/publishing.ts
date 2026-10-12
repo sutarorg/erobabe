@@ -1,9 +1,17 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { fallbackSuggestion, suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
-import { UfoloadError } from "@/lib/video/ufoload-protocol";
+import { StreamtapeError } from "@/lib/video/streamtape-protocol";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
+
+/**
+ * Values allowed in `videos.provider` / `upload_jobs.provider` after migration
+ * 00000000000007. Legacy values (`ufoload`, `uqload`) remain valid for
+ * historical rows; `streamtape` is the active integration.
+ */
+export const VIDEO_PROVIDER_VALUES = ["streamtape", "ufoload", "uqload", "embed", "internal", "bunny", "cloudflare", "s3"] as const;
+export type VideoProviderValue = (typeof VIDEO_PROVIDER_VALUES)[number];
 
 export type GeneratedVideo = {
   id: string;
@@ -39,16 +47,17 @@ export function httpErrorStatus(message: string): number {
 /**
  * Maps a thrown error onto the HTTP status our routes answer with.
  *
- * A provider rejection is never reported as *our* auth failure: a 401 from
- * UFOLOAD means the server's API key is wrong (502 — an upstream
- * misconfiguration), while 409/413/429/503 keep their meaning so the admin UI
- * can tell the difference between "storage full" and "rate limited".
+ * A provider rejection is never reported as *our* auth failure: a 403 from
+ * Streamtape means the server's credentials are wrong (502 — an upstream
+ * misconfiguration), while 409/413/451/509/503 keep their meaning so the admin
+ * UI can tell the difference between "session conflict" and "bandwidth limit".
  */
 export function errorStatusFrom(error: unknown): number {
-  if (error instanceof UfoloadError) {
+  if (error instanceof StreamtapeError) {
     if (error.status === 0) return 504;
     if (error.status === 401 || error.status === 403 || error.status === 402) return 502;
     if (error.status === 400) return 400;
+    if (error.status === 409) return 409;
     return error.status >= 400 && error.status < 600 ? error.status : 502;
   }
   const message = error instanceof Error ? error.message : "";
@@ -231,7 +240,7 @@ export async function createGeneratedVideo({
   userId: string;
   sourceName: string;
   categoryId: string;
-  provider: "ufoload" | "embed" | "internal";
+  provider: VideoProviderValue;
   thumbnailUrl?: string | null;
   /** Already generated while the bytes were in flight — skips a second Gemini call. */
   prepared?: GeneratedMetadata | null;
@@ -325,7 +334,7 @@ export async function createUploadJob({
   userId,
   fileName,
   fileSize,
-  provider = "ufoload",
+  provider = "streamtape",
   storagePath,
   providerUploadId,
   providerImportId,
@@ -335,12 +344,12 @@ export async function createUploadJob({
   userId: string;
   fileName: string;
   fileSize?: number;
-  provider?: string;
+  provider?: VideoProviderValue | string;
   /** Transit object in the private video-incoming bucket, when there is one. */
   storagePath?: string | null;
-  /** UFOLOAD direct-upload session id (init step). */
+  /** Direct-upload session id (Streamtape session / legacy UFOLOAD upload_id). */
   providerUploadId?: string | null;
-  /** UFOLOAD import task id — deliberately separate from the file id. */
+  /** Remote-import task id — deliberately separate from the file id. */
   providerImportId?: string | null;
 }) {
   const insert: Record<string, unknown> = {
@@ -352,7 +361,7 @@ export async function createUploadJob({
     progress: 0,
     created_by: userId,
   };
-  // These columns are added by migration 00000000000004 / 00000000000006.
+  // These columns are added by migrations 00000000000004 / 00000000000006.
   // Omit them rather than fail the insert on a database that has not been
   // migrated yet.
   if (storagePath) insert.storage_path = storagePath;
@@ -367,33 +376,46 @@ export async function createUploadJob({
 /**
  * Finds the direct-upload job a completion request is allowed to finish.
  *
- * The client sends only the provider's `uploadId`; this lookup proves the
- * session was created for *this* admin and has not been claimed already, so a
- * browser can never complete — or publish — someone else's upload, and the
- * provider file id always comes from UFOLOAD rather than from the request body.
+ * The client sends only the session id the server itself minted; this lookup
+ * proves the session was created for *this* admin, has not been claimed
+ * already, and belongs to the expected provider — so a browser can never
+ * complete (or publish) someone else's upload.
  */
 export async function findUploadJobForSession(
   service: ServiceClient,
   userId: string,
-  uploadId: string
-): Promise<{ id: string; video_id: string | null; file_name: string; file_size: number | null; provider: string } | null> {
+  uploadId: string,
+  expectedProvider: VideoProviderValue | string = "streamtape"
+): Promise<{
+  id: string;
+  video_id: string | null;
+  file_name: string;
+  file_size: number | null;
+  provider: string;
+  status?: string;
+  created_at?: string;
+  provider_import_id?: string | null;
+} | null> {
   const normalized = String(uploadId || "").trim();
   if (!normalized) return null;
 
   const { data, error } = await service
     .from("upload_jobs")
-    .select("id, video_id, file_name, file_size, provider, status, created_by")
+    .select("id, video_id, file_name, file_size, provider, status, created_by, created_at, provider_import_id, provider_upload_id")
     .eq("provider_upload_id", normalized)
     .eq("created_by", userId)
     .single();
   if (error || !data) return null;
-  if (data.provider && data.provider !== "ufoload") return null;
+  if (data.provider && data.provider !== expectedProvider) return null;
   return {
     id: data.id,
     video_id: data.video_id ?? null,
     file_name: data.file_name,
     file_size: data.file_size ?? null,
-    provider: data.provider || "ufoload",
+    provider: data.provider || expectedProvider,
+    status: data.status,
+    created_at: data.created_at,
+    provider_import_id: data.provider_import_id ?? null,
   };
 }
 
@@ -417,16 +439,16 @@ export async function completeUploadJob(service: ServiceClient, jobId: string, p
 }
 
 /**
- * Persists the identifiers UFOLOAD returned for a finished upload/import
- * *without* making the video public.
+ * Persists the identifiers the video host returned for a finished upload or
+ * import *without* making the video public.
  *
  * A file that reached the provider is not playable yet: it has to finish
- * encoding (`queued` → `processing` → `ready`). The row therefore stays
- * `processing` / private until {@link markVideoReady} is called with a provider
- * confirmation, so nothing unplayable ever appears on a public page.
+ * converting. The row therefore stays `processing` / private until
+ * {@link markVideoReady} is called with a provider confirmation, so nothing
+ * unplayable ever appears on a public page.
  *
- * The stored addresses are the stable embed/watch pages. Signed playback links
- * (which the documentation says expire) are never written to the database.
+ * The stored addresses are stable embed pages. Signed/ticketed playback links
+ * (which expire) are never written to the database.
  */
 export async function attachProviderFile({
   service,

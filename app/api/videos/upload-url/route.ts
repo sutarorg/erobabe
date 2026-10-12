@@ -6,27 +6,40 @@ import {
   requireActiveAdmin,
   sourceNameFromUrl,
 } from "@/lib/video/publishing";
-import { startUfoloadImport } from "@/lib/video/ufoload-flow";
-import { UfoloadProvider } from "@/lib/video/ufoload";
-import { UfoloadError } from "@/lib/video/ufoload-protocol";
+import { startStreamtapeImport } from "@/lib/video/streamtape-flow";
+import { StreamtapeProvider } from "@/lib/video/streamtape";
+import { StreamtapeError, redactSecrets } from "@/lib/video/streamtape-protocol";
 import { resolveThumbnailUrl } from "@/lib/video/storage";
 import { normalizeRemoteEntries } from "@/lib/video/entries";
 
 const MAX_URLS_PER_REQUEST = 20;
 
-/** UFOLOAD's documented ceiling for simultaneous imports on one account. */
-const MAX_ACTIVE_IMPORTS = 10;
+/**
+ * App-level ceiling on concurrently tracked remote imports. Streamtape does
+ * not document a concurrent-remote-upload limit (verified 2026-10-12 — see
+ * docs/STREAMTAPE_MIGRATION.md), so this is a safety valve of ours, not a
+ * claimed provider limit; tune it with STREAMTAPE_MAX_ACTIVE_IMPORTS.
+ */
+const DEFAULT_MAX_ACTIVE_IMPORTS = 10;
+
+function maxActiveImports(): number {
+  const raw = Number(String(process.env.STREAMTAPE_MAX_ACTIVE_IMPORTS || "").trim());
+  if (Number.isFinite(raw) && raw > 0) return Math.trunc(raw);
+  return DEFAULT_MAX_ACTIVE_IMPORTS;
+}
 
 /** Submission only — the download and encode happen on the provider's side. */
 export const maxDuration = 60;
 
 /**
- * Starts UFOLOAD URL imports (`POST /api/v1/files/import`).
+ * Starts Streamtape remote uploads (`remotedl/add`).
  *
- * An import is asynchronous: UFOLOAD answers `202` with a *task*. The response
+ * An import is asynchronous: Streamtape answers with a *task*. The response
  * therefore reports `queued` — never `published` — and the video row stays
- * private until `/api/videos/status` sees the task finish, resolves the created
- * file id and the file itself reach `ready`.
+ * private until `/api/videos/status` sees the task finish, resolves the
+ * created file id, and the file itself converts. Allowed URL schemes/hosts are
+ * validated by `assertPublicHttpUrl` (public http/https only — no localhost,
+ * no RFC1918, no embedded credentials).
  */
 export async function POST(req: NextRequest) {
   try {
@@ -49,23 +62,25 @@ export async function POST(req: NextRequest) {
     if (urls.length > MAX_URLS_PER_REQUEST) {
       return NextResponse.json({ error: `Upload up to ${MAX_URLS_PER_REQUEST} remote URLs at a time` }, { status: 400 });
     }
-    if (urls.length > MAX_ACTIVE_IMPORTS) {
+
+    const activeLimit = maxActiveImports();
+    if (urls.length > activeLimit) {
       return NextResponse.json(
         {
-          error: `UFOLOAD allows ${MAX_ACTIVE_IMPORTS} active imports at once`,
-          details: `Submit up to ${MAX_ACTIVE_IMPORTS} links, wait for them to finish, then submit the rest.`,
+          error: `Submit at most ${activeLimit} links at once (STREAMTAPE_MAX_ACTIVE_IMPORTS safety limit)`,
+          details: `Submit up to ${activeLimit} links, wait for them to finish, then submit the rest.`,
         },
         { status: 400 }
       );
     }
 
-    const provider = new UfoloadProvider();
+    const provider = new StreamtapeProvider();
     provider.assertEnabled();
 
     // Resolve each distinct thumbnail once, then reuse it for its URLs.
     const thumbnailByPath = new Map<string, string | null>();
     const results: Array<Record<string, unknown>> = [];
-    /** Set when UFOLOAD refuses more imports: stop instead of hammering it. */
+    /** Set when Streamtape refuses more tasks: stop instead of hammering it. */
     let blockedReason: string | null = null;
 
     for (const entry of rawEntries) {
@@ -86,7 +101,7 @@ export async function POST(req: NextRequest) {
         }
 
         const name = sourceNameFromUrl(remoteUrl);
-        const started = await startUfoloadImport({
+        const started = await startStreamtapeImport({
           service,
           userId: user.id,
           provider,
@@ -103,7 +118,7 @@ export async function POST(req: NextRequest) {
           target_id: started.video.id,
           level: "info",
           metadata: {
-            provider: "ufoload",
+            provider: "streamtape",
             host: new URL(remoteUrl).hostname,
             import_task_id: started.importId,
             has_custom_thumbnail: Boolean(thumbnailUrl),
@@ -116,20 +131,26 @@ export async function POST(req: NextRequest) {
           jobId: started.jobId,
           importId: started.importId,
           title: started.video.title,
-          // Never "published": UFOLOAD has only accepted the task.
+          // Never "published": Streamtape has only accepted the task.
           status: "queued",
           providerStatus: started.providerStatus,
           metadataSource: started.metadata.source,
           ...(started.metadata.warning ? { metadataWarning: started.metadata.warning } : {}),
           processing: true,
         });
-      } catch (error: any) {
-        const concurrencyBlocked =
-          error instanceof UfoloadError && (error.status === 409 || error.status === 429) && /import|concurrent|active/i.test(error.message);
-        if (concurrencyBlocked) blockedReason = errorMessageFrom(error, "UFOLOAD is not accepting more imports right now.");
+      } catch (error: unknown) {
+        const rateBlocked =
+          error instanceof StreamtapeError && (error.status === 429 || error.status === 509 || error.status === 403);
+        if (rateBlocked) blockedReason = redactSecrets(errorMessageFrom(error, "Streamtape is not accepting more remote uploads right now."), [
+          process.env.STREAMTAPE_API_KEY,
+          process.env.STREAMTAPE_LOGIN,
+        ]);
         results.push({
           remoteUrl,
-          error: errorMessageFrom(error, "Unable to start the UFOLOAD import"),
+          error: redactSecrets(errorMessageFrom(error, "Unable to start the Streamtape remote upload"), [
+            process.env.STREAMTAPE_API_KEY,
+            process.env.STREAMTAPE_LOGIN,
+          ]),
           status: "failed",
         });
       }
@@ -143,14 +164,11 @@ export async function POST(req: NextRequest) {
         succeeded: queued,
         failed: results.length - queued,
         note:
-          "UFOLOAD downloads and encodes in the background. Each row stays private until the provider reports the file as ready.",
+          "Streamtape downloads and converts in the background. Each row stays private until the provider reports the file as converted.",
       },
       { status: queued ? (queued === results.length ? 200 : 207) : 422 }
     );
-  } catch (error: any) {
-    return NextResponse.json(
-      { error: errorMessageFrom(error, "URL upload failed") },
-      { status: errorStatusFrom(error) }
-    );
+  } catch (error: unknown) {
+    return NextResponse.json({ error: errorMessageFrom(error, "URL upload failed") }, { status: errorStatusFrom(error) });
   }
 }

@@ -5,8 +5,9 @@
 **Base**: Next.js 15 App Router, Supabase, Bcon Global, Resend, Groq
 
 > **Current providers:** NOWPayments for cryptocurrency payments, Google's Gemini
-> API for AI metadata, and **UFOLOAD for video hosting** (2026-10-12 migration, first
-> section below). The original report body is retained as history; the migration
+> API for AI metadata, and **Streamtape for video hosting** (2026-10-12 migration — see
+> `docs/STREAMTAPE_MIGRATION.md`; it supersedes the UFOLOAD migration described below, whose
+> sections are kept as history). The original report body is retained as history; the migration
 > sections describe the active implementation.
 
 ---

@@ -1,12 +1,13 @@
 /**
- * Browser → provider upload helpers with real progress events.
+ * Browser → storage / browser → relay upload helpers with real progress events.
  *
  * `fetch()` cannot report upload progress, and pushing large files through one
  * of our own API routes hits the 4.5 MB request-body limit that Vercel enforces
  * on functions (the source of the old
  * `Unexpected token 'R', "Request En"... is not valid JSON` failure). Large
- * files therefore go straight from the browser to the storage node UFOLOAD
- * hands out — thumbnails keep using a signed Supabase Storage URL.
+ * files therefore travel from the browser straight to the streaming relay
+ * (`STREAMTAPE_RELAY_URL`), which forwards them to the Streamtape upload node;
+ * thumbnails keep using a signed Supabase Storage URL.
  */
 
 export interface UploadProgress {
@@ -71,135 +72,110 @@ export function uploadWithProgress(url: string, body: File | Blob, options: Uplo
 }
 
 // ---------------------------------------------------------------------------
-// UFOLOAD direct upload: PUT one chunk at a time to the node URL the server
-// returned, authenticated with the upload-scoped grant (never with the API key).
+// Streamtape upload: one multipart POST from the browser to the streaming
+// relay, which pipes it to the provider node. XHR (not fetch) because it
+// reports byte-level progress — the number the admin sees is measured, and
+// `xhr.abort()` genuinely cancels the transfer (the relay then aborts the
+// upstream request and Streamtape drops the partial body).
 // ---------------------------------------------------------------------------
 
-export interface ChunkUploadOptions {
-  /** Headers for the node request — `Authorization: <grant>` from the session. */
-  headers: Record<string, string>;
-  signal?: AbortSignal;
-  /** Bytes of *this chunk* reported by the browser as they leave. */
-  onProgress?: (loadedInChunk: number, chunkSize: number, bytesPerSecond: number | null) => void;
-}
-
-export interface ChunkUploadResponse {
+export interface MultipartUploadResult {
+  /** HTTP status of the upstream node's response, passed through by the relay. */
   status: number;
+  /** Verbatim response body — parsed by the server during completion, never trusted directly. */
   body: string;
 }
 
+export interface MultipartUploadOptions extends UploadOptions {
+  /** Multipart field name. The Streamtape docs' example uses `file1`. */
+  fieldName?: string;
+  /** Extra non-file fields to append before the file. */
+  fields?: Record<string, string>;
+}
+
 /**
- * Uploads one chunk to `url?offset=N`.
+ * POSTs `file` as multipart/form-data to `url` with measured progress.
  *
- * XHR is used (not `fetch`) because it reports byte-level progress — the number
- * the admin sees is measured, not estimated. `Content-Length` is set by the
- * browser from the Blob, which is what the node requires; the code must never
- * try to set it manually (it is a forbidden header name).
+ * Resolves for **any** HTTP status (including 4xx/5xx from the node) so the
+ * caller can surface the provider's own message; rejects only on network
+ * failure, timeout, or cancellation.
  */
-export function putUploadChunk(
+export function uploadMultipartWithProgress(
   url: string,
-  offset: number,
-  chunk: Blob,
-  options: ChunkUploadOptions
-): Promise<ChunkUploadResponse> {
-  return new Promise<ChunkUploadResponse>((resolve, reject) => {
+  file: File | Blob,
+  fileName: string,
+  options: MultipartUploadOptions = {}
+): Promise<MultipartUploadResult> {
+  return new Promise<MultipartUploadResult>((resolve, reject) => {
     let xhr: XMLHttpRequest;
     try {
       xhr = new XMLHttpRequest();
     } catch {
-      reject(new Error("This browser cannot upload video files directly. Try a current version of Chrome, Firefox, Edge or Safari."));
+      reject(new Error("This browser cannot upload video files. Try a current version of Chrome, Firefox, Edge or Safari."));
       return;
     }
 
-    const target = new URL(url);
-    target.searchParams.set("offset", String(offset));
-
-    xhr.open("PUT", target.toString(), true);
+    xhr.open("POST", url, true);
     xhr.withCredentials = false;
     xhr.responseType = "text";
-    xhr.setRequestHeader("Content-Type", "application/octet-stream");
     for (const [name, value] of Object.entries(options.headers || {})) {
-      // `Content-Length` and friends are set by the browser and must not be
-      // written here — setting them is ignored at best and a hard error at worst.
-      if (/^(content-length|host|connection)$/i.test(name)) continue;
+      if (/^(content-length|host|connection|content-type)$/i.test(name)) continue;
       xhr.setRequestHeader(name, value);
     }
-
-    const startedAt = Date.now();
-    xhr.upload.onprogress = (event) => {
-      if (!options.onProgress || !event.lengthComputable) return;
-      const elapsed = Math.max((Date.now() - startedAt) / 1000, 0.001);
-      options.onProgress(event.loaded, event.total || chunk.size, event.loaded / elapsed);
-    };
-    xhr.upload.onload = () => options.onProgress?.(chunk.size, chunk.size, null);
+    attachProgress(xhr, file.size, options);
 
     xhr.onload = () => {
       const body = typeof xhr.responseText === "string" ? xhr.responseText : "";
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve({ status: xhr.status, body });
-        return;
+        options.onProgress?.({ loaded: file.size, total: file.size, percent: 100, bytesPerSecond: null });
       }
-      reject(new Error(describeNodeError(xhr.status, body)));
+      resolve({ status: xhr.status, body });
     };
     xhr.onerror = () =>
-      reject(new Error("Network error while sending a chunk to UFOLOAD — the upload node did not answer."));
-    xhr.ontimeout = () => reject(new Error("A chunk upload timed out."));
+      reject(
+        new Error(
+          "Network error while sending the video to the upload relay — the connection dropped, or the relay rejected the request. " +
+            "Check STREAMTAPE_RELAY_URL and the relay's STREAMTAPE_RELAY_ALLOWED_ORIGINS, then try again."
+        )
+      );
+    xhr.ontimeout = () => reject(new Error("The upload timed out. Check your connection and try again."));
     xhr.onabort = () => reject(new UploadAbortedError());
 
     options.signal?.addEventListener("abort", () => xhr.abort(), { once: true });
-    xhr.send(chunk);
+
+    const form = new FormData();
+    for (const [name, value] of Object.entries(options.fields || {})) form.append(name, value);
+    form.append(options.fieldName || "file1", file, fileName);
+    xhr.send(form);
   });
 }
 
-/** Turns the upload node's error body into something an admin can act on. */
-export function describeNodeError(status: number, body: string): string {
+/**
+ * Turns a non-2xx upload-node/relay response into an admin-facing message.
+ * The node's body is only used for display — status codes drive the branch.
+ */
+export function describeUploadEndpointError(status: number, body: string): string {
   let detail = "";
   try {
     const json = JSON.parse(body);
-    detail = typeof json?.error?.message === "string" ? json.error.message : typeof json?.message === "string" ? json.message : "";
+    detail = typeof json?.msg === "string" ? json.msg : typeof json?.message === "string" ? json.message : typeof json?.error === "string" ? json.error : "";
   } catch {
-    detail = String(body || "").trim().slice(0, 200);
+    detail = String(body || "").trim().replace(/\s+/g, " ").slice(0, 200);
   }
 
   const hints: Record<number, string> = {
-    400: "The upload node rejected the chunk (400). Start the upload again.",
-    401: "The upload grant was rejected — the session or its signature expired. Start the upload again.",
-    403: "The upload node refused the grant (403). The session may have been cancelled or expired.",
-    409: "The chunk offset did not match what the node received (409). The upload will resume from the accepted offset.",
-    410: "The upload grant expired. Start the upload again.",
-    413: "The upload node refused the chunk as too large (413).",
-    429: "The upload node is rate-limiting this upload (429). Retry in a moment.",
-    503: "The upload node is temporarily unavailable (503). Retry in a moment.",
+    400: "The upload endpoint rejected the request (400). Start the upload again.",
+    403: "The upload was refused (403). The session may have expired — start the upload again.",
+    404: "The upload session no longer exists (404). Start the upload again from this page.",
+    410: "The upload session expired (410). Start the upload again from this page.",
+    413: "The upload is too large for the relay or the provider (413). Check STREAMTAPE_MAX_UPLOAD_BYTES and the account's real file-size limit.",
+    429: "The endpoint is rate-limiting uploads (429). Wait a moment and retry.",
+    500: "The upload endpoint failed on its side (500). Retry shortly.",
+    502: "The relay could not reach the Streamtape upload node (502). Retry shortly.",
+    503: "The upload endpoint is temporarily unavailable (503). Retry in a moment.",
+    509: "Streamtape's bandwidth quota is exhausted right now (509). Wait and retry later.",
   };
 
-  const hint = hints[status] || `The upload node rejected the chunk (${status}).`;
+  const hint = hints[status] || `The upload endpoint rejected the transfer (${status || "no response"}).`;
   return detail ? `${hint} ${detail}` : hint;
-}
-
-/**
- * Asks the upload node how many bytes it has actually accepted.
- *
- * The documented resume endpoint answers `{"offset": N}`; a chunk that was only
- * partially received is therefore re-sent instead of being skipped, and an
- * offset our own bookkeeping thought was sent can never hide missing data.
- */
-export async function fetchAcceptedOffset(
-  url: string,
-  options: { headers: Record<string, string>; signal?: AbortSignal }
-): Promise<number | null> {
-  let response: Response;
-  try {
-    response = await fetch(url, { method: "GET", headers: options.headers, cache: "no-store", signal: options.signal });
-  } catch (error) {
-    if ((error as { name?: string })?.name === "AbortError") throw new UploadAbortedError();
-    return null;
-  }
-  if (!response.ok) return null;
-  try {
-    const payload = await response.json();
-    const offset = Number(payload?.offset);
-    return Number.isFinite(offset) && offset >= 0 ? Math.floor(offset) : null;
-  } catch {
-    return null;
-  }
 }

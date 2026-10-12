@@ -1,8 +1,9 @@
 /**
  * Progress helpers for admin uploads.
  *
- * The UFOLOAD transfer reports real bytes per chunk (see
- * `uploadFile.putUploadChunk`), so the percentage in the UI is measured. The
+ * The Streamtape transfer reports real bytes as the multipart body leaves
+ * the browser (see `uploadFile.uploadMultipartWithProgress`), so the
+ * percentage in the UI is measured. The
  * helpers below are still the fallback for the phases that cannot be measured,
  * and the admin page must never invent a percentage, a speed, or a remaining
  * time from `estimateTransferFraction` or a remembered link rate — that curve
@@ -178,6 +179,6 @@ export function formatLiveBytesPerSecond(rate: number): string {
 /** Row copy while bytes are moving. No countdown. Speed is omitted when it was not measured. */
 export function formatUploadStatus(percent: number, bytesPerSecond: number | null): string {
   const pct = Math.max(0, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
-  if (bytesPerSecond === null || !Number.isFinite(bytesPerSecond)) return `Uploading to UFOLOAD — ${pct}%`;
-  return `Uploading to UFOLOAD — ${pct}% · ${formatLiveBytesPerSecond(bytesPerSecond)}`;
+  if (bytesPerSecond === null || !Number.isFinite(bytesPerSecond)) return `Uploading to Streamtape — ${pct}%`;
+  return `Uploading to Streamtape — ${pct}% · ${formatLiveBytesPerSecond(bytesPerSecond)}`;
 }

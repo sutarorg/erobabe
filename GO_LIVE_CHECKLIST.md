@@ -21,75 +21,93 @@ This checklist lists all external decisions, approvals, and configurations that 
 
 ---
 
-## 2. Video Hosting (UFOLOAD) — CRITICAL BLOCKER
+## 2. Video Hosting (Streamtape) — CRITICAL BLOCKER
 
-- [ ] **UFOLOAD written approval**: UFOLOAD's Terms of Service (https://ufoload.com/tos,
-  draft v0.1 dated 2026-10-11) prohibit unlawful, infringing, malware, violence and
-  non-consensual material and reserve discretionary enforcement, but do not contain an
-  explicit adult-content clause. Obtain written confirmation from `contact@ufoload.com`
-  that **lawful adult content, commercial use, API uploads and embedded playback** are
-  permitted on this account, and keep the reply on file with its date and contact.
-  - If approval obtained: set `UFOLOAD_API_KEY`, `UFOLOAD_ADULT_CONTENT_APPROVED=true`,
-    `VIDEO_PROVIDER=ufoload`, run the upload smoke test in section D, and record the
-    approval date and contact here: ______________________
-  - If NOT obtained: **Production video hosting is BLOCKED.** Leave
-    `UFOLOAD_ADULT_CONTENT_APPROVED=false` — the app refuses every upload with a `503`
-    naming the variable, and refuses to record the provider as approved.
-- [ ] **Replacement provider approved** (only if UFOLOAD declines): owner approves a
-  provider whose Acceptable Use Policy explicitly permits adult content and commercial
-  use (Bunny.net Stream, Cloudflare Stream, Mux, or self-hosted S3 + transcoding).
-- [ ] **Provider adapter implemented**: `lib/video/provider.ts` resolves only `ufoload`
-  (real uploads) and `internal` (embeds only); any other `VIDEO_PROVIDER` value fails
-  closed with an actionable error — Uqload support has been removed.
-- [ ] **Plan limits match the app limits**: UFOLOAD per-file ceilings (Free 5 GB,
-  Pro 10 GB, Max 25 GB) must be at least the app's 2 GB `MAX_VIDEO_SIZE`; the UI shows a
-  clear `413` when either limit is exceeded.
-- [ ] **Large-file upload architecture**: video bytes go browser → UFOLOAD node in
-  chunks (Vercel functions reject bodies above 4.5 MB). Verify a multi-hundred-MB file
-  uploads without touching Supabase or a function body.
-- [ ] **Concurrency**: UFOLOAD allows at most 10 active URL imports per account; the
-  import batch stops with an explanation instead of hammering the API. Direct uploads
-  hold a slot for 15 minutes if abandoned — the browser pings the provider during long
-  transfers.
-- [ ] **Thumbnail stability**: thumbnails are stable public URLs (Supabase
-  `video-thumbnails`, or the provider's own stable poster) — never signed/expiring URLs,
-  so Googlebot can fetch them for the video sitemap.
-- [ ] **Playback verification**: test actual playback on desktop and mobile; confirm the
-  embed address is the stable `https://ufoload.com/e/{code}` form and that provider
-  outages are surfaced as notes instead of breaking the watch page.
+- [ ] **Owner policy verification**: Streamtape's Terms
+  (https://streamtape.com/terms-and-conditions) and Copyright Policy
+  (https://streamtape.com/copyright) prohibit sexual content involving minors and any
+  content that violates third-party rights, require you to hold rights/consent, and allow
+  removal at any time. They contain **no explicit clause permitting or banning lawful adult
+  content**. Verify the current terms, check the account panel's content/embed settings,
+  and ideally obtain Streamtape support's written answer on **lawful adult content,
+  commercial use, API uploads and embedded playback**; keep it on file.
+  - Verified (date / contact / reference): ______________________
+  - If NOT verified: **Production video hosting is BLOCKED.** Leave
+    `STREAMTAPE_ADULT_CONTENT_ALLOWED=false` — the app refuses every upload with a `503`
+    naming the variable.
+- [ ] **Credentials configured**: `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY` (server-only),
+  optional `STREAMTAPE_FOLDER_ID`; `VIDEO_PROVIDER=streamtape`.
+- [ ] **Upload relay deployed**: `relay/streamtape-relay.mjs` on an always-on Node ≥ 18 host
+  with HTTPS (not Vercel/serverless), `STREAMTAPE_RELAY_SECRET` identical in the relay and
+  the app, `STREAMTAPE_RELAY_ALLOWED_ORIGINS` = the site origin(s), `STREAMTAPE_RELAY_URL`
+  set in the app. `GET {relay}/health` answers 200.
+- [ ] **Migration applied**: `supabase/migrations/00000000000007_streamtape_video_provider.sql`
+  (older migrations untouched; legacy `ufoload`/`uqload` rows unchanged and still viewable).
+- [ ] **Provider adapter**: `lib/video/provider.ts` resolves only `streamtape` and `internal`;
+  `ufoload`, `uqload` and any other value fail closed with an actionable error.
+- [ ] **Size limit matches the account**: Streamtape's API docs state no per-file limit (a
+  2021 community README claims 15 GB). Verify the account's real limit and set
+  `STREAMTAPE_MAX_UPLOAD_BYTES`; the app answers `413` before any bytes move.
+- [ ] **Large-file upload architecture**: bytes go browser → relay → Streamtape (Vercel
+  functions reject bodies above 4.5 MB). Verify a multi-hundred-MB file uploads without
+  touching Supabase or a function body, and that the relay host's request timeout exceeds
+  the longest expected upload. Streamtape documents no resumable protocol: an interrupted
+  upload is restarted.
+- [ ] **Concurrency/bandwidth**: Streamtape documents no remote-upload concurrency limit
+  (the app caps a batch at `STREAMTAPE_MAX_ACTIVE_IMPORTS`, default 10) and answers
+  `509` when bandwidth is exhausted — the app surfaces it and stops the batch.
+- [ ] **Thumbnail stability**: thumbnails are stable public URLs (Supabase `video-thumbnails`,
+  or Streamtape's `getsplash` URL) — never signed/expiring URLs.
+- [ ] **Playback verification**: actual playback on desktop **and** mobile; the embed is
+  `https://streamtape.com/e/{fileId}`; provider outages show as notes, not a broken watch page.
 - [ ] **Sitemap inclusion**: only published, cleared, approved, public videos appear in
-  `sitemap.xml` / `video-sitemap.xml`; videos still encoding at the provider do not.
+  `sitemap.xml` / `video-sitemap.xml`; rows still converting do not.
+- [ ] **Live evidence recorded**: `LIVE_STREAMTAPE=1 npm run test:live` output and
+  `test-results/streamtape-live-evidence.json` (field name, node response shape, CORS probe),
+  plus the browser acceptance run (`tests/live/README.md`). Until these exist the direct
+  browser→Streamtape path is **unproven** and the relay is mandatory.
 
-### D. Click-by-click manual smoke test (UFOLOAD, on the real account)
+### D. Click-by-click manual smoke test (Streamtape, staging first)
 
-Run this after the migration and before launch. It is the only procedure that proves
-the *admin UI* end-to-end — the automated suite cannot (it has no real provider key).
+Run this on **staging** (own Supabase project) after the migration and before launch. The
+automated suite cannot replace it (it has no real provider account).
 
-1. Deploy with `VIDEO_PROVIDER=ufoload`, `UFOLOAD_API_KEY` set, and
-   `UFOLOAD_ADULT_CONTENT_APPROVED` **false**. Open `/admin/videos/upload`.
-2. Pick a category, choose a small real video file, press **Generate AI metadata &
-   publish**. Expect an inline error naming `UFOLOAD_ADULT_CONTENT_APPROVED` and **no**
-   request to UFOLOAD. This proves the fail-closed gate.
-3. Set `UFOLOAD_ADULT_CONTENT_APPROVED=true` (only with written approval) and redeploy.
-   Confirm `/admin/system-health` shows *Video Provider* = `ufoload (approved)`.
-4. Repeat step 2 with a small (10–50 MB) file. Watch the row: *Requesting an upload
-   session…* → *Uploading to UFOLOAD — N%* → *Completing the upload…* → *UFOLOAD is
-   encoding…* → *Published · UFOLOAD has the video ready to play*.
-5. In the UFOLOAD dashboard, confirm the file exists with the title Gemini generated.
-6. Open Admin → **Videos** → the new row; confirm it is `published`, and that
-   `provider_file_id` is a ULID while `embed_url` is `https://ufoload.com/e/{code}`.
-7. Open the public `/video/[slug]` page in a private window: the video must play.
-8. Press **Cancel** during a larger upload: the row returns to *Cancelled — ready to
-   publish*, and the UFOLOAD dashboard shows no leftover partial upload.
-9. Test a URL import: *Upload by link* → paste a public direct `.mp4` URL → publish.
-   The row reports *Import started — UFOLOAD is downloading the link…*, then either
-   publishes once ready or settles on *still encoding* with a **Re-check status** button.
-   Press that button after a few minutes; the row publishes when the provider is ready.
-10. Check `upload_jobs`: the import row stores the task id in `provider_import_id`, and
-    `provider_file_id` stays `null` until the provider returns the created file.
-11. Publish an iframe embed: it appears immediately (no provider involved) and the
-    generic `/api/videos/embed` route is used.
-12. Record the evidence (screenshot + `provider_file_id`) in this checklist.
+1. Configure in the hosting environment: `VIDEO_PROVIDER=streamtape`, `STREAMTAPE_LOGIN`,
+   `STREAMTAPE_API_KEY`, optional `STREAMTAPE_FOLDER_ID`, `STREAMTAPE_RELAY_URL`,
+   `STREAMTAPE_RELAY_SECRET`, `GEMINI_API_KEY`, and `STREAMTAPE_ADULT_CONTENT_ALLOWED=false`.
+2. Open Admin → **System Health**: *Video Provider* must say `streamtape (blocked — see
+   DEPLOYMENT.md)`. Open `/admin/videos/upload`, choose a category and a small **cleared**
+   video, press **Generate AI metadata & publish**. Expect an inline error naming
+   `STREAMTAPE_ADULT_CONTENT_ALLOWED` and **no** request to Streamtape (fail-closed proof).
+3. Set `STREAMTAPE_ADULT_CONTENT_ALLOWED=true` (only after the owner verification) and redeploy.
+   *Video Provider* must read `streamtape · API reachable`.
+4. Repeat with a small (10–50 MB) file. Watch the row: *Requesting an upload session…* →
+   *Uploading to Streamtape — N%* (real byte progress) → *Finishing the upload…* →
+   *Streamtape is converting the video…* → *Published · Streamtape has the video ready to play*.
+   Review the Gemini title, description and tags shown on the row.
+5. In the Streamtape file manager, confirm the file exists (in the configured folder).
+6. In Supabase, confirm the `videos` row: `provider='streamtape'`, `provider_file_id` = the
+   Streamtape file id, `embed_url=https://streamtape.com/e/{id}`, `status=published`,
+   `visibility=public`, `rights_status=cleared`, `moderation_status=approved`; `tags`/`video_tags`
+   populated; `audit_logs` has `video_published_from_upload` with `metadata_source: "ai"`.
+   A `fallback` source means Gemini failed — review that title before leaving it public.
+7. Open `/video/[slug]` in a private window, press **Play**, and confirm playback on a
+   desktop browser and on a phone.
+8. Press **Cancel** during a larger upload: the row returns to *Cancelled — ready to publish*,
+   the job is `cancelled`, and no video is public.
+9. Test *Upload by link* with a public direct `.mp4` URL: the row reports *Import started —
+   Streamtape is downloading the link…*, then publishes once converted, or settles on *still
+   converting* with a **Re-check status** button. Check `upload_jobs.provider_import_id` is
+   set and `provider_file_id` stays `null` until Streamtape returns the file.
+10. Force an error (wrong `STREAMTAPE_API_KEY` on staging): System Health shows the API as
+    unreachable and the upload page shows a redacted, actionable error; nothing goes public.
+11. Publish an iframe embed: it appears immediately (no provider involved) via `/api/videos/embed`.
+12. Confirm `sitemap.xml` / `video-sitemap.xml` list only published/cleared/approved videos.
+13. Record the evidence (screenshots, `provider_file_id`, slug) here: ______________________
+
+**Rollback:** set `VIDEO_PROVIDER=internal` (uploads refuse, embeds and all published videos
+keep working) or redeploy the previous release. The migration is additive; no data rollback
+is needed. Legacy UFOLOAD/Uqload videos are unaffected either way.
 
 ## 3. Hosting — CRITICAL BLOCKER
 
@@ -220,7 +238,7 @@ the *admin UI* end-to-end — the automated suite cannot (it has no real provide
 
 ## 11. Remaining Launch Blockers (Documented)
 
-- [ ] **UFOLOAD adult content / commercial approval**: BLOCKED — the TOS has no explicit adult-content clause, so written confirmation (or a replacement provider) is required. See DEPLOYMENT.md D.
+- [ ] **Streamtape content-policy verification**: BLOCKED until the owner verifies the terms, copyright policy and account settings for this catalog (ideally in writing from Streamtape). See DEPLOYMENT.md D.
 - [ ] **Hosting approval**: BLOCKED if using Vercel Hobby or host that prohibits adult/commercial. Need approval and documentation.
 - [ ] **Legal identity**: BLOCKED — owner must provide real business details.
 - [ ] **Age assurance**: Evaluate jurisdiction-specific requirements, implement verification integration if required.
@@ -238,7 +256,7 @@ the *admin UI* end-to-end — the automated suite cannot (it has no real provide
 4. [ ] All remaining controls have working behavior with loading/empty/error/success states.
 5. [ ] Supabase Auth and server-side role authorization work.
 6. [ ] RLS policies tested.
-7. [ ] Admin can genuinely upload, manage, review, publish approved videos via the authorized UFOLOAD integration (or another provider the owner approved in writing).
+7. [ ] Admin can genuinely upload, manage, review, publish approved videos via the authorized Streamtape integration (or another provider the owner approved in writing).
 8. [ ] Public watch pages play actual hosted videos.
 9. [ ] Advertisers can reserve ten fixed placements and create real campaigns.
 10. [ ] NOWPayments payment requests, signed-IPN verification, and confirmation processing work per actual API.
@@ -252,7 +270,7 @@ the *admin UI* end-to-end — the automated suite cannot (it has no real provide
 18. [ ] Production build succeeds.
 19. [ ] DEPLOYMENT.md gives complete click-by-click setup.
 20. [ ] GO_LIVE_CHECKLIST.md accurately lists remaining external decisions (this file).
-21. [ ] No prohibited provider usage enabled (UFOLOAD uploads without written approval, Vercel Hobby commercial).
+21. [ ] No prohibited provider usage enabled (Streamtape uploads without the owner's policy verification, Vercel Hobby commercial).
 22. [ ] No secrets committed.
 23. [ ] No feature described as operational when only simulated.
 24. [ ] Final implementation report separates verified results from unverified assumptions and remaining blockers.

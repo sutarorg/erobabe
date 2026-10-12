@@ -8,7 +8,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./tests/setup.ts"],
-    // `tests/live/**` needs a real UFOLOAD key — see tests/live/README.md.
+    // `tests/live/**` needs real Streamtape credentials — see tests/live/README.md.
     exclude: ["node_modules", "tests/e2e/**", "tests/live/**", ".next/**"],
   },
   resolve: {
