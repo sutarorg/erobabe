@@ -9,7 +9,146 @@
 > report body is retained as history; the migration section describes the
 > active implementation.
 
+> **Current video provider (2026-10-12 migration, first section below):**
+> UFOLOAD. Every statement about Uqload in the retained body further down is
+> history and is superseded by that section.
+
 ---
+
+## UFOLOAD video-hosting migration (2026-10-12)
+
+Uqload is replaced by [UFOLOAD](https://ufoload.com) as the only upload and hosting provider. This section is the delivery record: what changed and why, what was actually run, what was only mocked, and what is still open. Setup, the live smoke test and the migration test procedure are in `DEPLOYMENT.md` section D (D.3, D.9, D.10).
+
+> ### ⚠ Read first: `main` moved while this branch was being built
+>
+> Branch `arena/0d880f05-erobabe` was cut from `95b04e0` (PR #19). At 13:00 UTC today **PR #20** (`arena/02839b83-erobabe`, "Replace Uqload with UFOLOAD…", merge commit `9277afa`) landed on `main` — an *independent implementation of the same task*. The two overlap file for file (`lib/video/ufoload.ts`, `src/utils/ufoloadUpload.ts`, `app/api/videos/ufoload-session/route.ts`, `app/admin/videos/upload/page.tsx`, the docs, many tests) and **both add `supabase/migrations/00000000000006_ufoload_video_provider.sql` with different SQL** (different column names). This branch was **not** rebased or merged onto that work, and nothing here has been verified against it. Consequences:
+> - merging this branch into current `main` conflicts; the conflicts are architectural, not cosmetic;
+> - Supabase records applied migrations by version number: if `main`'s version of `…06` has already been applied to a database, this branch's `…06` will be *skipped* there and its columns (`provider_import_task_id`, `last_checked_at`) will not exist — a corrective `…07` would be required;
+> - which implementation ships is your decision.
+
+### What was built
+
+| Requirement | Where |
+|---|---|
+| `UfoloadProvider`, `VIDEO_PROVIDER=ufoload`, unknown value fails closed (no fallback to Uqload; the retired `uqload` value is rejected too) | `lib/video/ufoload.ts`, `lib/video/provider.ts` |
+| Server initialises the upload with the server-only key and returns only the grant, node URL, upload id and chunk parameters | `POST /api/videos/ufoload-session` |
+| Browser sends chunks to the exact URL UFOLOAD returned, honouring `chunk_size`, `max_bytes`, the node's offset; real progress, cancel, offset-aware retry/resume; no forbidden headers | `src/utils/ufoloadUpload.ts` |
+| Keep-alive through our server (the key never reaches the browser) | `GET /api/videos/ufoload-session?jobId=` (every 4 min while bytes move) |
+| Completion through the authenticated endpoint; UFOLOAD's file id persisted | `POST /api/videos/upload` (takes a `jobId`; any provider id/URL/name in the body is ignored) |
+| Async URL import, SSRF guard kept, task id in its own column, matched by id in the import list, ≤ 10 concurrent with backoff | `POST /api/videos/upload-url`, `lib/video/processing.ts` |
+| Processing tracked until `ready`/`failed`; published only on `ready`; actionable failure reason kept | `lib/video/processing.ts`, `GET /api/videos/status` |
+| Real background mechanism | `POST|GET /api/videos/reconcile` (scheduler secret or admin) — **the repository ships no scheduler; see blockers** |
+| Stable embed URL `https://ufoload.com/e/{public_id}`, verified, never invented; signed links never stored | `resolveEmbedUrl` (REST id → else papi `file/info`), `DEPLOYMENT.md` D.5 |
+| Fail-closed adult-content approval flag `UFOLOAD_ADULT_CONTENT_APPROVED` | `UfoloadProvider.assertEnabled()`, every upload/import/reconcile route |
+| 2 GB limit kept; one constant for browser, server and provider checks | `lib/video/limits.ts` |
+| Thumbnails stay on Supabase signed uploads; `embed` route untouched | unchanged |
+| Admin UI: only `/admin/videos/upload` changed (same layout; new copy, real byte progress, Retry instead of Re-check library) | `app/admin/videos/upload/page.tsx` |
+| Forward migration + initial schema, idempotent, no row touched | `supabase/migrations/00000000000006_…sql`, `…000000_initial_schema.sql` |
+| Obsolete Uqload routes/helpers deleted after the new tests passed | see below |
+
+### Verification — exactly what was run
+
+| Command | Baseline (`95b04e0`, before any change) | After the change |
+|---|---|---|
+| `npm ci` | 1st attempt failed: `ERR_SSL_CIPHER_OPERATION_FAILED` (transient sandbox network error while downloading). 2nd attempt, `npm ci --fetch-retries=5 --maxsockets=4`: **255 packages installed** | same install reused |
+| `npm run type-check` | pass | **pass** |
+| `npm run test` | 23 files, **263 passed** | 29 files, **661 passed, 2 skipped** (the two optional live tests, off by default) |
+| `npm run build` | pass | **pass** (client bundles contain no `UFOLOAD_API_KEY`, `CRON_SECRET`, `ufo_`, or Uqload string — checked with grep on `.next/static`) |
+| `npm run test:e2e` | official browser download blocked (`npx playwright install chromium` → `ECONNRESET` from `cdn.playwright.dev`; the sandbox only reaches GitHub/npm/PyPI). Workaround, **sandbox only**: Chromium 153 from the npm package `@sparticuz/chromium` plus its bundled libraries, selected through a temporary config that was **not committed**. Result: 20 tests, **18 passed, 2 failed** | 33 tests, **31 passed, 2 failed** — the same two failures (below); the 13 new tests pass |
+| `node scripts/verify-ufoload-migration.mjs` (PGlite = Postgres 18.6 in WebAssembly) | n/a | **13/13 passed**, both starting from the genuine pre-change schema (`--baseline-ref 95b04e0`) and from the rewound new schema |
+| `npm run lint` | not runnable: the repository has no ESLint configuration (`next lint` opens an interactive setup prompt) — unchanged by this work | same |
+
+The two e2e failures are **pre-existing and unrelated**: `seo.spec.ts › video page returns 404 for missing video` (the page answers 200) and `seo.spec.ts › video-sitemap.xml … contains video:video` (an empty sitemap — no published videos without a configured Supabase). Both fail identically on the untouched base commit and also against a production build (`next build` + `next start`).
+
+Beyond the suites I ran **mutation checks** by hand — deliberately breaking the code to confirm a test fails: publishing without a verified embed URL, treating an unknown status as `ready`, writing the import task id into `provider_file_id`, trusting a browser-supplied provider id or provider name, dropping key redaction, accepting a file one byte over 2 GB, accepting any scheduler token, setting `Content-Length`, reporting 100 % before the last chunk was acknowledged, and an SSRF hole for loopback. Each is now caught. (One first-draft test — key redaction for a key that does not start with `ufo_` — did *not* catch its mutation and was strengthened.)
+
+New and rewritten tests (all `npm run test` unless noted):
+
+| File | Covers |
+|---|---|
+| `ufoload-provider.test.ts` (72) | bearer auth only; init/state/cancel/complete/file/import calls and paths; grant parsing and rejection; chunk-size clamp to 256 MiB; embed URL from the OpenAPI examples (REST `public_id`, papi `filecode`/`protected_embed`, rejection of ULIDs/foreign hosts); errors 401/402/404/409/413/429/503 `direct_upload_unavailable`; `Retry-After`, bounded GET retries, no write retries; invalid JSON, empty bodies, timeouts, network errors; no key leakage; missing key / missing approval / `TRUE`,`1`,`yes` not approved |
+| `ufoload-upload.test.ts` (48) | offsets and chunking, exact URL, `max_bytes`, 256 MiB cap; only `Authorization` + `Content-Type`; real monotonic progress, never 100 % early; completion only after every byte; resume from the node's offset; lost-response (“applied then dropped”) chunk not re-sent; 409 resync; unexpected PUT bodies verified with `GET`; expired/forbidden grants (401/403) and lost sessions (404/410); bounded retries; abort (also during backoff); stall detection; keep-alive |
+| `ufoload-routes.test.ts` (117) | anonymous / non-admin / suspended / profile-less admin refused on every route (UFOLOAD never called); session route (shape, 2 GB, category, spoofing, 503s, slot release); register route (UFOLOAD's own file id, private+processing, spoofed id/URL/provider ignored, other admin's job, idempotent repeat, duplicate content, busy retry); import route (SSRF matrix, 20-link cap, 10-slot limit from our DB and from UFOLOAD, task id in its own column, cleanup); status; reconcile (scheduler secret, GET for Vercel Cron, weak/missing secret); un-migrated database messages |
+| `ufoload-processing.test.ts` (52) | queued→processing→ready→published; private until ready; no signed URLs stored; papi fallback; ready-without-embed stays private; failures keep UFOLOAD's reason; 404; 48 h and 6 h timeouts; provider trouble never fails a job; throttle; import task→file with look-alike decoys; import failed/cancelled/lost/unknown; abandoned upload sessions; racing reconcilers publish once; bounded unattended reconcile |
+| `upload-page.test.tsx` (39) | local upload end to end, link upload, embed mode, thumbnails (Supabase), progress/cancel/retry/resume, 2 GB and non-video selection, no Uqload request anywhere, polling and its stop on a lost session |
+| `video-page.test.tsx` (+4) | iframe plays the stable UFOLOAD URL; legacy Uqload embeds still play |
+| `video-provider.test.ts` (18) | factory fail-closed; scan proving no runtime source reaches Uqload |
+| `video-limits.test.ts`, `ufoload-migration.test.ts`, `video-health.test.ts`, `video-publishing.test.ts` (+37), `video-upload.test.ts` (+4), `upload-progress.test.ts` | one set of limits; static migration guards; System Health wording; SSRF guard matrix, compare-and-set publish; api helpers; copy |
+| `tests/e2e/video-upload-auth.spec.ts` (13, Playwright) | anonymous callers are refused by the real routes; retired routes are gone |
+| `tests/live/ufoload.live.test.ts` | **optional real-API test, skipped unless `UFOLOAD_LIVE_TEST=1`**; refuses to run without a sample path and an explicit non-adult acknowledgement |
+
+### Mocked versus live — read this before relying on any of it
+
+- Every UFOLOAD test above runs against `tests/unit/helpers/fake-ufoload.ts` / `fake-node.ts`, **mocks written from UFOLOAD's published OpenAPI documents** (not captured from the real service). They prove the code follows the documented contract. They do **not** prove that a real upload, encode or playback works, that UFOLOAD's node accepts requests from your origin (CORS), or what the node returns for a chunk (the PUT response body is undocumented; the client therefore never relies on it).
+- **A real authorised test video was not uploaded, processed or played, and no URL import was run against UFOLOAD.** No account, key or written approval was available here, and the sandbox cannot reach `ufoload.com` except through the page-fetch tool used to read the documentation. The live checklist is `DEPLOYMENT.md` D.9 — nothing in it is ticked.
+- The migration *was* executed against a real Postgres engine, but a stub of Supabase's `auth`/`storage` schemas; it has not been run on a Supabase project (procedure: D.10).
+
+### Changed files, with reasons
+
+**Deleted** — `app/api/videos/uqload-session/route.ts`, `app/api/videos/uqload-confirm/route.ts`, `lib/video/uqload-match.ts`, `lib/video/uqload-response.ts` (Uqload upload-server session and library-diff confirmation; nothing may call Uqload any more); `tests/unit/uqload-match.test.ts`, `tests/unit/uqload-response.test.ts` (they only tested those helpers; replaced by the UFOLOAD tests above, not simply dropped).
+
+**New server code** — `lib/video/ufoload.ts` (provider, parsers, error text), `lib/video/errors.ts`, `lib/video/limits.ts` (shared limits, safe for the browser), `lib/video/url-safety.ts` (host check behind the SSRF guard), `lib/video/processing.ts` (state machine and reconciliation), `lib/video/route-helpers.ts` (error mapping, ownership, scheduler auth), `lib/video/health.ts`, `app/api/videos/ufoload-session/route.ts`, `app/api/videos/reconcile/route.ts`.
+
+**Rewritten / edited server code** — `lib/video/provider.ts` (factory only; `InternalProvider`, a dev placeholder that never enabled an upload, removed), `lib/video/publishing.ts` (provider type, `publishVideo` compare-and-set, job columns, `failUpload`, **`assertPublicHttpUrl` hardened**: IPv6, mapped addresses and single-label hosts are now refused and `fd…`/`fc…` *hostnames* are no longer wrongly blocked), `lib/video/storage.ts` (limits import, copy), `app/api/videos/upload/route.ts`, `upload-url/route.ts`, `status/route.ts`, `storage-token/route.ts` (copy only), `app/admin/system-health/page.tsx` (provider row).
+
+**Frontend** — `app/admin/videos/upload/page.tsx` (see below), `src/utils/ufoloadUpload.ts`, `src/utils/uploadTiming.ts` (new), `src/utils/uploadFile.ts` (Uqload simple-request POST removed; thumbnails unchanged), `src/utils/uploadProgress.ts` (copy), `src/utils/api.ts` (error extras, `getJson`, `deleteJson`).
+
+**Database** — `supabase/migrations/00000000000006_ufoload_video_provider.sql` (new), `00000000000000_initial_schema.sql` (fresh installs), `scripts/verify-ufoload-migration.mjs`.
+
+**Config and docs** — `.env.example`, `next.config.mjs` (comment only; the legacy image host stays, no UFOLOAD host is added because posters are signed and never stored), `README.md`, `DEPLOYMENT.md` (sections A, B.6, D rewritten, I, J, rollback, blockers), `GO_LIVE_CHECKLIST.md`, this report. `IMPLEMENTATION_AUDIT.md` is a pre-implementation audit and was left as history.
+
+**Not touched on purpose** — `src/admin/UploadView.tsx`: it is the *legacy Vite prototype* (header says “FRONTEND SIMULATIONS”), mounted only through `src/App.tsx`/`src/main.tsx`/`index.html`, excluded from `tsconfig.json`, makes no API call and mentions no provider. It is not part of the Next.js route graph. `app/api/videos/embed/route.ts` is unchanged.
+
+**The upload page** keeps its layout, three modes, 3-way concurrency and `ProgressBar`. What changed is the pipeline behind it: a chunked upload with real bytes (the old Uqload POST could not report any), a polling status for videos UFOLOAD is still encoding (videos no longer publish the moment the bytes leave), a per-row **Retry** (which resumes) replacing “Re-check library”, a 2 GB check at selection time, and a bounded reconcile request when the page opens. The title-collision serialisation (a Uqload workaround) is gone.
+
+### Remaining blockers
+
+**Policy**
+1. **UFOLOAD's written approval for adult content is not obtained.** Its Terms (https://ufoload.com/tos) are a *draft* — “DRAFT v0.1 — 2026-10-11 — Draft for legal review; not legal advice” — that neither permits nor prohibits lawful adult content and allows suspension with or without notice. Real adult uploads must not run, and `UFOLOAD_ADULT_CONTENT_APPROVED` must stay `false`, until UFOLOAD confirms in writing (D.1 lists what to ask). The flag is the operator's statement; the code cannot verify it.
+2. Pre-existing and unchanged: hosting approval (not Vercel Hobby), legal identity, age assurance, NOWPayments approval and wallet, Resend domain.
+
+**Live / operational**
+3. No real upload, processing or playback has been performed (D.9).
+4. **Browser → upload-node CORS from your origin is unverified** (UFOLOAD documents it as allowed “for the site”; D.6 gives the preflight command).
+5. **Where the stable embed id comes from is unverified.** The REST `File` schema has no `public_id`; the app uses a `public_id`/`filecode` if the REST response carries one, otherwise `GET https://api.ufoload.com/file/info`. If neither yields a valid 11-character id the video stays private with a warning — it is never guessed. D.9 step 7 records which path the real API takes.
+6. **No scheduler ships with the repository.** `/api/videos/reconcile` exists and is tested, but something must call it every ~5 minutes (D.7: Vercel Cron on a paid plan, GitHub Actions, Supabase `pg_cron`, or any cron). Without one, videos advance only while an admin has the upload page open or opens it; nothing becomes public by mistake.
+7. Plan: the Free plan deletes files with no views after 30 days and always shows player ads; the owner must choose and pay for a plan (D.2).
+8. Embed domain lock must be configured at UFOLOAD (D.3 step 9).
+9. `complete` and `reconcile` declare `maxDuration = 60`; the host plan must allow that.
+10. The migration has been run on PGlite, not on a Supabase project, and **see the warning at the top about `main`'s own `…06`**.
+
+### Decisions and deviations
+
+- **Branch**: the task named `feat/ufoload-video-hosting`; this environment fixes the session branch to `arena/0d880f05-erobabe`, so all work, commits and the pull request use that name. Nothing was pushed to `main`.
+- `InternalProvider` removed (see above); `VIDEO_PROVIDER` unset means `ufoload` (still gated by key and approval).
+- `complete` is called with `size` only; the browser does not hash multi-GB files for `sha256`.
+- A duplicate (same content already hosted, `duplicate: true` and already attached to a video here) is refused with 409 rather than creating a second public copy.
+- Imports use *provider-first* ordering: UFOLOAD is asked before any row is written, so a full queue leaves nothing behind and a failed write cancels the task.
+
+### Final Uqload reference audit
+
+Reproduce with: `grep -rIil uqload --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=.git --exclude=package-lock.json --exclude=tsconfig.tsbuildinfo .`
+
+| Location | Matches | Why it is still there |
+|---|---|---|
+| Runtime code: `lib/`, `app/`, `src/` (except below) | **0** for hosts, API paths, `UQLOAD_*` variables, adapter classes, route names — enforced by the test “no runtime path reaches Uqload” | — |
+| `lib/video/provider.ts` | 6 | comments, and the error that rejects `VIDEO_PROVIDER=uqload` (no fallback) |
+| `lib/video/processing.ts` | 1 | a comment: legacy rows are skipped |
+| `next.config.mjs` | 2 | the **legacy image host** `**.uqload.vc`, kept so historical thumbnails render |
+| `supabase/migrations/…00_initial_schema.sql` | 1 | `'uqload'` stays an allowed `videos.provider` value |
+| `…03_admin_publishing….sql`, `…04_video_transit_storage.sql` | 1 + 1 | untouched migration history |
+| `…06_ufoload_video_provider.sql` | 6 | explains the migration; keeps `'uqload'` valid; a column comment about legacy ids |
+| `scripts/verify-ufoload-migration.mjs` | 15 | the deployed-state fixture: legacy rows, the old constraint and default |
+| `.env.example` | 1 | a note that the retired value is rejected |
+| Tests (11 files) | — | assert the absence of Uqload traffic, legacy playback, migration safety and the fail-closed factory |
+| `README.md` (1), `DEPLOYMENT.md` (9), `GO_LIVE_CHECKLIST.md` (2) | — | explain the migration, legacy compatibility and rollback |
+| `IMPLEMENTATION_AUDIT.md` (3), the older body of this report (13) | — | retained as history (the report's convention); superseded by this section |
+| `tsconfig.tsbuildinfo` | 1 | a tracked build artefact listing the deleted files; regenerated by `tsc`, restored unchanged here |
+
+Environment variables `UQLOAD_API_KEY` / `UQLOAD_ADULT_CONTENT_APPROVED` are referenced nowhere in runtime code or `.env.example`. Historical Uqload rows are never read, relabelled or deleted by anything in this change; their playback depends only on the `embed_url` they already store.
+
+---
+
 
 ## 2026-10-11 — NOWPayments + Gemini provider migration
 

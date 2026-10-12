@@ -10,8 +10,8 @@ const VIDEO_ROW = {
   title: "Midnight Velvet",
   description: "A hand-picked premium scene.",
   thumbnail_url: "https://cdn.example.com/thumb.jpg",
-  playable_url: null,
-  embed_url: null,
+  playable_url: null as string | null,
+  embed_url: null as string | null,
   duration_seconds: 512,
   quality: "4K",
   view_count: 12_480,
@@ -76,6 +76,54 @@ describe("/video/[slug] watch page", () => {
     const html = await renderPage();
     expect(html).toContain(">Like<");
     expect(html).toContain(">Share<");
+  });
+});
+
+describe("/video/[slug] player", () => {
+  const original = { embed_url: VIDEO_ROW.embed_url, playable_url: VIDEO_ROW.playable_url };
+  afterEach(() => {
+    VIDEO_ROW.embed_url = original.embed_url;
+    VIDEO_ROW.playable_url = original.playable_url;
+  });
+
+  it("plays a UFOLOAD video in an iframe pointing at its stable embed URL", async () => {
+    VIDEO_ROW.embed_url = "https://ufoload.com/e/abcDEF12345";
+    const html = await renderPage();
+
+    const iframe = html.match(/<iframe[^>]*>/)?.[0] ?? "";
+    expect(iframe).toContain('src="https://ufoload.com/e/abcDEF12345"');
+    expect(iframe).toContain('title="Midnight Velvet"');
+    expect(iframe).toContain('loading="lazy"');
+    expect(iframe).toMatch(/allowfullscreen/i);
+    expect(iframe).toContain("autoplay");
+    // The embed is what plays: no <video> element, no processing overlay.
+    expect(html).not.toContain("<video");
+    expect(html).not.toContain("Video processing");
+    expect(html).not.toMatch(/uqload/i);
+    // Structured data points at the same stable URL.
+    expect(html).toContain('"embedUrl":"https://ufoload.com/e/abcDEF12345"');
+  });
+
+  it("never carries an expiring signed URL: the iframe is the only player source", async () => {
+    VIDEO_ROW.embed_url = "https://ufoload.com/e/abcDEF12345";
+    VIDEO_ROW.playable_url = null;
+    const html = await renderPage();
+    expect(html).not.toMatch(/sig=|master\.m3u8|\.mp4/);
+  });
+
+  it("keeps playing a historical Uqload video from its stored embed URL", async () => {
+    VIDEO_ROW.embed_url = "https://uqload.vc/embed-u9150wqzvhxj.html";
+    const html = await renderPage();
+    expect(html).toContain('src="https://uqload.vc/embed-u9150wqzvhxj.html"');
+    expect(html).not.toContain("Video processing");
+  });
+
+  it("falls back to the processing overlay only when there is nothing to play", async () => {
+    VIDEO_ROW.embed_url = null;
+    VIDEO_ROW.playable_url = null;
+    const html = await renderPage();
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain("Video processing");
   });
 });
 

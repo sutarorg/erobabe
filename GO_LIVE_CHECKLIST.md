@@ -21,19 +21,26 @@ This checklist lists all external decisions, approvals, and configurations that 
 
 ---
 
-## 2. Video Hosting — CRITICAL BLOCKER
+## 2. Video Hosting (UFOLOAD) — CRITICAL BLOCKER
 
-- [ ] **Uqload written approval**: Uqload TOS (https://uqload.vc/tos) prohibits pornography, nudity, sexual content. Obtain written confirmation that lawful adult content, commercial use, API upload, and intended playback (embed or direct) are permitted. Keep email/letter on file.
-  - If approval obtained: set `UQLOAD_API_KEY`, `UQLOAD_ADULT_CONTENT_APPROVED=true`, `VIDEO_PROVIDER=uqload`, test upload, document approval date and contact.
-  - If NOT obtained: **Production video hosting is BLOCKED**. Do not enable Uqload for adult content.
-- [ ] **Replacement provider approved**: If Uqload not approved, owner must approve replacement (Bunny.net Stream, Cloudflare Stream, Mux, or self-hosted S3 + transcoding). Verify replacement provider's Acceptable Use Policy explicitly permits adult content and commercial use.
-- [ ] **Provider adapter implemented**: `lib/video/provider.ts` must have working adapter for chosen provider (Uqload adapter exists but disabled, internal adapter is fallback).
-- [ ] **Large-file upload architecture**: Verify uploads not routed through Vercel Function body limit. Use provider direct upload server or dedicated worker on host that permits adult content.
-- [ ] **Thumbnail stability**: Thumbnails must be stable URLs, not short-lived signed URLs, so Googlebot can fetch for video sitemap.
-- [ ] **Playback verification**: Test actual playback on desktop and mobile, handle expired URLs, blocked embeds, provider outages gracefully.
-- [ ] **Sitemap inclusion**: Only published, cleared, approved, public videos in sitemap and video-sitemap. Verify unpublished videos disappear.
+Provider: **UFOLOAD** (https://ufoload.com), the only supported upload/hosting provider. Details, owner click-path, the live smoke test and the migration test are in `DEPLOYMENT.md` section D.
 
----
+- [ ] **UFOLOAD written approval** — **BLOCKER, not obtained**. UFOLOAD's Terms of Service (https://ufoload.com/tos) are a *draft* ("DRAFT v0.1 — 2026-10-11 — Draft for legal review") that neither permits nor prohibits lawful adult content, and UFOLOAD may suspend an account with or without notice (§15.2). Obtain **written** confirmation (contact@ufoload.com) that lawful adult content, commercial use, API/direct upload, URL import and embedded playback on your own adult site are permitted, plus their complaint/takedown process. Keep the reply on file; record the date and the person here: ____________________
+  - If approval obtained: set `UFOLOAD_API_KEY`, `VIDEO_PROVIDER=ufoload`, run the live smoke test (D.9) with a non-adult sample, **then** set `UFOLOAD_ADULT_CONTENT_APPROVED=true`.
+  - If NOT obtained: **Production video hosting is BLOCKED.** Keep `UFOLOAD_ADULT_CONTENT_APPROVED=false` (the default): every upload route answers 503 and sends nothing to UFOLOAD. **Do not run real adult uploads and do not mark the provider approved.**
+- [ ] **Plan chosen and paid** — the Free plan removes files with no views after 30 days and always shows player ads; the app's 2 GB limit is below every plan's per-file ceiling (Free 5 GB / Pro 10 GB / Max 25 GB). Re-read https://ufoload.com/pricing before buying.
+- [ ] **API key stored server-side only** — `UFOLOAD_API_KEY` is a hosting secret, never `NEXT_PUBLIC_*`, never committed; search the built client bundle and the browser Network tab for `ufo_` (must find nothing).
+- [ ] **Migration `00000000000006_ufoload_video_provider.sql` tested, then applied** — verify on a copy of production first (D.10): row counts identical, Uqload rows untouched, constraint allows `ufoload`.
+- [ ] **Browser → upload-node CORS verified** for the production origin (D.6). The OpenAPI says browser uploads are supported; this could not be verified for third-party origins without a live grant.
+- [ ] **Embed domain lock configured** at UFOLOAD (allowed domains = your production domain(s)); an empty list lets any site embed your videos.
+- [ ] **Background reconciliation scheduled** — `CRON_SECRET` set and a scheduler calling `POST /api/videos/reconcile` every ~5 minutes (D.7). The repository does **not** ship a scheduler; without one, unfinished videos only advance while an admin has the upload page open or opens it.
+- [ ] **Live smoke test performed** (D.9, all 14 items) — **NOT YET DONE.** The code, mocked contract tests, route tests, the migration check on a real Postgres engine and the anonymous-access e2e checks passed; **no real upload, encode or playback has been performed against UFOLOAD.** Mocked tests are not evidence that one works.
+- [ ] **A real authorised test video uploads, processes, publishes and plays** from `/video/[slug]` in a private browser window; a URL import completes the same way.
+- [ ] **Large-file upload architecture**: uploads never pass through a serverless function — the browser sends chunks straight to UFOLOAD's node; function bodies stay a few hundred bytes. `503 direct_upload_unavailable` is surfaced with no fallback. If you deploy somewhere with a short function timeout, `complete` and `reconcile` need up to 60 s (`maxDuration`).
+- [ ] **Thumbnail stability**: thumbnails stay on Supabase (public `video-thumbnails` bucket) — stable URLs, not UFOLOAD's short-lived signed posters (never stored), so Googlebot can fetch them for the video sitemap.
+- [ ] **Playback verification**: test actual playback on desktop and mobile, blocked embeds (domain lock), provider outages. Historical Uqload videos still play from their stored embed URL.
+- [ ] **Sitemap inclusion**: Only published, cleared, approved, public videos in sitemap and video-sitemap. Videos stay `processing`/private (and out of the sitemap) until UFOLOAD reports `ready`.
+- [ ] **UFOLOAD's own watch pages are not indexed** by search engines (their docs say so); the player hides embedded videos from search engines only if you enable that option — decide whether you want your own `/video/[slug]` pages to be the indexed ones.
 
 ## 3. Hosting — CRITICAL BLOCKER
 
@@ -164,7 +171,8 @@ This checklist lists all external decisions, approvals, and configurations that 
 
 ## 11. Remaining Launch Blockers (Documented)
 
-- [ ] **Uqload adult content approval**: BLOCKED — TOS prohibits pornography/nudity. Need written approval or replacement provider. See DEPLOYMENT.md D.
+- [ ] **UFOLOAD adult content approval**: BLOCKED — UFOLOAD's draft Terms do not address adult content. Need UFOLOAD's written approval before real adult uploads or `UFOLOAD_ADULT_CONTENT_APPROVED=true`. See DEPLOYMENT.md D.1.
+- [ ] **UFOLOAD live verification**: NOT PERFORMED — no real upload/processing/playback has been tested, CORS from your origin is unverified, and no scheduler is configured in the repository. See DEPLOYMENT.md D.7 and D.9.
 - [ ] **Hosting approval**: BLOCKED if using Vercel Hobby or host that prohibits adult/commercial. Need approval and documentation.
 - [ ] **Legal identity**: BLOCKED — owner must provide real business details.
 - [ ] **Age assurance**: Evaluate jurisdiction-specific requirements, implement verification integration if required.
@@ -196,7 +204,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 18. [ ] Production build succeeds.
 19. [ ] DEPLOYMENT.md gives complete click-by-click setup.
 20. [ ] GO_LIVE_CHECKLIST.md accurately lists remaining external decisions (this file).
-21. [ ] No prohibited provider usage enabled (Uqload without approval, Vercel Hobby commercial).
+21. [ ] No prohibited provider usage enabled (UFOLOAD without written approval, Vercel Hobby commercial).
 22. [ ] No secrets committed.
 23. [ ] No feature described as operational when only simulated.
 24. [ ] Final implementation report separates verified results from unverified assumptions and remaining blockers.

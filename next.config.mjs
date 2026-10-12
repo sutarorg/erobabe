@@ -14,6 +14,7 @@ const nextConfig = {
       { protocol: 'https', hostname: 'i.postimg.cc' },
       { protocol: 'https', hostname: 'images.pexels.com' },
       { protocol: 'https', hostname: '**.supabase.co' },
+      // Legacy: thumbnails of historical Uqload videos. UFOLOAD posters are signed and expiring, so none is stored or whitelisted.
       { protocol: 'https', hostname: '**.uqload.vc' },
       { protocol: 'https', hostname: '**.resend.com' },
     ],

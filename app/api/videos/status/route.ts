@@ -1,87 +1,92 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { NextRequest } from "next/server";
 import { getVideoProvider } from "@/lib/video/provider";
-import { removeTransitObject } from "@/lib/video/storage";
+import type { VideoProvider } from "@/lib/video/ufoload";
+import { RouteError } from "@/lib/video/errors";
+import { requireActiveAdmin } from "@/lib/video/publishing";
+import { loadJob, reconcileJob, viewJob, type JobStatusView, type UploadJobRow } from "@/lib/video/processing";
+import { errorResponse, noStoreJson } from "@/lib/video/route-helpers";
 
+export const dynamic = "force-dynamic";
+export const maxDuration = 30;
+
+const MAX_BATCH = 20;
+
+/**
+ * Processing status for the admin page.
+ *
+ *   ?jobIds=a,b,c   → `{ jobs: JobStatusView[] }` (up to 20) — what the upload page polls
+ *   ?jobId= / ?videoId=  → `{ video, job, status }`
+ *
+ * Each call refreshes the jobs it returns from UFOLOAD (`reconcileJob`), which
+ * is how an upload or import moves from `processing` to a published video
+ * without anything waiting inside a request. It does not wait for UFOLOAD: a
+ * file that is still encoding is simply reported as `processing`.
+ */
 export async function GET(req: NextRequest) {
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const { service } = await requireActiveAdmin();
+    const params = new URL(req.url).searchParams;
 
-    const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
-    if (!profile || profile.role !== "admin") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-
-    const url = new URL(req.url);
-    const videoId = url.searchParams.get("videoId");
-    const jobId = url.searchParams.get("jobId");
-    if (!videoId && !jobId) return NextResponse.json({ error: "videoId or jobId required" }, { status: 400 });
-
-    const service = createServiceClient();
-    let video: any = null;
-    let job: any = null;
-
-    if (videoId) {
-      const { data } = await service.from("videos").select("*").eq("id", videoId).single();
-      video = data;
+    // Without a usable provider configuration we can still report what is stored.
+    let provider: VideoProvider | null = null;
+    let providerProblem = "";
+    try {
+      provider = getVideoProvider();
+      provider.assertEnabled();
+    } catch (error) {
+      provider = null;
+      const known = error as { details?: string; message?: string };
+      providerProblem = known.details || known.message || "the video provider is not configured";
     }
-    if (jobId) {
-      const { data } = await service.from("upload_jobs").select("*").eq("id", jobId).single();
-      job = data;
-      if (!video && job?.video_id) {
-        const { data: relatedVideo } = await service.from("videos").select("*").eq("id", job.video_id).single();
-        video = relatedVideo;
+    const refresh = (job: UploadJobRow): Promise<JobStatusView> =>
+      provider ? reconcileJob({ service, provider, job }) : viewJob(service, job, `Status cannot be refreshed: ${providerProblem}`);
+
+    const jobIds = (params.get("jobIds") || "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+
+    if (jobIds.length) {
+      if (jobIds.length > MAX_BATCH) throw new RouteError(400, `Ask for at most ${MAX_BATCH} jobs at a time`);
+      const { data } = await service.from("upload_jobs").select("*").in("id", jobIds);
+      const rows = (data as UploadJobRow[] | null) || [];
+      const jobs: JobStatusView[] = [];
+      for (const id of jobIds) {
+        const job = rows.find((row) => row.id === id);
+        if (job) jobs.push(await refresh(job));
       }
+      return noStoreJson({ jobs });
     }
 
-    if (!video) return NextResponse.json({ error: "Video not found" }, { status: 404 });
+    const videoId = params.get("videoId");
+    const jobId = params.get("jobId");
+    if (!videoId && !jobId) throw new RouteError(400, "videoId, jobId or jobIds required");
 
-    if (video.provider_file_id && video.provider === "uqload") {
-      try {
-        const provider = getVideoProvider("uqload");
-        if (provider.isEnabled()) {
-          const providerInfo = await provider.getFileInfo(video.provider_file_id);
-          if (providerInfo.canPlay) {
-            const updates: Record<string, unknown> = {
-              thumbnail_url: video.thumbnail_url || providerInfo.thumbnailUrl || null,
-              duration_seconds: providerInfo.durationSeconds || video.duration_seconds || null,
-              playable_url: provider.getPlayableUrl(video.provider_file_id),
-              embed_url: provider.getEmbedUrl(video.provider_file_id),
-            };
-            if (video.status !== "published") {
-              updates.status = "published";
-              updates.visibility = "public";
-              updates.rights_status = "cleared";
-              updates.moderation_status = "approved";
-              updates.published_at = video.published_at || new Date().toISOString();
-            }
-            const { data: updatedVideo } = await service
-              .from("videos")
-              .update(updates)
-              .eq("id", video.id)
-              .select("*")
-              .single();
-            video = updatedVideo || video;
-            if (job) {
-              await service.from("upload_jobs").update({ status: "completed" }).eq("id", job.id);
-              // The provider has the file now — drop the transit copy.
-              if (job.storage_path) {
-                await removeTransitObject(service, job.storage_path);
-                await service.from("upload_jobs").update({ storage_path: null }).eq("id", job.id);
-              }
-            }
-          }
-          return NextResponse.json({ video, job, providerInfo });
-        }
-      } catch (error) {
-        console.warn("provider status check failed", error);
-      }
+    let job: UploadJobRow | null = jobId ? await loadJob(service, jobId) : null;
+    if (!job && videoId) {
+      const { data } = await service
+        .from("upload_jobs")
+        .select("*")
+        .eq("video_id", videoId)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      job = (Array.isArray(data) ? (data[0] as UploadJobRow | undefined) : undefined) ?? null;
     }
 
-    return NextResponse.json({ video, job });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    const lookupId = videoId || job?.video_id || null;
+    if (!job && !lookupId) throw new RouteError(404, "Video not found");
+
+    const status = job ? await refresh(job) : null;
+
+    let video = null;
+    if (lookupId) {
+      const { data } = await service.from("videos").select("*").eq("id", lookupId).maybeSingle();
+      video = data ?? null;
+    }
+    if (!video && !job) throw new RouteError(404, "Video not found");
+
+    return noStoreJson({ video, job: job ? await loadJob(service, job.id) : null, status });
+  } catch (error) {
+    return errorResponse(error, "Could not read the video status");
   }
 }

@@ -1,6 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { inspectNowpaymentsSetup } from "@/lib/nowpayments/client";
 import { getSiteUrl } from "@/lib/site";
+import { inspectVideoProvider } from "@/lib/video/health";
 import NowpaymentsCheck from "./NowpaymentsCheck";
 
 export default async function SystemHealthAdmin() {
@@ -40,11 +41,13 @@ export default async function SystemHealthAdmin() {
     }
   }
 
+  const videoProvider = inspectVideoProvider();
+
   const checks = [
     { name: "Database", status: dbStatus, latency: dbLatency, desc: "Supabase PostgreSQL" },
     { name: "Auth", status: "Operational", latency: "—", desc: "Supabase Auth" },
     { name: "NOWPayments API", status: payStatus, latency: "—", desc: payDetail },
-    { name: "Video Provider", status: process.env.VIDEO_PROVIDER ? `${process.env.VIDEO_PROVIDER} ${process.env.UQLOAD_ADULT_CONTENT_APPROVED === "true" ? "(approved)" : "(blocked — see DEPLOYMENT.md)"}` : "Not configured", latency: "—", desc: "Uqload or replacement" },
+    { name: "Video Provider", status: videoProvider.status, latency: "—", desc: videoProvider.detail },
     { name: "Resend", status: process.env.RESEND_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "Transactional email" },
     { name: "Gemini", status: process.env.GEMINI_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "AI metadata assistant" },
   ];

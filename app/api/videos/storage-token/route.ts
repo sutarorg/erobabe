@@ -5,8 +5,8 @@ import { createThumbnailUploadTarget } from "@/lib/video/storage";
 /**
  * Issues a short-lived signed upload URL for a thumbnail image.
  *
- * Video files must not be posted here — they go directly to Uqload via
- * `/api/videos/uqload-session`. Thumbnails are small enough to live in
+ * Video files must not be posted here — they go directly to UFOLOAD via
+ * `/api/videos/ufoload-session`. Thumbnails are small enough to live in
  * Supabase Storage.
  */
 export async function POST(req: NextRequest) {
@@ -27,8 +27,8 @@ export async function POST(req: NextRequest) {
     if (body.kind && body.kind !== "thumbnail") {
       return NextResponse.json(
         {
-          error: "Video files upload directly to Uqload",
-          details: "Request /api/videos/uqload-session and POST the file to the returned serverUrl. This route only issues thumbnail upload URLs.",
+          error: "Video files upload directly to UFOLOAD",
+          details: "Request /api/videos/ufoload-session and send the file to the returned uploadUrl in chunks. This route only issues thumbnail upload URLs.",
         },
         { status: 410 }
       );

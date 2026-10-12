@@ -143,9 +143,9 @@ describe("measured transfer speed", () => {
   });
 
   it("omits speed from the row when nothing was measured", () => {
-    expect(formatUploadStatus(40, null)).toBe("Uploading to Uqload — 40%");
-    expect(formatUploadStatus(40, null)).not.toMatch(/measuring|estimated|MB\/s/);
-    expect(formatUploadStatus(12, 1.5 * 1024 * 1024)).toBe(`Uploading to Uqload — 12% · ${formatLiveBytesPerSecond(1.5 * 1024 * 1024)}`);
+    expect(formatUploadStatus(40, null)).toBe("Uploading to UFOLOAD — 40%");
+    expect(formatUploadStatus(40, null)).not.toMatch(/measuring|estimated|MB\/s|uqload/i);
+    expect(formatUploadStatus(12, 1.5 * 1024 * 1024)).toBe(`Uploading to UFOLOAD — 12% · ${formatLiveBytesPerSecond(1.5 * 1024 * 1024)}`);
     expect(formatLiveBytesPerSecond(1.5 * 1024 * 1024)).toBe("1.5 MB/s");
   });
 });

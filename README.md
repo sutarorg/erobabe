@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, video hosting abstraction, Resend email, Gemini AI, and SEO optimization.
+Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, UFOLOAD video hosting, Resend email, Gemini AI, and SEO optimization.
 
 ## Quick Start
 
@@ -20,6 +20,18 @@ Open http://localhost:3000
 - `GO_LIVE_CHECKLIST.md` — operational requirements and blockers
 - `IMPLEMENTATION_REPORT.md` — what changed, tests, blockers
 - `.env.example` — env vars reference (no secrets)
+
+## Video hosting (UFOLOAD)
+
+[UFOLOAD](https://ufoload.com) is the only upload and hosting provider (`VIDEO_PROVIDER=ufoload`; any other value fails closed with a configuration error). Historical Uqload videos are untouched and keep playing from their stored embed URL; nothing new is ever sent to Uqload.
+
+- **Local files** go from the admin's browser straight to UFOLOAD's upload node in resumable chunks (2 GB limit). The server only starts the session (with the server-only `UFOLOAD_API_KEY`) and completes it — no video byte passes through this app.
+- **Links** are imported by UFOLOAD itself, asynchronously (up to 10 at a time).
+- A video stays **private while UFOLOAD processes it** and is published only when UFOLOAD reports it `ready`. The stable embed URL (`https://ufoload.com/e/{public_id}`) is what the public page plays.
+- Finishing unattended work needs something to call `POST /api/videos/reconcile` — see `DEPLOYMENT.md` → “Background reconciliation”.
+- Uploads stay **blocked until `UFOLOAD_ADULT_CONTENT_APPROVED=true`**, which must only be set after UFOLOAD confirms in writing that your adult-content use is permitted.
+
+Setup, the live smoke test and the migration test procedure: `DEPLOYMENT.md` section D.
 
 ## Stack
 
@@ -44,14 +56,16 @@ SEO: `/sitemap.xml`, `/video-sitemap.xml`, `/robots.txt`
 
 ```bash
 npm run type-check
-npm run test
+npm run test          # unit + contract tests (mocked UFOLOAD — see below)
 npm run build
-npx playwright test
+npm run test:e2e      # Playwright (needs browsers: npx playwright install)
 ```
+
+The UFOLOAD tests run against a mock written from UFOLOAD's OpenAPI document: they prove the code follows the documented contract, **not** that a real upload works. The only test that talks to the real service is `tests/live/ufoload.live.test.ts`, which is skipped unless you switch it on (instructions in the file and in `DEPLOYMENT.md`). The Supabase migration can be checked against a real Postgres engine with `npm install --no-save @electric-sql/pglite && node scripts/verify-ufoload-migration.mjs`.
 
 ## Production Blockers
 
-See `GO_LIVE_CHECKLIST.md` — Uqload TOS prohibits adult content without written approval, hosting must permit adult/commercial, legal identity required, etc. Do not launch until blockers resolved.
+See `GO_LIVE_CHECKLIST.md` — UFOLOAD's written approval for adult content is required (its Terms of Service are a draft that does not address it), hosting must permit adult/commercial, legal identity required, etc. Do not launch until blockers resolved.
 
 ## Brand
 

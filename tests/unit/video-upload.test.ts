@@ -12,7 +12,8 @@ import {
   splitEmbedEntries,
   splitUrlEntries,
 } from "@/lib/video/entries";
-import { ApiError, describeNonJsonResponse, readApiResponse } from "@/src/utils/api";
+import { ApiError, deleteJson, describeNonJsonResponse, getJson, postJson, readApiResponse } from "@/src/utils/api";
+import { vi, afterEach } from "vitest";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -50,6 +51,53 @@ describe("api response parsing", () => {
   it("describes gateway failures without leaking raw markup", () => {
     expect(describeNonJsonResponse(response(504, "gateway"), "")).toMatch(/timed out/i);
     expect(describeNonJsonResponse(response(500, ""), "")).toMatch(/500/);
+  });
+});
+
+describe("api helpers for the UFOLOAD flow", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("carries the machine-readable code, retry hint and Retry-After of a server error", async () => {
+    const body = JSON.stringify({ error: "UFOLOAD runs at most 10 URL imports at a time.", code: "import_slots_full", retryable: true, retryAfterSeconds: 30, details: "x" });
+    const error = (await readApiResponse(response(429, body, "application/json")).catch((e) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 429, code: "import_slots_full", retryable: true, retryAfterSeconds: 30, details: "x" });
+    expect(error.message).toBe("UFOLOAD runs at most 10 URL imports at a time.");
+  });
+
+  it("leaves the extras undefined when the server sends none", async () => {
+    const error = (await readApiResponse(response(400, JSON.stringify({ error: "Choose a category" }), "application/json")).catch((e) => e)) as ApiError;
+    expect(error.code).toBeUndefined();
+    expect(error.retryable).toBeUndefined();
+    expect(error.retryAfterSeconds).toBeUndefined();
+  });
+
+  it("marks a request that never reached the server as retryable", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("Failed to fetch"))));
+    for (const call of [() => postJson("/x", {}), () => getJson("/x"), () => deleteJson("/x")]) {
+      const error = (await call().catch((e) => e)) as ApiError;
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ status: 0, retryable: true });
+    }
+  });
+
+  it("GETs and DELETEs with the right method, uncached", async () => {
+    const calls: Array<{ url: string; init: any }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: any) => {
+        calls.push({ url, init });
+        return response(200, JSON.stringify({ ok: true }), "application/json");
+      })
+    );
+    expect(await getJson("/a?b=1")).toEqual({ ok: true });
+    expect(await deleteJson("/c")).toEqual({ ok: true });
+    expect(calls.map((call) => [call.init.method, call.url, call.init.cache])).toEqual([
+      ["GET", "/a?b=1", "no-store"],
+      ["DELETE", "/c", "no-store"],
+    ]);
   });
 });
 

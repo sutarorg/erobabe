@@ -1,11 +1,11 @@
 /**
  * Progress helpers for admin uploads.
  *
- * A direct POST to Uqload must stay a CORS "simple request" (see
- * `uploadFile.uploadFormDirect`), so the browser cannot observe bytes in
- * flight. The admin page must not invent a percentage, a speed, or a remaining
- * time from `estimateTransferFraction` or a remembered link rate — that curve
- * races to ~85% and then crawls, which is not a measurement.
+ * Video uploads to UFOLOAD are chunked XHR requests, so the browser observes
+ * real bytes (`src/utils/ufoloadUpload.ts`). The admin page still must not
+ * invent a percentage, a speed, or a remaining time from
+ * `estimateTransferFraction` or a remembered link rate — that curve races to
+ * ~85% and then crawls, which is not a measurement.
  *
  * `windowedBytesPerSecond` is the only speed the UI may show, and only from
  * samples of bytes that were actually sent. With no samples it returns null
@@ -177,6 +177,6 @@ export function formatLiveBytesPerSecond(rate: number): string {
 /** Row copy while bytes are moving. No countdown. Speed is omitted when it was not measured. */
 export function formatUploadStatus(percent: number, bytesPerSecond: number | null): string {
   const pct = Math.max(0, Math.min(100, Math.round(Number.isFinite(percent) ? percent : 0)));
-  if (bytesPerSecond === null || !Number.isFinite(bytesPerSecond)) return `Uploading to Uqload — ${pct}%`;
-  return `Uploading to Uqload — ${pct}% · ${formatLiveBytesPerSecond(bytesPerSecond)}`;
+  if (bytesPerSecond === null || !Number.isFinite(bytesPerSecond)) return `Uploading to UFOLOAD — ${pct}%`;
+  return `Uploading to UFOLOAD — ${pct}% · ${formatLiveBytesPerSecond(bytesPerSecond)}`;
 }

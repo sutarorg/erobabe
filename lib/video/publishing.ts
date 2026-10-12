@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { fallbackSuggestion, suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
+import { isPublicHostname } from "@/lib/video/url-safety";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -32,6 +33,9 @@ export async function requireActiveAdmin() {
 export function httpErrorStatus(message: string): number {
   if (message === "Unauthorized") return 401;
   if (message.startsWith("Forbidden")) return 403;
+  // Mistakes in what the admin sent — not server faults.
+  if (message.startsWith("Choose a valid category")) return 400;
+  if (/^That thumbnail path is not a valid upload/.test(message)) return 400;
   return 500;
 }
 
@@ -184,9 +188,10 @@ async function attachTags(service: ServiceClient, videoId: string, tags: string[
 }
 
 /**
- * Creates a private processing record after metadata is ready. It becomes
- * public only after an upload/embed operation succeeds and the admin has
- * clicked Publish in the UI.
+ * Creates a private `processing` record after metadata is ready. For UFOLOAD
+ * uploads and imports it becomes public only when UFOLOAD reports the file
+ * `ready` (see `lib/video/processing.ts`); iframe embeds publish immediately
+ * because there is nothing to process.
  *
  * `prepared` is metadata the admin page already fetched (via the existing
  * suggest route) while the file bytes were in flight. Using it skips a second
@@ -205,7 +210,7 @@ export async function createGeneratedVideo({
   userId: string;
   sourceName: string;
   categoryId: string;
-  provider: "uqload" | "embed";
+  provider: "ufoload" | "embed";
   thumbnailUrl?: string | null;
   /** Already generated while the bytes were in flight — skips a second Gemini call. */
   prepared?: GeneratedMetadata | null;
@@ -253,6 +258,38 @@ export async function createGeneratedVideo({
   };
 }
 
+/** Facts UFOLOAD reported about a finished file, stored beside the embed URL. */
+export type ProviderVideoDetails = {
+  durationSeconds?: number | null;
+  resolution?: string | null;
+  quality?: "HD" | "4K" | null;
+};
+
+type PublishArgs = {
+  service: ServiceClient;
+  videoId: string;
+  /** The admin who asked for the video; `null` once that account has been removed. */
+  userId: string | null;
+  providerFileId?: string | null;
+  playableUrl?: string | null;
+  embedUrl?: string | null;
+  thumbnailUrl?: string | null;
+  details?: ProviderVideoDetails;
+};
+
+export type PublishedVideo = { id: string; slug: string; title: string; status: string; thumbnail_url: string | null };
+
+/**
+ * Makes a video public.
+ *
+ * With `expectStatus` the call is a compare-and-set: the row is only updated
+ * while it still has that status, so two reconcilers racing on the same video
+ * (a cron run and an admin poll) publish it once. It then returns `null` when
+ * the row was no longer in the expected state. Without it the update is
+ * unconditional and a missing row is an error.
+ */
+export async function publishVideo(args: PublishArgs & { expectStatus: string }): Promise<PublishedVideo | null>;
+export async function publishVideo(args: PublishArgs & { expectStatus?: undefined }): Promise<PublishedVideo>;
 export async function publishVideo({
   service,
   videoId,
@@ -261,16 +298,10 @@ export async function publishVideo({
   playableUrl,
   embedUrl,
   thumbnailUrl,
-}: {
-  service: ServiceClient;
-  videoId: string;
-  userId: string;
-  providerFileId?: string | null;
-  playableUrl?: string | null;
-  embedUrl?: string | null;
-  thumbnailUrl?: string | null;
-}) {
-  const update: Record<string, string | null> = {
+  expectStatus,
+  details,
+}: PublishArgs & { expectStatus?: string }): Promise<PublishedVideo | null> {
+  const update: Record<string, string | number | null> = {
     status: "published",
     visibility: "public",
     rights_status: "cleared",
@@ -282,58 +313,96 @@ export async function publishVideo({
   if (playableUrl !== undefined) update.playable_url = playableUrl;
   if (embedUrl !== undefined) update.embed_url = embedUrl;
   if (thumbnailUrl !== undefined) update.thumbnail_url = thumbnailUrl;
+  if (details?.durationSeconds != null) update.duration_seconds = details.durationSeconds;
+  if (details?.resolution) update.resolution = details.resolution;
+  if (details?.quality) update.quality = details.quality;
 
-  const { data: video, error } = await service
-    .from("videos")
-    .update(update)
-    .eq("id", videoId)
-    .select("id, slug, title, status, thumbnail_url")
-    .single();
+  let query = service.from("videos").update(update).eq("id", videoId);
+  if (expectStatus) query = query.eq("status", expectStatus);
+  const { data: video, error } = await query.select("id, slug, title, status, thumbnail_url").maybeSingle();
   if (error) throw error;
-  return video;
+  if (!video && !expectStatus) throw new Error("Unable to publish the video: its record no longer exists");
+  return (video as PublishedVideo | null) ?? null;
 }
 
+/**
+ * Records the work UFOLOAD is doing for one video. A job can exist before its
+ * video does (a direct upload has a job from the moment the grant is issued,
+ * and a video only once the file has been completed), so `videoId` is optional.
+ *
+ * The provider identifiers are stored in separate columns on purpose:
+ *  - `provider_upload_id`       — a direct-upload session
+ *  - `provider_import_task_id`  — a URL-import task
+ *  - `provider_file_id`         — the file UFOLOAD actually hosts
+ * An import task id must never be written to `provider_file_id`.
+ */
 export async function createUploadJob({
   service,
   videoId,
   userId,
   fileName,
   fileSize,
-  provider = "uqload",
+  provider = "ufoload",
+  status = "uploading",
   storagePath,
+  providerUploadId,
+  providerImportTaskId,
+  providerStatus,
 }: {
   service: ServiceClient;
-  videoId: string;
+  videoId?: string | null;
   userId: string;
   fileName: string;
   fileSize?: number;
   provider?: string;
-  /** Transit object in the private video-incoming bucket, when there is one. */
+  status?: "pending" | "uploading" | "processing";
+  /** Transit object in the legacy private video-incoming bucket, when there is one. */
   storagePath?: string | null;
+  providerUploadId?: string | null;
+  providerImportTaskId?: string | null;
+  providerStatus?: string | null;
 }) {
   const insert: Record<string, unknown> = {
-    video_id: videoId,
+    video_id: videoId ?? null,
     file_name: fileName,
     file_size: fileSize || null,
     provider,
-    status: "uploading",
+    status,
     progress: 0,
     created_by: userId,
   };
-  // The column is added by migration 00000000000004. Omit it rather than fail
-  // the insert on a database that has not been migrated yet.
+  // Columns added by migrations 00000000000004 / 00000000000006. They are only
+  // sent when set, so a database that has not been migrated yet fails loudly
+  // (on the column) only for the flows that really need them.
   if (storagePath) insert.storage_path = storagePath;
+  if (providerUploadId) insert.provider_upload_id = providerUploadId;
+  if (providerImportTaskId) insert.provider_import_task_id = providerImportTaskId;
+  if (providerStatus) insert.provider_status = providerStatus;
 
   const { data: job, error } = await service.from("upload_jobs").insert(insert).select().single();
   if (error) throw error;
   return job;
 }
 
-export async function completeUploadJob(service: ServiceClient, jobId: string, providerFileId: string) {
-  const { error } = await service
-    .from("upload_jobs")
-    .update({ provider_file_id: providerFileId, status: "processing", progress: 100 })
-    .eq("id", jobId);
+/**
+ * Marks a job as handed to the provider's processing pipeline. This is not
+ * "finished": the video stays private until the provider reports `ready`.
+ */
+export async function completeUploadJob(
+  service: ServiceClient,
+  jobId: string,
+  providerFileId: string,
+  extra: { videoId?: string; progress?: number; providerStatus?: string | null } = {}
+) {
+  const update: Record<string, unknown> = {
+    provider_file_id: providerFileId,
+    status: "processing",
+    progress: extra.progress ?? 0,
+    error_message: null,
+  };
+  if (extra.videoId) update.video_id = extra.videoId;
+  if (extra.providerStatus !== undefined) update.provider_status = extra.providerStatus;
+  const { error } = await service.from("upload_jobs").update(update).eq("id", jobId);
   if (error) throw error;
 }
 
@@ -342,16 +411,20 @@ export async function failUpload({
   videoId,
   jobId,
   message,
+  status = "failed",
 }: {
   service: ServiceClient;
-  videoId: string;
+  videoId?: string | null;
   jobId?: string;
   message: string;
+  status?: "failed" | "cancelled";
 }) {
   if (jobId) {
-    await service.from("upload_jobs").update({ status: "failed", error_message: message }).eq("id", jobId);
+    await service.from("upload_jobs").update({ status, error_message: message }).eq("id", jobId);
   }
-  await service.from("videos").update({ status: "draft", visibility: "private" }).eq("id", videoId);
+  if (videoId) {
+    await service.from("videos").update({ status: "draft", visibility: "private" }).eq("id", videoId);
+  }
 }
 
 export function assertPublicHttpUrl(value: string, label = "URL"): string {
@@ -366,27 +439,22 @@ export function assertPublicHttpUrl(value: string, label = "URL"): string {
   }
   if (url.username || url.password) throw new Error(`${label} cannot include credentials`);
 
-  const host = url.hostname.toLowerCase();
-  const blockedHost =
-    host === "localhost" ||
-    host.endsWith(".localhost") ||
-    host.endsWith(".local") ||
-    host === "0.0.0.0" ||
-    host === "::1" ||
-    host.startsWith("127.") ||
-    host.startsWith("10.") ||
-    host.startsWith("192.168.") ||
-    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
-    host.startsWith("169.254.") ||
-    host.startsWith("fc") ||
-    host.startsWith("fd");
-  if (blockedHost) throw new Error(`${label} must point to a public host`);
+  // Literal private / loopback / link-local / metadata addresses (IPv4 in any
+  // notation `URL` canonicalises, and IPv6), `localhost`, `.local` and
+  // single-label hosts are refused. The download itself happens on UFOLOAD's
+  // servers, which apply their own SSRF rules too.
+  if (!isPublicHostname(url.hostname)) throw new Error(`${label} must point to a public host`);
   return url.toString();
 }
 
 export function sourceNameFromUrl(value: string): string {
   const url = new URL(value);
-  const name = decodeURIComponent(url.pathname.split("/").pop() || "remote-video");
+  let name = url.pathname.split("/").pop() || "remote-video";
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    // A malformed %-escape must not reject an otherwise valid link — keep the raw segment.
+  }
   return name.slice(0, 240) || "remote-video";
 }
 

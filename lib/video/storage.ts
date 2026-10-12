@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import type { ServiceClient } from "@/lib/video/publishing";
+import { MAX_THUMBNAIL_SIZE, MAX_VIDEO_SIZE } from "@/lib/video/limits";
 
 /**
  * Thumbnail storage only.
@@ -7,8 +8,9 @@ import type { ServiceClient } from "@/lib/video/publishing";
  * Video bytes never land in Supabase. Creating a `video-incoming` bucket with
  * a 2 GB file-size cap was throwing
  * `Unable to prepare storage bucket "video-incoming": The object exceeded the
- * maximum allowed size` on projects whose global limit is 50 MB. Videos now
- * POST straight to Uqload from the browser (`/api/videos/uqload-session`).
+ * maximum allowed size` on projects whose global limit is 50 MB. Videos now go
+ * straight from the browser to UFOLOAD's upload node in resumable chunks
+ * (`/api/videos/ufoload-session`).
  *
  * Thumbnails stay here — they are small enough for a signed upload URL.
  */
@@ -16,11 +18,11 @@ import type { ServiceClient } from "@/lib/video/publishing";
 export const VIDEO_INCOMING_BUCKET = "video-incoming";
 export const THUMBNAIL_BUCKET = "video-thumbnails";
 
-export const MAX_VIDEO_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
-export const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024; // 10 MB
+// The limits live in `lib/video/limits.ts` so the browser can import them too.
+export { MAX_THUMBNAIL_SIZE, MAX_VIDEO_SIZE };
 export const THUMBNAIL_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
-/** Long enough for Uqload's remote importer to fetch a queued file. */
+/** Lifetime of a signed URL for a legacy transit object (the flow itself is retired). */
 export const TRANSIT_DOWNLOAD_TTL_SECONDS = 6 * 60 * 60;
 
 const SAFE_EXTENSION = /^[a-z0-9]{1,10}$/;
@@ -123,7 +125,7 @@ export async function createVideoUploadTarget(_args: {
   fileSize: number;
   mimeType: string;
 }): Promise<UploadTarget> {
-  throw new Error("Video files upload directly to Uqload. Request /api/videos/uqload-session instead of a storage URL.");
+  throw new Error("Video files upload directly to UFOLOAD. Request /api/videos/ufoload-session instead of a storage URL.");
 }
 
 export async function createThumbnailUploadTarget({
