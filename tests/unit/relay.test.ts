@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { AddressInfo } from "node:net";
 import { signRelayToken } from "@/lib/video/relay-token";
-import { createRelay, isAllowedUploadHost, makeUsedTracker } from "../../relay/streamtape-relay.mjs";
+import { createRelay, isAllowedUploadHost, isValidRelaySecret, makeUsedTracker } from "../../relay/streamtape-relay.mjs";
 
 /**
  * Exercises the real relay HTTP server. Only the *upstream* Streamtape node is
@@ -135,6 +135,13 @@ describe("relay upload", () => {
 });
 
 describe("helpers", () => {
+  it("requires a long, non-placeholder relay secret", () => {
+    expect(isValidRelaySecret("short")).toBe(false);
+    expect(isValidRelaySecret("generate_a_long_random_string")).toBe(false);
+    expect(isValidRelaySecret("aaaaaaaaaaaaaaaaaaaaaaaa")).toBe(false);
+    expect(isValidRelaySecret(SECRET)).toBe(true);
+  });
+
   it("isAllowedUploadHost mirrors the app-side guard", () => {
     expect(isAllowedUploadHost("https://a.tapecontent.net/x")).toBe(true);
     expect(isAllowedUploadHost("http://tapecontent.net/x")).toBe(false);

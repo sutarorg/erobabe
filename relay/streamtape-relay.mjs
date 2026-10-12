@@ -26,7 +26,7 @@
  *   STREAMTAPE_RELAY_SECRET            required, ≥16 chars, shared with the app
  *   STREAMTAPE_RELAY_ALLOWED_ORIGINS   comma list, e.g. https://erobabe.com
  *   STREAMTAPE_UPLOAD_HOST_SUFFIXES    optional extra upload-node suffixes
- *   RELAY_PORT                         default 8787 (bind 0.0.0.0)
+ *   RELAY_PORT                         explicit port; falls back to PORT, then 8787
  *   RELAY_MAX_UPLOAD_BYTES             optional cap, default 15 GiB
  *
  * RUN
@@ -43,6 +43,15 @@ export const RELAY_TOKEN_VERSION = "v1";
 export const DEFAULT_UPLOAD_HOST_SUFFIXES = ["tapecontent.net", "streamtape.com"];
 export const DEFAULT_MAX_UPLOAD_BYTES = 15 * 1024 * 1024 * 1024;
 export const IDLE_TIMEOUT_MS = 120_000;
+
+const PLACEHOLDER_RELAY_SECRET =
+  /^(?:generate[_-]a[_-]long[_-]random[_-]string|your(?:[_-].*)?|example(?:[_-].*)?|placeholder(?:[_-].*)?|change[_-]?me|replace[_-]?me|password(?:[_-].*)?|test(?:[_-].*)?)$/i;
+
+/** The relay refuses example values even when they happen to exceed 16 chars. */
+export function isValidRelaySecret(secret) {
+  const value = String(secret || "").trim();
+  return value.length >= 16 && !PLACEHOLDER_RELAY_SECRET.test(value) && !/^(.)\1+$/.test(value);
+}
 
 // ---------------------------------------------------------------------- tokens
 
@@ -300,11 +309,12 @@ const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.
 
 if (isMain) {
   const secret = (process.env.STREAMTAPE_RELAY_SECRET || "").trim();
-  if (secret.length < 16) {
-    console.error("[relay] STREAMTAPE_RELAY_SECRET must be set to a random string of at least 16 characters.");
+  if (!isValidRelaySecret(secret)) {
+    console.error("[relay] Set STREAMTAPE_RELAY_SECRET to a unique random string of at least 16 characters; do not use the .env.example placeholder.");
     process.exit(1);
   }
-  const port = Number(process.env.RELAY_PORT || 8787);
+  // Most container platforms supply PORT automatically; RELAY_PORT overrides it.
+  const port = Number(process.env.RELAY_PORT || process.env.PORT || 8787);
   const server = createRelay({
     secret,
     allowedOrigins: parseList(process.env.STREAMTAPE_RELAY_ALLOWED_ORIGINS),

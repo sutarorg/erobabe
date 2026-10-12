@@ -431,34 +431,55 @@ falling back.
 3. Verify the account's real per-file size limit (not stated in the API docs; a
    2021 community README claims 15 GB) and set `STREAMTAPE_MAX_UPLOAD_BYTES`
    accordingly. The app enforces this limit before any bytes move.
-4. **Deploy the relay** (`relay/streamtape-relay.mjs`, zero dependencies, Node ≥ 18):
+4. **Deploy the relay** (`relay/streamtape-relay.mjs`, zero dependencies, Node ≥ 18) as a separate always-on service. A container image is included:
    ```bash
-   STREAMTAPE_RELAY_SECRET=<same random >=16 chars as the app> \
-   STREAMTAPE_RELAY_ALLOWED_ORIGINS=https://erobabe.com \
-   RELAY_PORT=8787 node relay/streamtape-relay.mjs
+   docker build -t erobabe-streamtape-relay -f relay/Dockerfile .
    ```
-   Requirements: an always-on host (VPS, Docker, Fly.io, Railway, Cloud Run with
-   request timeout ≥ the longest upload, …) with **HTTPS in front**; it must **not**
-   run as a Vercel/serverless function. It holds no Streamtape credentials — it only
-   accepts HMAC-signed, expiring, single-use tokens minted by the app, and refuses
-   upload hosts outside `tapecontent.net`/`streamtape.com`
-   (`STREAMTAPE_UPLOAD_HOST_SUFFIXES` extends the list). Run **one instance** (the
-   single-use cache is in memory) or replace `makeUsedTracker` with a shared store.
-   Health check: `GET /health`.
-5. Set the app's environment variables (see `.env.example`):
+   Deploy that image to an always-on Node/container host (VPS, Docker host, Fly.io,
+   Railway, Cloud Run with a request timeout ≥ the longest upload, …) with **HTTPS
+   in front**. Do **not** deploy it as a Vercel/serverless function or route video
+   uploads through a Next.js API route. Configure the relay's runtime environment
+   in the host's secret/settings UI:
+   - `STREAMTAPE_RELAY_SECRET`: a newly generated random value of at least 16
+     characters (for example, generate it with `openssl rand -hex 32`). Do not use
+     the `.env.example` placeholder. Keep it for the next step.
+   - `STREAMTAPE_RELAY_ALLOWED_ORIGINS`: the exact site origin(s), without a path;
+     for this deployment include `https://erobabe.vercel.app` and any custom domain.
+   - `RELAY_PORT`: optional if the host supplies `PORT`; `RELAY_PORT` takes
+     precedence. The relay binds `0.0.0.0` and exposes `GET /health`.
+
+   The relay holds no Streamtape credentials — it only accepts HMAC-signed,
+   expiring, single-use tokens minted by the app, and refuses upload hosts outside
+   `tapecontent.net`/`streamtape.com` (`STREAMTAPE_UPLOAD_HOST_SUFFIXES` extends
+   the list). Run **one instance** (the single-use cache is in memory) or replace
+   `makeUsedTracker` with a shared store. After deploying, verify
+   `https://<your-real-relay-host>/health` returns
+   `{ "status": 200, "msg": "OK", "result": { "ok": true } }`.
+5. Set the app's production environment variables (see `.env.example`) and
+   redeploy the app after saving them:
    - `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY` — **server-only**; never `NEXT_PUBLIC_*`,
      never in a browser response, commit, log or audit row.
    - `STREAMTAPE_FOLDER_ID` (optional), `STREAMTAPE_MAX_UPLOAD_BYTES` (recommended).
    - `STREAMTAPE_ADULT_CONTENT_ALLOWED=true` — only after the owner verification above.
-   - `STREAMTAPE_RELAY_URL`, `STREAMTAPE_RELAY_SECRET`.
+   - `STREAMTAPE_RELAY_URL`: the real public HTTPS **origin** of the separate relay,
+     e.g. `https://<host-assigned-domain>`; do not use `https://relay.example.com`,
+     Markdown link syntax, or a URL path.
+   - `STREAMTAPE_RELAY_SECRET`: the exact random secret configured on the relay.
    - `VIDEO_PROVIDER=streamtape`.
+
+   For Vercel-hosted app code, add these under **Project → Settings → Environment
+   Variables** for the Production environment, then create a new deployment. The
+   admin System Health page probes the relay's `/health` endpoint and reports
+   missing, invalid, unreachable, or healthy relay state. The upload session API
+   still fails closed until both the actual relay URL and matching secret are set.
 6. Run the database migration `supabase/migrations/00000000000007_streamtape_video_provider.sql`
    (forward-only; allows `streamtape`, defaults new jobs to it, adds a processing
    index). Older migrations are untouched; historical `ufoload`/`uqload` rows keep
    playing from their stored URLs and are never contacted.
-7. Open Admin → **System Health**: *Video Provider* must read `streamtape · API
-   reachable` (it performs a real `GET /account/info`). Any other state names
-   what is missing; an environment flag alone is never reported as healthy.
+7. Open Admin → **System Health**: *Video Provider* should read `streamtape · ready`
+   only when the real `GET /account/info` succeeds and the separate *Streamtape
+   Upload Relay* card reports `Operational` after its `GET /health` probe. Any other
+   state names what is missing; an environment flag alone is never reported as healthy.
 8. Upload one real test video from `/admin/videos/upload` and follow
    `GO_LIVE_CHECKLIST.md` section D.
 

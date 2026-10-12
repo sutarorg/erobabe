@@ -70,15 +70,26 @@ describe("configuration gate", () => {
     }
   });
 
-  it("requires a relay URL and a strong relay secret", () => {
+  it("requires a real HTTPS relay URL and a strong non-placeholder relay secret", () => {
     const provider = new StreamtapeProvider();
     delete process.env.STREAMTAPE_RELAY_URL;
-    expect(() => provider.assertRelayConfigured()).toThrow(/STREAMTAPE_RELAY_URL/);
-    process.env.STREAMTAPE_RELAY_URL = "https://relay.example.com/";
+    expect(() => provider.assertRelayConfigured()).toThrow(/STREAMTAPE_RELAY_URL is not set/);
+
+    process.env.STREAMTAPE_RELAY_URL = "[https://relay.example.com](https://relay.example.com)";
+    expect(() => provider.assertRelayConfigured()).toThrow(/STREAMTAPE_RELAY_URL is invalid/);
+
+    process.env.STREAMTAPE_RELAY_URL = "https://relay.example.com";
+    expect(() => provider.assertRelayConfigured()).toThrow(/example.com placeholder/);
+
+    process.env.STREAMTAPE_RELAY_URL = "https://relay.erobabe.com/";
     process.env.STREAMTAPE_RELAY_SECRET = "short";
     expect(() => provider.assertRelayConfigured()).toThrow(/STREAMTAPE_RELAY_SECRET/);
+
+    process.env.STREAMTAPE_RELAY_SECRET = "generate_a_long_random_string";
+    expect(() => provider.assertRelayConfigured()).toThrow(/placeholder values/);
+
     process.env.STREAMTAPE_RELAY_SECRET = "a-long-enough-relay-secret";
-    expect(provider.assertRelayConfigured()).toBe("https://relay.example.com");
+    expect(provider.assertRelayConfigured()).toBe("https://relay.erobabe.com");
   });
 });
 

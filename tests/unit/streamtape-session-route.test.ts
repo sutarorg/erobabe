@@ -66,7 +66,7 @@ describe("POST /api/videos/streamtape-session", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.uploadUrl.startsWith("https://relay.example.com/upload/")).toBe(true);
+    expect(body.uploadUrl.startsWith("https://relay.erobabe.com/upload/")).toBe(true);
     const token = body.uploadUrl.split("/upload/")[1];
     const claims = verifyRelayToken(token, SECRET);
     expect(claims.u).toBe(NODE);

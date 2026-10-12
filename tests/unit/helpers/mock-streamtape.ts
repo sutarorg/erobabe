@@ -17,7 +17,7 @@ type Handler = (...args: any[]) => any;
 export const streamtapeMock = {
   enabled: true,
   disabledReason: null as string | null,
-  relay: "https://relay.example.com" as string | null,
+  relay: "https://relay.erobabe.com" as string | null,
   handlers: {} as Record<string, Handler>,
   calls: [] as Array<{ method: string; args: any[] }>,
 };
@@ -25,7 +25,7 @@ export const streamtapeMock = {
 export function resetStreamtapeMock(): void {
   streamtapeMock.enabled = true;
   streamtapeMock.disabledReason = null;
-  streamtapeMock.relay = "https://relay.example.com";
+  streamtapeMock.relay = "https://relay.erobabe.com";
   streamtapeMock.handlers = {};
   streamtapeMock.calls = [];
 }

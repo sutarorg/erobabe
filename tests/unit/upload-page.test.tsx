@@ -57,7 +57,7 @@ interface UploadCall {
   aborted: boolean;
 }
 
-const RELAY_URL = "https://relay.example.com/upload/v1.payload.signature";
+const RELAY_URL = "https://relay.erobabe.test/upload/v1.payload.signature";
 const NODE_REPLY = JSON.stringify({ status: 200, msg: "OK", result: { id: "wg8ad12d3QiJRXG" } });
 
 let requests: RecordedRequest[] = [];

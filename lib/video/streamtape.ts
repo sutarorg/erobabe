@@ -58,22 +58,92 @@ export function streamtapeCredentials(): { login: string; key: string } | null {
   return login && key ? { login, key } : null;
 }
 
-/** The relay the browser must post bytes to, or null when unconfigured. */
-export function streamtapeRelayUrl(): string | null {
+const RELAY_DEPLOYMENT_INSTRUCTIONS =
+  "Deploy relay/streamtape-relay.mjs on an always-on Node host (not Next.js/Vercel), set STREAMTAPE_RELAY_URL to its public HTTPS origin in the app's deployment environment, then redeploy. Video bytes must never pass through Next.js.";
+
+const PLACEHOLDER_RELAY_SECRET =
+  /^(?:generate[_-]a[_-]long[_-]random[_-]string|your(?:[_-].*)?|example(?:[_-].*)?|placeholder(?:[_-].*)?|change[_-]?me|replace[_-]?me|password(?:[_-].*)?|test(?:[_-].*)?)$/i;
+
+export type StreamtapeRelayUrlConfiguration = {
+  url: string | null;
+  code: "missing_relay" | "invalid_relay_url" | null;
+  message: string | null;
+};
+
+/** Validate the browser-facing relay origin and distinguish absent from invalid config. */
+export function streamtapeRelayUrlConfiguration(): StreamtapeRelayUrlConfiguration {
   const raw = (process.env.STREAMTAPE_RELAY_URL || "").trim();
-  if (!raw) return null;
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
-    return url.toString().replace(/\/$/, "");
-  } catch {
-    return null;
+  if (!raw) {
+    return {
+      url: null,
+      code: "missing_relay",
+      message: `STREAMTAPE_RELAY_URL is not set. ${RELAY_DEPLOYMENT_INSTRUCTIONS}`,
+    };
   }
+
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return {
+      url: null,
+      code: "invalid_relay_url",
+      message: `STREAMTAPE_RELAY_URL is invalid. Set it to the plain HTTPS origin of your separately deployed relay (do not paste Markdown link syntax). ${RELAY_DEPLOYMENT_INSTRUCTIONS}`,
+    };
+  }
+
+  const host = url.hostname.toLowerCase();
+  const isPlaceholderHost = host === "example.com" || host.endsWith(".example.com");
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash ||
+    isPlaceholderHost
+  ) {
+    return {
+      url: null,
+      code: "invalid_relay_url",
+      message: isPlaceholderHost
+        ? `STREAMTAPE_RELAY_URL still points to the example.com placeholder. Replace it with the public HTTPS origin of your deployed relay. ${RELAY_DEPLOYMENT_INSTRUCTIONS}`
+        : `STREAMTAPE_RELAY_URL is invalid. It must be a public HTTPS origin only (no path, query, fragment, username or password). ${RELAY_DEPLOYMENT_INSTRUCTIONS}`,
+    };
+  }
+
+  return { url: url.origin, code: null, message: null };
+}
+
+/** The relay the browser must post bytes to, or null when missing/invalid. */
+export function streamtapeRelayUrl(): string | null {
+  return streamtapeRelayUrlConfiguration().url;
+}
+
+export type StreamtapeRelaySecretConfiguration = {
+  secret: string | null;
+  message: string | null;
+};
+
+export function streamtapeRelaySecretConfiguration(): StreamtapeRelaySecretConfiguration {
+  const secret = (process.env.STREAMTAPE_RELAY_SECRET || "").trim();
+  if (!secret) {
+    return {
+      secret: null,
+      message: "STREAMTAPE_RELAY_SECRET is missing. Generate a random secret of at least 16 characters and set the exact same value in the app and the relay.",
+    };
+  }
+  if (secret.length < 16 || PLACEHOLDER_RELAY_SECRET.test(secret) || /^(.)\1+$/.test(secret)) {
+    return {
+      secret: null,
+      message: "STREAMTAPE_RELAY_SECRET must be a unique random string of at least 16 characters; the .env.example placeholder values are not safe to use. Set the same value in the app and the relay.",
+    };
+  }
+  return { secret, message: null };
 }
 
 export function streamtapeRelaySecret(): string | null {
-  const secret = (process.env.STREAMTAPE_RELAY_SECRET || "").trim();
-  return secret || null;
+  return streamtapeRelaySecretConfiguration().secret;
 }
 
 /** Extra upload-node host suffixes the operator explicitly allowed. */
@@ -149,22 +219,25 @@ export class StreamtapeProvider implements VideoProvider {
     }
   }
 
-  /** Throws when the relay the browser needs is not configured. */
+  /** Throws when the relay the browser needs is missing or misconfigured. */
   assertRelayConfigured(): string {
-    const relay = streamtapeRelayUrl();
-    if (!relay) {
-      throw new StreamtapeError(
-        "STREAMTAPE_RELAY_URL is not set. Deploy relay/streamtape-relay.mjs (see DEPLOYMENT.md §D) and point STREAMTAPE_RELAY_URL at it — video bytes must never pass through Next.js.",
-        { status: 503, code: "missing_relay" }
-      );
+    const relayConfig = streamtapeRelayUrlConfiguration();
+    if (!relayConfig.url) {
+      throw new StreamtapeError(relayConfig.message || "The Streamtape upload relay is not configured.", {
+        status: 503,
+        code: relayConfig.code || "missing_relay",
+      });
     }
-    if (!streamtapeRelaySecret() || (streamtapeRelaySecret() as string).length < 16) {
-      throw new StreamtapeError(
-        "STREAMTAPE_RELAY_SECRET must be set to a random string of at least 16 characters (same value in the app and the relay).",
-        { status: 503, code: "missing_relay_secret" }
-      );
+
+    const secretConfig = streamtapeRelaySecretConfiguration();
+    if (!secretConfig.secret) {
+      throw new StreamtapeError(secretConfig.message || "The Streamtape relay secret is not configured.", {
+        status: 503,
+        code: "missing_relay_secret",
+      });
     }
-    return relay;
+
+    return relayConfig.url;
   }
 
   /**
