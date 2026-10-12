@@ -1,13 +1,8 @@
 /**
- * Browser → storage / browser → relay upload helpers with real progress events.
+ * Browser → storage upload helpers with real progress events.
  *
- * `fetch()` cannot report upload progress, and pushing large files through one
- * of our own API routes hits the 4.5 MB request-body limit that Vercel enforces
- * on functions (the source of the old
- * `Unexpected token 'R', "Request En"... is not valid JSON` failure). Large
- * files therefore travel from the browser straight to the streaming relay
- * (`STREAMTAPE_RELAY_URL`), which forwards them to the Streamtape upload node;
- * thumbnails keep using a signed Supabase Storage URL.
+ * Used for thumbnail uploads to Supabase Storage. Video files are published
+ * from direct URLs and never pass through Erobabe.
  */
 
 export interface UploadProgress {

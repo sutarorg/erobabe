@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   DEFAULT_VIDEO_PROVIDER,
   InternalProvider,
-  StreamtapeProvider,
   getVideoProvider,
 } from "@/lib/video/provider";
 
@@ -25,11 +24,11 @@ afterEach(() => {
 });
 
 describe("getVideoProvider", () => {
-  it("defaults to Streamtape", () => {
-    expect(DEFAULT_VIDEO_PROVIDER).toBe("streamtape");
+  it("defaults to direct_url", () => {
+    expect(DEFAULT_VIDEO_PROVIDER).toBe("direct_url");
     const provider = getVideoProvider();
-    expect(provider).toBeInstanceOf(StreamtapeProvider);
-    expect(provider.name).toBe("streamtape");
+    expect(provider).toBeInstanceOf(InternalProvider);
+    expect(provider.name).toBe("internal");
   });
 
   it("returns the internal placeholder when it is asked for explicitly", () => {
@@ -38,14 +37,20 @@ describe("getVideoProvider", () => {
     expect(provider.name).toBe("internal");
   });
 
-  it("reads the provider from the environment, case-insensitively", () => {
-    process.env.VIDEO_PROVIDER = "STREAMTAPE";
-    expect(getVideoProvider().name).toBe("streamtape");
+  it("accepts direct_url as the active provider", () => {
+    process.env.VIDEO_PROVIDER = "direct_url";
+    const provider = getVideoProvider();
+    expect(provider).toBeInstanceOf(InternalProvider);
+  });
+
+  it("fails closed for the retired Streamtape provider, pointing at the replacement", () => {
+    expect(() => getVideoProvider("streamtape")).toThrow(/retired/);
+    expect(() => getVideoProvider("streamtape")).toThrow(/VIDEO_PROVIDER=direct_url/);
   });
 
   it("fails closed for the retired UFOLOAD provider, pointing at the replacement", () => {
     expect(() => getVideoProvider("ufoload")).toThrow(/retired/);
-    expect(() => getVideoProvider("ufoload")).toThrow(/VIDEO_PROVIDER=streamtape/);
+    expect(() => getVideoProvider("ufoload")).toThrow(/VIDEO_PROVIDER=direct_url/);
   });
 
   it("fails closed for the long-retired Uqload provider instead of falling back", () => {
@@ -53,14 +58,14 @@ describe("getVideoProvider", () => {
   });
 
   it("fails closed for a typo, naming the variable to fix", () => {
-    process.env.VIDEO_PROVIDER = "streamtap";
+    process.env.VIDEO_PROVIDER = "direct_urll";
     let message = "";
     try {
       getVideoProvider();
     } catch (error) {
       message = (error as Error).message;
     }
-    expect(message).toMatch(/VIDEO_PROVIDER=streamtape/);
+    expect(message).toMatch(/VIDEO_PROVIDER=direct_url/);
   });
 });
 
@@ -70,31 +75,5 @@ describe("internal provider", () => {
     expect(provider.isEnabled()).toBe(true);
     await expect(provider.getFileInfo("abc")).resolves.toMatchObject({ fileId: "abc", canPlay: true, status: 200 });
     await expect(provider.deleteFile("abc")).resolves.toBe(true);
-  });
-});
-
-describe("streamtape provider availability", () => {
-  it("is disabled until credentials and the content-policy gate are configured", () => {
-    delete process.env.STREAMTAPE_LOGIN;
-    delete process.env.STREAMTAPE_API_KEY;
-    delete process.env.STREAMTAPE_ADULT_CONTENT_ALLOWED;
-
-    const provider = new StreamtapeProvider();
-    expect(provider.isEnabled()).toBe(false);
-    expect(provider.disabledReason()).toMatch(/STREAMTAPE_LOGIN/);
-
-    process.env.STREAMTAPE_LOGIN = "login-abcdef";
-    process.env.STREAMTAPE_API_KEY = "key-0123456789";
-    expect(provider.isEnabled()).toBe(false);
-    expect(provider.disabledReason()).toMatch(/STREAMTAPE_ADULT_CONTENT_ALLOWED/);
-
-    process.env.STREAMTAPE_ADULT_CONTENT_ALLOWED = "true";
-    expect(provider.isEnabled()).toBe(true);
-    expect(provider.disabledReason()).toBeNull();
-  });
-
-  it("builds the documented embed address from a file id", () => {
-    const provider = new StreamtapeProvider();
-    expect(provider.getEmbedUrl("wg8ad12d3QiJRXG")).toBe("https://streamtape.com/e/wg8ad12d3QiJRXG");
   });
 });

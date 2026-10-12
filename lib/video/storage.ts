@@ -4,14 +4,8 @@ import type { ServiceClient } from "@/lib/video/publishing";
 /**
  * Thumbnail storage only.
  *
- * Video bytes never land in Supabase. Creating a `video-incoming` bucket with
- * a 2 GB file-size cap was throwing
- * `Unable to prepare storage bucket "video-incoming": The object exceeded the
- * maximum allowed size` on projects whose global limit is 50 MB. Video bytes
- * now go from the browser through the streaming relay to the Streamtape
- * upload node (`/api/videos/streamtape-session` → `relay/streamtape-relay.mjs`).
- *
- * Thumbnails stay here — they are small enough for a signed upload URL.
+ * Video files are published from direct URLs and never stored in Supabase.
+ * Thumbnails are small enough for a signed upload URL.
  */
 
 export const VIDEO_INCOMING_BUCKET = "video-incoming";

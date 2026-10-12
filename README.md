@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, Streamtape video hosting, Resend email, Gemini AI, and SEO optimization.
+Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, direct MP4 video publishing, Resend email, Gemini AI, and SEO optimization.
 
 ## Quick Start
 
@@ -19,8 +19,7 @@ Open http://localhost:3000
 - `DEPLOYMENT.md` — click-by-click production setup
 - `GO_LIVE_CHECKLIST.md` — operational requirements and blockers
 - `IMPLEMENTATION_REPORT.md` — what changed, tests, blockers
-- `tests/live/README.md` — how to run the optional live Streamtape tests
-- `docs/STREAMTAPE_MIGRATION.md` — Streamtape research, architecture decision and acceptance status
+- `docs/STREAMTAPE_MIGRATION.md` — historical record of the retired Streamtape integration
 - `.env.example` — env vars reference (no secrets)
 
 ## Stack
@@ -30,8 +29,15 @@ Open http://localhost:3000
 - NOWPayments (crypto payments)
 - Resend (transactional email)
 - Gemini API (server-generated video metadata)
-- Streamtape (video hosting) + a small streaming upload relay (`relay/streamtape-relay.mjs`)
+- Direct MP4 URL publishing (no video hosting API needed)
 - Tailwind CSS 4
+
+## Video Publishing
+
+Videos are published by pasting direct MP4 URLs into the admin panel
+(`/admin/videos/upload`). Erobabe saves the link and plays the video straight
+from the original host — it never downloads, transfers, or re-encodes the
+video file. No hosting-provider credentials, relay, or upload service is needed.
 
 ## Routes
 
@@ -50,26 +56,14 @@ npm run type-check
 npm run test
 npm run build
 npx playwright test
-# opt-in, real Streamtape account (see tests/live/README.md)
-LIVE_STREAMTAPE=1 npm run test:live
 ```
 
 ## Production Blockers
 
 See `GO_LIVE_CHECKLIST.md`. The current blockers are:
 
-- **Streamtape policy gate** — its Terms carry no explicit clause permitting or banning lawful
-  adult content, so uploads stay gated (`STREAMTAPE_ADULT_CONTENT_ALLOWED=false` fails every
-  upload closed) until the owner has verified the terms, the copyright policy and the account's
-  content settings for this catalog.
-- **Upload relay** — video bytes go browser → `relay/streamtape-relay.mjs` → Streamtape; deploy the
-  relay (always-on Node ≥ 18, not Vercel) and set `STREAMTAPE_RELAY_URL` / `STREAMTAPE_RELAY_SECRET`.
-- **Live acceptance** — a real upload/publish/playback run is still required (see
-  `docs/STREAMTAPE_MIGRATION.md` §7 and `tests/live/README.md`).
 - **Hosting** must permit adult/commercial content (Vercel Hobby does not).
 - **Legal identity, age assurance, NOWPayments approval, Resend domain verification.**
-
-Do not launch until the blockers are resolved.
 
 ## Brand
 

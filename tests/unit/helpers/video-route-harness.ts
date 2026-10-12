@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { createFakeSupabase, type FakeDb } from "./fake-supabase";
-import { onProvider, providerCalls, resetStreamtapeMock, streamtapeMock } from "./mock-streamtape";
 
 /**
  * Shared setup for the video-route tests: an in-memory Supabase service client,
@@ -70,5 +69,3 @@ export function multipartRequest(url: string): NextRequest {
 export function getRequest(url: string): NextRequest {
   return new NextRequest(`http://localhost${url}`, { method: "GET" });
 }
-
-export { onProvider, providerCalls, resetStreamtapeMock, streamtapeMock };
