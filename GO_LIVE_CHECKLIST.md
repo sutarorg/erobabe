@@ -21,7 +21,7 @@ This checklist lists all external decisions, approvals, and configurations that 
 
 ---
 
-## 2. Video Hosting (Streamtape) — CRITICAL BLOCKER
+## 2. Video Hosting — Direct MP4 URLs (resolved)
 
 - [ ] **Owner policy verification**: Streamtape's Terms
   (https://streamtape.com/terms-and-conditions) and Copyright Policy
@@ -238,7 +238,6 @@ is needed. Legacy UFOLOAD/Uqload videos are unaffected either way.
 
 ## 11. Remaining Launch Blockers (Documented)
 
-- [ ] **Streamtape content-policy verification**: BLOCKED until the owner verifies the terms, copyright policy and account settings for this catalog (ideally in writing from Streamtape). See DEPLOYMENT.md D.
 - [ ] **Hosting approval**: BLOCKED if using Vercel Hobby or host that prohibits adult/commercial. Need approval and documentation.
 - [ ] **Legal identity**: BLOCKED — owner must provide real business details.
 - [ ] **Age assurance**: Evaluate jurisdiction-specific requirements, implement verification integration if required.
@@ -256,7 +255,7 @@ is needed. Legacy UFOLOAD/Uqload videos are unaffected either way.
 4. [ ] All remaining controls have working behavior with loading/empty/error/success states.
 5. [ ] Supabase Auth and server-side role authorization work.
 6. [ ] RLS policies tested.
-7. [ ] Admin can genuinely upload, manage, review, publish approved videos via the authorized Streamtape integration (or another provider the owner approved in writing).
+7. [ ] Admin can genuinely publish approved videos by pasting direct MP4 URLs in the admin panel (`/admin/videos/upload`).
 8. [ ] Public watch pages play actual hosted videos.
 9. [ ] Advertisers can reserve ten fixed placements and create real campaigns.
 10. [ ] NOWPayments payment requests, signed-IPN verification, and confirmation processing work per actual API.
@@ -270,7 +269,7 @@ is needed. Legacy UFOLOAD/Uqload videos are unaffected either way.
 18. [ ] Production build succeeds.
 19. [ ] DEPLOYMENT.md gives complete click-by-click setup.
 20. [ ] GO_LIVE_CHECKLIST.md accurately lists remaining external decisions (this file).
-21. [ ] No prohibited provider usage enabled (Streamtape uploads without the owner's policy verification, Vercel Hobby commercial).
+21. [ ] No prohibited provider usage enabled (Vercel Hobby commercial).
 22. [ ] No secrets committed.
 23. [ ] No feature described as operational when only simulated.
 24. [ ] Final implementation report separates verified results from unverified assumptions and remaining blockers.

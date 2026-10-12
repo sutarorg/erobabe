@@ -1,16 +1,15 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { fallbackSuggestion, suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
-import { StreamtapeError } from "@/lib/video/streamtape-protocol";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
 
 /**
  * Values allowed in `videos.provider` / `upload_jobs.provider` after migration
  * 00000000000007. Legacy values (`ufoload`, `uqload`) remain valid for
- * historical rows; `streamtape` is the active integration.
+ * historical rows; `direct_url` is the active integration.
  */
-export const VIDEO_PROVIDER_VALUES = ["streamtape", "ufoload", "uqload", "embed", "internal", "bunny", "cloudflare", "s3"] as const;
+export const VIDEO_PROVIDER_VALUES = ["direct_url", "streamtape", "ufoload", "uqload", "embed", "internal", "bunny", "cloudflare", "s3"] as const;
 export type VideoProviderValue = (typeof VIDEO_PROVIDER_VALUES)[number];
 
 export type GeneratedVideo = {
@@ -46,20 +45,8 @@ export function httpErrorStatus(message: string): number {
 
 /**
  * Maps a thrown error onto the HTTP status our routes answer with.
- *
- * A provider rejection is never reported as *our* auth failure: a 403 from
- * Streamtape means the server's credentials are wrong (502 — an upstream
- * misconfiguration), while 409/413/451/509/503 keep their meaning so the admin
- * UI can tell the difference between "session conflict" and "bandwidth limit".
  */
 export function errorStatusFrom(error: unknown): number {
-  if (error instanceof StreamtapeError) {
-    if (error.status === 0) return 504;
-    if (error.status === 401 || error.status === 403 || error.status === 402) return 502;
-    if (error.status === 400) return 400;
-    if (error.status === 409) return 409;
-    return error.status >= 400 && error.status < 600 ? error.status : 502;
-  }
   const message = error instanceof Error ? error.message : "";
   return httpErrorStatus(message);
 }

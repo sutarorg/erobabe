@@ -5,10 +5,9 @@ import { createThumbnailUploadTarget } from "@/lib/video/storage";
 /**
  * Issues a short-lived signed upload URL for a thumbnail image.
  *
- * Video files must not be posted here — they go from the browser through the
- * upload relay to Streamtape (`/api/videos/streamtape-session`). Thumbnails
- * are small enough to live in Supabase Storage and keep using a signed upload
- * URL.
+ * Video files are published from direct URLs and never uploaded through
+ * Erobabe. Thumbnails are small enough to live in Supabase Storage and keep
+ * using a signed upload URL.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -27,11 +26,8 @@ export async function POST(req: NextRequest) {
 
     if (body.kind && body.kind !== "thumbnail") {
       return NextResponse.json(
-        {
-          error: "Video files upload to Streamtape through the upload relay",
-          details: "Request /api/videos/streamtape-session and POST the multipart file to the uploadUrl it returns. This route only issues thumbnail upload URLs.",
-        },
-        { status: 410 }
+        { error: "Only thumbnails are uploaded through this route" },
+        { status: 400 }
       );
     }
 
