@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
  * so assertions cover the markup that actually ships.
  */
 const CATEGORIES = [
-  { id: "1", label: "Mature", slug: "mature", icon: "flame", video_count: 5 },
+  { id: "1", label: "Mature", slug: "mature", icon: "flame", video_count: 5, image_url: "https://cdn.example.com/categories/mature.jpg" },
   { id: "2", label: "Amateur", slug: "amateur", icon: "camera", video_count: 0 },
   { id: "3", label: "POV", slug: "pov", icon: "eye", video_count: 0 },
   { id: "4", label: "Lesbian", slug: "lesbian", icon: "users", video_count: 0 },
@@ -52,5 +52,15 @@ describe("/categories page", () => {
     expect(html).toContain("Explore the library by what you love — every category is hand-curated and updated daily.");
     expect(html).toContain(">5 videos</span>");
     expect(html).toContain("Browse Mature, 5 videos");
+  });
+
+  it("renders the admin-uploaded thumbnail on the card that has one", async () => {
+    const html = await render();
+    // The Mature card carries an uploaded image…
+    expect(html).toContain('src="https://cdn.example.com/categories/mature.jpg"');
+    // …and every other card still falls back to its icon (an inline svg).
+    expect(html).toContain("<svg");
+    // Cards without an image render no <img> for that category.
+    expect(html.split("<img").length - 1).toBe(1);
   });
 });

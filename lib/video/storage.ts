@@ -161,6 +161,76 @@ export function resolveThumbnailUrl(service: ServiceClient, userId: string, stor
   return data.publicUrl;
 }
 
+/**
+ * Resolves a stored image path to its public URL without requiring the object
+ * to belong to the *current* admin.
+ *
+ * Category thumbnails are edited by whichever admin is on duty, so the owner
+ * check used for a fresh upload (`resolveThumbnailUrl`) is too strict here.
+ * The path still has to look exactly like an object this app writes —
+ * `<owner>/<uuid>.<ext>`, no traversal, no nesting — which keeps a crafted
+ * request from pointing a card at an arbitrary object.
+ */
+export function resolveStoredImageUrl(service: ServiceClient, storagePath: string): string | null {
+  const normalized = String(storagePath || "").trim().replace(/^\/+/, "");
+  if (!normalized) return null;
+
+  const valid =
+    !normalized.includes("..") &&
+    normalized.split("/").length === 2 &&
+    /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9._-]+\.(jpe?g|png|gif|webp)$/i.test(normalized);
+  if (!valid) throw new Error("That image path is not a valid stored thumbnail");
+
+  const { data } = service.storage.from(THUMBNAIL_BUCKET).getPublicUrl(normalized);
+  if (!data?.publicUrl) throw new Error("Thumbnail did not resolve to a public URL");
+  return data.publicUrl;
+}
+
+/**
+ * Accepts either an absolute public URL (already stored) or a storage path and
+ * returns the URL to persist. Anything else is rejected so a typo cannot wipe a
+ * working thumbnail silently.
+ */
+export function resolveImageValue(service: ServiceClient, value: unknown): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return resolveStoredImageUrl(service, raw);
+}
+
+/**
+ * Deletes a thumbnail object this app owns. Best effort: a missing object or a
+ * storage hiccup must never block the database change that references it.
+ */
+export async function removeThumbnailObject(service: ServiceClient, publicUrlOrPath: string | null | undefined): Promise<void> {
+  const value = String(publicUrlOrPath || "").trim();
+  if (!value) return;
+
+  const marker = `/object/public/${THUMBNAIL_BUCKET}/`;
+  const markerIndex = value.indexOf(marker);
+
+  let path: string;
+  if (markerIndex !== -1) {
+    // Supabase public URL: everything after the bucket marker is the object key.
+    path = value.slice(markerIndex + marker.length).split("?")[0];
+  } else if (/^https?:\/\//i.test(value)) {
+    // A public URL on another host (a different project, a proxy, a CDN): keep
+    // the trailing `<owner>/<file>` pair, which is the only shape this app writes.
+    const segments = new URL(value).pathname.split("/").filter(Boolean);
+    path = segments.slice(-2).join("/");
+  } else {
+    path = value;
+  }
+
+  if (!path || path.includes("..") || !/\.[a-z0-9]{2,5}$/i.test(path)) return;
+
+  try {
+    await service.storage.from(THUMBNAIL_BUCKET).remove([decodeURIComponent(path)]);
+  } catch {
+    // Cleanup is best effort — the row no longer references the object.
+  }
+}
+
 export async function removeTransitObject(service: ServiceClient, storagePath: string): Promise<void> {
   if (!storagePath) return;
   try {

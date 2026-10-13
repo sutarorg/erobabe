@@ -2,15 +2,17 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 
 /**
- * Configuration for the *live* Streamtape tests.
+ * Configuration for the *live* provider tests (Streamtape + Gemini).
  *
- * These talk to the real API with a real key, so they are never part of
+ * They talk to real APIs with real credentials, so they are never part of
  * `npm run test` (the default config excludes `tests/live/**`). Run them
  * deliberately:
  *
  *   LIVE_STREAMTAPE=1 STREAMTAPE_LOGIN=... STREAMTAPE_API_KEY=... npm run test:live
+ *   GEMINI_API_KEY=AQ.… npm run test:live
  *
- * Read `tests/live/README.md` first — one of the tests uploads a file.
+ * Read `tests/live/README.md` first — one of the Streamtape tests uploads a
+ * file, and the Gemini tests need outbound HTTPS to Google.
  */
 export default defineConfig({
   test: {

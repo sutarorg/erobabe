@@ -11,15 +11,29 @@ import {
 } from "@/lib/video/publishing";
 import { resolveThumbnailUrl } from "@/lib/video/storage";
 import { normalizeRemoteEntries } from "@/lib/video/entries";
+import { classifyVideoSource, normalizePastedLink } from "@/lib/video/links";
 
 const MAX_URLS_PER_REQUEST = 20;
 
 /**
  * Validates that the URL path ends with a video extension (case-insensitive).
  * Query strings are allowed — only the pathname is checked.
+ *
+ * Markdown wrappers (`[label](https://…)`), angle brackets, and pasted iframe
+ * markup are unwrapped first, so a copied link works as-is. Player *pages*
+ * (Streamtape `/v/<id>`, DoodStream `/d/<id>`, …) belong to the embed route and
+ * are answered with a message that says so instead of a bare "not a file".
  */
 function assertVideoUrl(urlString: string): string {
-  const validated = assertPublicHttpUrl(urlString, "Video URL");
+  const normalized = normalizePastedLink(urlString);
+  const classified = classifyVideoSource(normalized);
+  if (classified.kind === "embed") {
+    throw new Error(
+      `${classified.host} link is a player page, not a video file — publish it as an embed instead (it will play in the site's iframe player).`
+    );
+  }
+
+  const validated = assertPublicHttpUrl(classified.url, "Video URL");
   let url: URL;
   try {
     url = new URL(validated);

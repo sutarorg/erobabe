@@ -297,10 +297,113 @@ describe("admin upload page — no file upload or embed", () => {
     expect(screen.queryByText("iframe URL or embed code")).toBeNull();
   });
 
-  it("does not show upload progress or Streamtape polling", () => {
+  it("does not show upload progress or provider-side conversion polling", () => {
     renderPage();
-    expect(screen.queryByText(/Streamtape/)).toBeNull();
+    // Streaming uploads, relay hops, and provider "converting" polling are gone —
+    // the only Streamtape mention left is the player-page link support.
     expect(screen.queryByText(/relay/)).toBeNull();
     expect(screen.queryByText(/converting/)).toBeNull();
+    expect(screen.queryByText(/Streamtape upload/i)).toBeNull();
+  });
+});
+
+describe("admin upload page — link formats and routing", () => {
+  it("unwraps a Markdown Streamtape player link and routes it to the embed publisher", async () => {
+    mockPostJson.mockResolvedValue({
+      results: [
+        {
+          source: "https://streamtape.com/e/m9XLJGmaJOcbPr2",
+          videoId: "vid-1",
+          slug: "hands-only-ab12cd34",
+          title: "Hands Only",
+          status: "published",
+          metadataSource: "ai",
+        },
+      ],
+      succeeded: 1,
+      failed: 0,
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Mature")).toBeTruthy());
+    await act(async () => {
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat-1" } });
+    });
+
+    const markdownLink =
+      "[https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4](https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4)";
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(/https:\/\/video\.example\.com/), { target: { value: markdownLink } });
+      fireEvent.click(screen.getByText(/Add link/));
+    });
+
+    // The Markdown wrapper is stripped and the watch page is converted to the
+    // host's frameable player URL.
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("https://streamtape.com/e/m9XLJGmaJOcbPr2")).toBeTruthy();
+    });
+    expect(screen.getByText(/Player page detected on streamtape\.com/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
+    });
+
+    await waitFor(() => {
+      expect(mockPostJson).toHaveBeenCalledWith(
+        "/api/videos/embed",
+        expect.objectContaining({
+          categoryId: "cat-1",
+          entries: [{ source: "https://streamtape.com/e/m9XLJGmaJOcbPr2", thumbnailPath: null }],
+        })
+      );
+    });
+  });
+
+  it("still publishes a direct video file through the direct-URL route", async () => {
+    mockPostJson.mockResolvedValue({
+      results: [
+        {
+          url: "https://cdn.example.com/video1.mp4",
+          videoId: "vid-1",
+          slug: "video-1",
+          title: "Test Video",
+          status: "published",
+          metadataSource: "ai",
+        },
+      ],
+      succeeded: 1,
+      failed: 0,
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Mature")).toBeTruthy());
+    await act(async () => {
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat-1" } });
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(/https:\/\/video\.example\.com/), {
+        target: { value: "https://cdn.example.com/video1.mp4" },
+      });
+      fireEvent.click(screen.getByText(/Add link/));
+    });
+
+    await waitFor(() => expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy());
+    expect(screen.getByText(/Direct video file on cdn\.example\.com/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
+    });
+
+    await waitFor(() => {
+      expect(mockPostJson).toHaveBeenCalledWith(
+        "/api/videos/upload-url",
+        expect.objectContaining({
+          categoryId: "cat-1",
+          entries: [{ url: "https://cdn.example.com/video1.mp4", thumbnailPath: null }],
+        })
+      );
+    });
   });
 });

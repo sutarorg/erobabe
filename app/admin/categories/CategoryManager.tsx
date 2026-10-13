@@ -1,14 +1,17 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
-import { Pencil, Plus, X } from "lucide-react";
+import { ChangeEvent, FormEvent, useMemo, useState } from "react";
+import { ImagePlus, LoaderCircle, Pencil, Plus, X } from "lucide-react";
+import { postJson } from "@/src/utils/api";
+import { uploadWithProgress } from "@/src/utils/uploadFile";
 
-type Category = {
+export type Category = {
   id: string;
   label: string;
   slug: string;
   icon: string | null;
   description: string | null;
+  image_url: string | null;
   video_count: number;
 };
 
@@ -17,9 +20,14 @@ type CategoryForm = {
   slug: string;
   icon: string;
   description: string;
+  /** Public URL of the card thumbnail — what gets saved. */
+  imageUrl: string;
 };
 
-const emptyForm: CategoryForm = { label: "", slug: "", icon: "", description: "" };
+const emptyForm: CategoryForm = { label: "", slug: "", icon: "", description: "", imageUrl: "" };
+
+const THUMBNAIL_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024;
 
 function toForm(category: Category): CategoryForm {
   return {
@@ -27,6 +35,7 @@ function toForm(category: Category): CategoryForm {
     slug: category.slug,
     icon: category.icon || "",
     description: category.description || "",
+    imageUrl: category.image_url || "",
   };
 }
 
@@ -36,6 +45,7 @@ export default function CategoryManager({ initialCategories }: { initialCategori
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<CategoryForm>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -65,6 +75,50 @@ export default function CategoryManager({ initialCategories }: { initialCategori
     setError("");
   }
 
+  /**
+   * Uploads the chosen image straight to Supabase Storage (signed URL) and
+   * keeps the returned public URL in the form. The file bypasses the server
+   * function body, so Vercel's 4.5 MB request limit never applies.
+   */
+  async function handleImageInput(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = "";
+    if (!file) return;
+
+    if (!THUMBNAIL_TYPES.includes(file.type)) {
+      setError("Category thumbnails must be JPG, PNG, GIF, or WebP.");
+      return;
+    }
+    if (file.size > MAX_THUMBNAIL_SIZE) {
+      setError("Category thumbnails must be 10 MB or smaller.");
+      return;
+    }
+
+    setError("");
+    setNotice("");
+    setUploadingImage(true);
+    try {
+      const target = await postJson<{ uploadUrl: string; storagePath: string; publicUrl?: string }>(
+        "/api/videos/storage-token",
+        {
+          kind: "thumbnail",
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type,
+        }
+      );
+      await uploadWithProgress(target.uploadUrl, file, { contentType: file.type });
+      // Prefer the URL storage reports; fall back to the storage path, which the
+      // API resolves to a public URL on save.
+      setForm((current) => ({ ...current, imageUrl: target.publicUrl || target.storagePath }));
+      setNotice("Thumbnail uploaded — save the category to apply it.");
+    } catch (uploadError: any) {
+      setError(uploadError?.message || "Thumbnail upload failed");
+    } finally {
+      setUploadingImage(false);
+    }
+  }
+
   async function save(event: FormEvent) {
     event.preventDefault();
     setSaving(true);
@@ -81,6 +135,9 @@ export default function CategoryManager({ initialCategories }: { initialCategori
           slug: form.slug || undefined,
           icon: form.icon || null,
           description: form.description || null,
+          // Empty string means "no thumbnail" — the API stores NULL and removes
+          // the previous object.
+          image_url: form.imageUrl || null,
         }),
       });
       const json = await response.json();
@@ -144,10 +201,58 @@ export default function CategoryManager({ initialCategories }: { initialCategori
               <span className="mb-1 block text-[11px] font-medium">Description (optional)</span>
               <textarea value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} maxLength={500} rows={3} className="w-full rounded-md border border-line bg-void px-3 py-2 text-[13px]" placeholder="A short public-facing description." />
             </label>
+
+            {/* ---- Card thumbnail ---- */}
+            <div className="md:col-span-2">
+              <span className="mb-1 block text-[11px] font-medium">Card thumbnail (optional)</span>
+              <div className="flex flex-wrap items-start gap-3 rounded-md border border-dashed border-line bg-void p-3">
+                <div className="w-[168px] shrink-0">
+                  {form.imageUrl ? (
+                    <div className="relative overflow-hidden rounded-md border border-line">
+                      {/* Plain <img>: the URL is arbitrary (Supabase Storage) and already sized by the admin. */}
+                      <img src={form.imageUrl} alt="" className="aspect-video w-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => setForm((current) => ({ ...current, imageUrl: "" }))}
+                        aria-label="Remove category thumbnail"
+                        className="absolute right-1 top-1 rounded bg-black/70 p-1 text-ink hover:text-red-300"
+                      >
+                        <X aria-hidden="true" className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex aspect-video w-full items-center justify-center rounded-md border border-dashed border-line bg-card text-ink-3">
+                      <ImagePlus aria-hidden="true" className="h-5 w-5" />
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-[200px] flex-1">
+                  <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-line bg-card px-3 text-[11.5px] font-medium hover:bg-card-hover">
+                    {uploadingImage ? (
+                      <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ImagePlus aria-hidden="true" className="h-3.5 w-3.5" />
+                    )}
+                    {uploadingImage ? "Uploading…" : form.imageUrl ? "Replace image" : "Upload image"}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/gif,image/webp"
+                      onChange={handleImageInput}
+                      disabled={uploadingImage}
+                      className="sr-only"
+                    />
+                  </label>
+                  <p className="mt-1.5 text-[10.5px] leading-relaxed text-ink-3">
+                    JPG, PNG, GIF, or WebP up to 10 MB. Shown on the category card; when no image is set the card keeps
+                    its icon. Removing the image deletes the stored file when you save.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
           {error && <p className="mt-4 rounded-md bg-red-500/10 p-3 text-[12px] text-red-400">{error}</p>}
           <div className="mt-4 flex gap-3">
-            <button type="submit" disabled={saving} className="inline-flex h-9 items-center rounded-md bg-accent px-4 text-[12px] font-semibold text-white disabled:opacity-50">
+            <button type="submit" disabled={saving || uploadingImage} className="inline-flex h-9 items-center rounded-md bg-accent px-4 text-[12px] font-semibold text-white disabled:opacity-50">
               {saving ? "Saving..." : editing ? "Save changes" : "Create category"}
             </button>
             <button type="button" onClick={closeForm} className="h-9 rounded-md border border-line px-4 text-[12px] text-ink-2 hover:text-ink">Cancel</button>
@@ -157,21 +262,27 @@ export default function CategoryManager({ initialCategories }: { initialCategori
 
       <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {sortedCategories.map((category) => (
-          <article key={category.id} className="rounded-lg border border-line bg-pcard p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[13px] font-medium">{category.label}</p>
-                <p className="mt-1 font-mono text-[10.5px] text-ink-3">/{category.slug}</p>
+          <article key={category.id} className="overflow-hidden rounded-lg border border-line bg-pcard">
+            {category.image_url ? (
+              <img src={category.image_url} alt="" className="aspect-[16/7] w-full object-cover" />
+            ) : null}
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[13px] font-medium">{category.label}</p>
+                  <p className="mt-1 font-mono text-[10.5px] text-ink-3">/{category.slug}</p>
+                </div>
+                <button type="button" onClick={() => openEdit(category)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line px-2.5 text-[11px] text-ink-2 hover:bg-white/5 hover:text-ink">
+                  <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
+                  Edit
+                </button>
               </div>
-              <button type="button" onClick={() => openEdit(category)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line px-2.5 text-[11px] text-ink-2 hover:bg-white/5 hover:text-ink">
-                <Pencil aria-hidden="true" className="h-3.5 w-3.5" />
-                Edit
-              </button>
-            </div>
-            {category.description && <p className="mt-3 line-clamp-2 text-[11px] leading-relaxed text-ink-3">{category.description}</p>}
-            <div className="mt-3 flex gap-3 text-[10.5px] text-ink-3">
-              <span>Icon: {category.icon || "—"}</span>
-              <span>{category.video_count || 0} videos</span>
+              {category.description && <p className="mt-3 line-clamp-2 text-[11px] leading-relaxed text-ink-3">{category.description}</p>}
+              <div className="mt-3 flex gap-3 text-[10.5px] text-ink-3">
+                <span>Icon: {category.icon || "—"}</span>
+                <span>Thumbnail: {category.image_url ? "set" : "—"}</span>
+                <span>{category.video_count || 0} videos</span>
+              </div>
             </div>
           </article>
         ))}
