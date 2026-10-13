@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, direct MP4 video publishing, Resend email, Gemini AI, and SEO optimization.
+Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, direct MP4 video publishing, Resend email, OpenRouter DeepSeek AI metadata (browser-direct), and SEO optimization.
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ Open http://localhost:3000
 - Supabase (Auth, Postgres, Storage, RLS)
 - NOWPayments (crypto payments)
 - Resend (transactional email)
-- Gemini API (server-generated video metadata)
+- OpenRouter — DeepSeek V3.2 (`deepseek/deepseek-v3.2`) for AI video metadata, called directly from the admin browser (public `NEXT_PUBLIC_OPENROUTER_API_KEY`, no backend AI proxy)
 - Direct MP4 URL publishing (no video hosting API needed)
 - Tailwind CSS 4
 

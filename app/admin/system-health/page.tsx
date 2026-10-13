@@ -1,9 +1,9 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { inspectNowpaymentsSetup } from "@/lib/nowpayments/client";
 import { getSiteUrl } from "@/lib/site";
-import { geminiDiagnostics } from "@/lib/gemini/client";
+import { openRouterDiagnostics } from "@/lib/openrouter/browser-client";
 import NowpaymentsCheck from "./NowpaymentsCheck";
-import GeminiCheck from "./GeminiCheck";
+import OpenRouterCheck from "./OpenRouterCheck";
 
 export default async function SystemHealthAdmin() {
   const supabase = createServiceClient();
@@ -42,14 +42,12 @@ export default async function SystemHealthAdmin() {
     }
   }
 
-  // Real Gemini configuration check — reported without calling Google (the
-  // "Test Gemini" button below performs the live probe on demand).
-  const gemini = geminiDiagnostics();
-  const geminiStatus = !gemini.configured
-    ? "Not configured"
-    : gemini.resolvedBackend
-      ? `Verified · ${gemini.resolvedBackend}`
-      : "Configured";
+  // OpenRouter configuration — presence of the public build variable only.
+  // It says nothing about whether the key works: the provider is "untested"
+  // until an admin presses "Test OpenRouter" below, which runs a small live
+  // probe directly from the browser (no backend proxy).
+  const openRouter = openRouterDiagnostics();
+  const openRouterStatus = openRouter.configured ? "Not tested" : "Not configured";
 
   const checks = [
     { name: "Database", status: dbStatus, latency: dbLatency, desc: "Supabase PostgreSQL" },
@@ -63,12 +61,12 @@ export default async function SystemHealthAdmin() {
     },
     { name: "Resend", status: process.env.RESEND_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "Transactional email" },
     {
-      name: "Gemini",
-      status: geminiStatus,
+      name: "OpenRouter",
+      status: openRouterStatus,
       latency: "—",
-      desc: gemini.configured
-        ? `AI metadata assistant · key: ${gemini.keyKind} · model ${gemini.model} (fallback ${gemini.modelCandidates.slice(1).join(", ") || "—"})`
-        : "AI metadata assistant · GEMINI_API_KEY is not set",
+      desc: openRouter.configured
+        ? `AI metadata assistant (browser-direct) · key present in build, not yet verified · model ${openRouter.model}`
+        : `AI metadata assistant · NEXT_PUBLIC_OPENROUTER_API_KEY is not set in this build`,
     },
   ];
 
@@ -92,10 +90,10 @@ export default async function SystemHealthAdmin() {
 
       <NowpaymentsCheck />
 
-      <GeminiCheck />
+      <OpenRouterCheck />
 
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
-        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the NOWPayments API. The video provider uses direct URLs and requires no external API check. Use “Test Gemini” to prove the AI metadata key with a live call.</p>
+        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the NOWPayments API. The video provider uses direct URLs and requires no external API check. Use “Test OpenRouter” to prove the AI metadata key with a live browser-side call.</p>
       </div>
     </div>
   );

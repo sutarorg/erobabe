@@ -1,31 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHarness, jsonRequest, ADMIN_ID, CATEGORY_ID } from "./helpers/video-route-harness";
 import type { FakeDb } from "./helpers/fake-supabase";
 
 /**
  * Tests for the direct-URL publishing route (/api/videos/upload-url).
  *
- * The route validates URLs, generates metadata via Gemini, creates video
- * records with `provider = 'direct_url'`, stores the URL in `playable_url`,
- * and publishes immediately. No hosting-provider API or relay is used.
+ * The route validates URLs, re-validates browser-prepared metadata, creates
+ * video records with `provider = 'direct_url'`, stores the URL in
+ * `playable_url`, and publishes immediately. The backend never calls Gemini,
+ * OpenRouter, or any other AI provider — verified here with a global fetch
+ * spy. No hosting-provider API or relay is used either.
  */
-
-const geminiState = vi.hoisted(() => ({
-  suggest: null as null | ((params: { fileName?: string; category?: string }) => Promise<any>),
-  calls: 0,
-}));
-
-vi.mock("@/lib/gemini/client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/gemini/client")>();
-  return {
-    ...actual,
-    suggestVideoMetadata: async (params: { fileName?: string; category?: string }) => {
-      geminiState.calls += 1;
-      if (!geminiState.suggest) throw new Error("suggestVideoMetadata not stubbed");
-      return geminiState.suggest(params);
-    },
-  };
-});
 
 vi.mock("@/lib/supabase/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/supabase/server")>();
@@ -46,13 +31,16 @@ const harnessState = vi.hoisted(() => ({
 
 import { POST } from "@/app/api/videos/upload-url/route";
 
-function aiSuggestion() {
+const fetchSpy = vi.fn();
+
+/** Browser-prepared AI metadata, as the admin upload page sends it. */
+function preparedMetadata(overrides: Record<string, unknown> = {}) {
   return {
     title: "Evening in Velvet",
     description: "An elegant, slow-paced portrait captured in soft cinematic light.",
     tags: ["mature", "boudoir", "4k"],
-    category: "Boudoir",
-    reasoning: "AI-generated suggestion, requires human review",
+    source: "ai",
+    ...overrides,
   };
 }
 
@@ -64,9 +52,13 @@ function setupHarness(overrides: Partial<FakeDb> = {}) {
 }
 
 beforeEach(() => {
-  geminiState.suggest = null;
-  geminiState.calls = 0;
+  fetchSpy.mockReset();
+  vi.stubGlobal("fetch", fetchSpy);
   setupHarness();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("POST /api/videos/upload-url — authorization", () => {
@@ -77,16 +69,34 @@ describe("POST /api/videos/upload-url — authorization", () => {
     };
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
-      entries: [{ url: "https://cdn.example.com/v.mp4" }],
+      entries: [{ url: "https://cdn.example.com/v.mp4", metadata: preparedMetadata() }],
     });
     const res = await POST(req);
     expect(res.status).toBe(401);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("rejects non-admin users", async () => {
     harnessState.auth = {
       auth: { getUser: async () => ({ data: { user: { id: "non-admin" } } }) },
       from: harnessState.service.from,
+    };
+    const req = jsonRequest("/api/videos/upload-url", {
+      categoryId: CATEGORY_ID,
+      entries: [{ url: "https://cdn.example.com/v.mp4", metadata: preparedMetadata() }],
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects inactive admins", async () => {
+    const harness = setupHarness({
+      profiles: [{ id: ADMIN_ID, role: "admin", status: "suspended" }],
+    });
+    harnessState.auth = {
+      auth: { getUser: async () => ({ data: { user: { id: ADMIN_ID } } }) },
+      from: harness.service.from,
     };
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
@@ -144,10 +154,9 @@ describe("POST /api/videos/upload-url — URL validation", () => {
   });
 
   it("accepts URLs with query strings on valid MP4 paths", async () => {
-    geminiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
-      entries: [{ url: "https://cdn.example.com/video.mp4?token=abc123" }],
+      entries: [{ url: "https://cdn.example.com/video.mp4?token=abc123", metadata: preparedMetadata() }],
     });
     const res = await POST(req);
     expect(res.status).toBe(200);
@@ -157,7 +166,6 @@ describe("POST /api/videos/upload-url — URL validation", () => {
   });
 
   it("accepts uppercase MP4 extension", async () => {
-    geminiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [{ url: "https://cdn.example.com/video.MP4" }],
@@ -202,12 +210,11 @@ describe("POST /api/videos/upload-url — URL validation", () => {
   });
 
   it("deduplicates URLs in a batch", async () => {
-    geminiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [
-        { url: "https://cdn.example.com/v.mp4" },
-        { url: "https://cdn.example.com/v.mp4" },
+        { url: "https://cdn.example.com/v.mp4", metadata: preparedMetadata() },
+        { url: "https://cdn.example.com/v.mp4", metadata: preparedMetadata() },
       ],
     });
     const res = await POST(req);
@@ -236,12 +243,12 @@ describe("POST /api/videos/upload-url — URL validation", () => {
   });
 });
 
-describe("POST /api/videos/upload-url — publishing", () => {
-  it("publishes a valid direct URL as direct_url provider", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+describe("POST /api/videos/upload-url — publishing with prepared metadata", () => {
+  it("publishes a direct URL with browser-prepared metadata and no backend AI call", async () => {
+    const harness = setupHarness();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
-      entries: [{ url: "https://cdn.example.com/clip.mp4" }],
+      entries: [{ url: "https://cdn.example.com/clip.mp4", metadata: preparedMetadata() }],
     });
     const res = await POST(req);
     expect(res.status).toBe(200);
@@ -257,17 +264,22 @@ describe("POST /api/videos/upload-url — publishing", () => {
     expect(result.videoId).toBeTruthy();
     expect(result.metadataSource).toBe("ai");
 
-    // Verify the video record was created correctly.
-    const { db } = harnessState.service.__harness || {};
-    // Look up via the fake DB directly.
+    // Metadata and tags persisted to the database.
+    const video = harness.db.videos.find((entry: any) => entry.id === result.videoId)!;
+    expect(video.title).toBe("Evening in Velvet");
+    expect(video.description).toContain("cinematic light");
+    const links = harness.db.video_tags.filter((entry: any) => entry.video_id === result.videoId);
+    expect(links.length).toBe(3);
+
+    // No second inference request happens on the server.
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("stores the direct URL in playable_url and embed_url as null", async () => {
-    geminiState.suggest = async () => aiSuggestion();
     const harness = setupHarness();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
-      entries: [{ url: "https://video.damplips.com/video7/717/70.mp4" }],
+      entries: [{ url: "https://video.damplips.com/video7/717/70.mp4", metadata: preparedMetadata() }],
     });
     const res = await POST(req);
     const body = await res.json();
@@ -285,10 +297,7 @@ describe("POST /api/videos/upload-url — publishing", () => {
     expect(video.visibility).toBe("public");
   });
 
-  it("falls back to file-name metadata when Gemini fails", async () => {
-    geminiState.suggest = async () => {
-      throw new Error("Gemini quota exceeded");
-    };
+  it("uses deterministic file-name metadata when the client sends none", async () => {
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [{ url: "https://cdn.example.com/evening_in_velvet_4k.mp4" }],
@@ -300,14 +309,56 @@ describe("POST /api/videos/upload-url — publishing", () => {
     expect(body.succeeded).toBe(1);
     expect(body.results[0].metadataSource).toBe("fallback");
     expect(body.results[0].metadataWarning).toMatch(/AI metadata unavailable/);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("reports partial failures in a batch", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+  it("re-validates malformed prepared metadata server-side and falls back", async () => {
+    const harness = setupHarness();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [
-        { url: "https://cdn.example.com/valid.mp4" },
+        {
+          url: "https://cdn.example.com/evening_in_velvet_4k.mp4",
+          metadata: { title: "x", description: "", tags: [], source: "definitely-not-ai" },
+        },
+      ],
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.results[0].metadataSource).toBe("fallback");
+
+    // The malformed payload never reached the database.
+    const video = harness.db.videos.find((entry: any) => entry.id === body.results[0].videoId)!;
+    expect(video.title).toBe("Evening In Velvet 4k");
+    expect(video.title).not.toBe("x");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("clamps an over-long prepared title instead of writing it raw", async () => {
+    const harness = setupHarness();
+    const req = jsonRequest("/api/videos/upload-url", {
+      categoryId: CATEGORY_ID,
+      entries: [
+        {
+          url: "https://cdn.example.com/clip.mp4",
+          metadata: preparedMetadata({ title: "a".repeat(500) }),
+        },
+      ],
+    });
+    const res = await POST(req);
+    const body = await res.json();
+    // Schema rejects >160 outright → deterministic fallback, never a raw write.
+    expect(body.results[0].metadataSource).toBe("fallback");
+    const video = harness.db.videos.find((entry: any) => entry.id === body.results[0].videoId)!;
+    expect(video.title.length).toBeLessThanOrEqual(160);
+  });
+
+  it("reports partial failures in a batch", async () => {
+    const req = jsonRequest("/api/videos/upload-url", {
+      categoryId: CATEGORY_ID,
+      entries: [
+        { url: "https://cdn.example.com/valid.mp4", metadata: preparedMetadata() },
         { url: "ftp://bad.example.com/nope.mp4" },
       ],
     });
@@ -321,23 +372,21 @@ describe("POST /api/videos/upload-url — publishing", () => {
   });
 
   it("never returns secrets in the response", async () => {
-    geminiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
-      entries: [{ url: "https://cdn.example.com/clip.mp4" }],
+      entries: [{ url: "https://cdn.example.com/clip.mp4", metadata: preparedMetadata() }],
     });
     const res = await POST(req);
     const body = await res.json();
     const bodyStr = JSON.stringify(body);
-    expect(bodyStr).not.toMatch(/SUPABASE|SECRET|GEMINI|API_KEY/i);
+    expect(bodyStr).not.toMatch(/SUPABASE|SECRET|OPENROUTER|API_KEY/i);
   });
 
   it("logs the publishing action to audit_logs", async () => {
-    geminiState.suggest = async () => aiSuggestion();
     const harness = setupHarness();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
-      entries: [{ url: "https://cdn.example.com/clip.mp4" }],
+      entries: [{ url: "https://cdn.example.com/clip.mp4", metadata: preparedMetadata() }],
     });
     await POST(req);
 
@@ -349,15 +398,15 @@ describe("POST /api/videos/upload-url — publishing", () => {
   });
 
   it("does not invoke any Streamtape API, relay, or remote-import operation", async () => {
-    geminiState.suggest = async () => aiSuggestion();
     const harness = setupHarness();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
-      entries: [{ url: "https://cdn.example.com/clip.mp4" }],
+      entries: [{ url: "https://cdn.example.com/clip.mp4", metadata: preparedMetadata() }],
     });
     await POST(req);
 
     // No upload jobs should have been created — direct_url publishing is synchronous.
     expect(harness.db.upload_jobs).toHaveLength(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

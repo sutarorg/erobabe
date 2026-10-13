@@ -114,6 +114,20 @@ export function normalizePastedLink(raw: unknown): string {
   return tighten(text);
 }
 
+/**
+ * The source filename derived from a direct video URL — the only media clue
+ * handed to the metadata flow. Query strings, Markdown wrappers and trailing
+ * punctuation never survive this extraction.
+ *
+ * Throws when the value is not a URL (the same contract as the publishing
+ * route's `sourceNameFromUrl`, which delegates here).
+ */
+export function sourceFileNameFrom(value: unknown): string {
+  const url = new URL(normalizePastedLink(value));
+  const name = decodeURIComponent(url.pathname.split("/").pop() || "remote-video");
+  return name.slice(0, 240) || "remote-video";
+}
+
 /** True when the URL path ends in a media-file extension. */
 export function isDirectVideoUrl(raw: string): boolean {
   try {
@@ -168,7 +182,7 @@ const PLAYER_PATH_PATTERN = /^\/(?:embed|embed-|player|player-|e|v|watch)\b/i;
  * - a player/embed page → `embed` (stored in `embed_url`, iframe)
  *
  * Throws an actionable error when the value is neither, so the admin sees the
- * reason inline instead of a silent failure after the Gemini round-trip.
+ * reason inline instead of a silent failure after the publishing round-trip.
  */
 export function classifyVideoSource(raw: unknown): ClassifiedVideoSource {
   const input = String(raw ?? "").trim();

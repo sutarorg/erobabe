@@ -16,9 +16,15 @@
 > **Note (2026-10-11):** this is the historical pre-implementation audit of the original
 > Vite SPA. References to Bcon Global and Groq below describe the providers as they
 > existed at audit time. The active application has since migrated to NOWPayments for
-> cryptocurrency payments and Google's Gemini API for AI metadata — see
+> cryptocurrency payments — see
 > `IMPLEMENTATION_REPORT.md`, `DEPLOYMENT.md`, and `GO_LIVE_CHECKLIST.md` for the
 > current implementation.
+>
+> **Note (2026-10-13):** AI metadata has migrated again — Google's Gemini API was
+> retired and replaced by OpenRouter's DeepSeek V3.2, called directly from the
+> admin browser (`NEXT_PUBLIC_OPENROUTER_API_KEY`, no backend AI proxy). See the
+> 2026-10-13 section at the top of `IMPLEMENTATION_REPORT.md` and `DEPLOYMENT.md`
+> section E.
 
 
 This document inventories the existing repository before transformation.

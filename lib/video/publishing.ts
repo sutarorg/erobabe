@@ -1,7 +1,20 @@
 import { randomUUID } from "crypto";
+import { z } from "zod";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { fallbackSuggestion, redactKeyMaterial, suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
-import { normalizeEmbedSource, normalizePastedLink } from "@/lib/video/links";
+import {
+  fallbackSuggestion,
+  type MetadataSource,
+  type PreparedMetadata,
+  type SuggestedMetadata,
+} from "@/lib/metadata/suggestions";
+import { normalizeEmbedSource, sourceFileNameFrom } from "@/lib/video/links";
+
+/**
+ * The backend never calls Gemini, OpenRouter, or any other AI provider:
+ * metadata is generated in the admin browser and validated here before it
+ * touches the database. When no valid prepared metadata arrives, a
+ * deterministic file-name fallback keeps publishing unblocked.
+ */
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -99,36 +112,65 @@ async function getCategory(service: ServiceClient, categoryId: string) {
 }
 
 /** Where the metadata for a generated video came from. */
-export type MetadataSource = "ai" | "fallback";
+export type { MetadataSource };
 
-export type GeneratedMetadata = {
-  title: string;
-  description: string;
-  tags: string[];
-  /** `fallback` when Gemini could not be used — the admin must review it. */
-  source: MetadataSource;
-  /** Human-readable reason the AI suggestion was unavailable. */
-  warning?: string;
-};
+/**
+ * A metadata payload the admin browser prepared (AI generation or the
+ * deterministic fallback) and sent along with the authorized publishing
+ * request.
+ */
+export type GeneratedMetadata = PreparedMetadata;
 
-/** A metadata payload the admin page prepared while the file was uploading. */
-export function isPreparedMetadata(value: unknown): value is GeneratedMetadata {
-  if (!value || typeof value !== "object") return false;
-  const meta = value as GeneratedMetadata;
-  const title = typeof meta.title === "string" ? meta.title.trim() : "";
-  const description = typeof meta.description === "string" ? meta.description.trim() : "";
-  const tags = Array.isArray(meta.tags) ? meta.tags.filter((tag) => typeof tag === "string" && tag.trim()) : [];
-  return (meta.source === "ai" || meta.source === "fallback") && title.length >= 3 && description.length > 0 && tags.length > 0;
-}
+/**
+ * Type-safe server-side contract for browser-provided metadata.
+ *
+ * Browser data is never trusted implicitly: the payload is schema-validated
+ * (required fields, length limits, allowed `source` values), sanitised
+ * (whitespace, duplicates, empty tags removed, tag count capped), and rejected
+ * outright when anything is off — in which case the deterministic file-name
+ * fallback is used instead.
+ */
+const preparedMetadataSchema = z.object({
+  title: z.string().trim().min(3, "title is too short").max(160, "title is too long"),
+  description: z.string().trim().min(1, "description is required").max(1000, "description is too long"),
+  tags: z.array(z.string().max(50, "tag is too long")).min(1, "at least one tag is required").max(8, "too many tags"),
+  source: z.enum(["ai", "fallback"]),
+  warning: z.string().max(400, "warning is too long").optional(),
+});
 
-function sanitizePreparedMetadata(meta: GeneratedMetadata): GeneratedMetadata {
+function sanitizePreparedMetadata(meta: PreparedMetadata): PreparedMetadata {
   return {
     title: meta.title.replace(/\s+/g, " ").trim().slice(0, 160),
     description: meta.description.replace(/\s+/g, " ").trim().slice(0, 1000),
     tags: normalizeTags(meta.tags),
     source: meta.source,
-    ...(meta.warning ? { warning: String(meta.warning).slice(0, 400) } : {}),
+    // Warnings are admin-facing text — collapse whitespace and cap length.
+    ...(meta.warning
+      ? { warning: String(meta.warning).replace(/\s+/g, " ").trim().slice(0, 400) }
+      : {}),
   };
+}
+
+/**
+ * Validates and sanitises a browser-provided metadata payload.
+ * Returns `null` for anything malformed — callers must then use the
+ * deterministic fallback instead of writing unvalidated data.
+ */
+export function toPreparedMetadata(value: unknown): GeneratedMetadata | null {
+  if (!value || typeof value !== "object") return null;
+  const parsed = preparedMetadataSchema.safeParse(value);
+  if (!parsed.success) return null;
+  const sanitized = sanitizePreparedMetadata(parsed.data);
+  if (sanitized.title.length < 3 || !sanitized.description || !sanitized.tags.length) return null;
+  return sanitized;
+}
+
+/**
+ * A metadata payload the admin page prepared while the file was uploading.
+ * Kept as a type guard for existing callers; implemented via the zod schema.
+ */
+export function isPreparedMetadata(value: unknown): value is GeneratedMetadata {
+  return toPreparedMetadata(value) !== null;
 }
 
 function cleanMetadata(raw: SuggestedMetadata): { title: string; description: string; tags: string[] } {
@@ -140,42 +182,24 @@ function cleanMetadata(raw: SuggestedMetadata): { title: string; description: st
 }
 
 /**
- * Asks Gemini for a title, description, and tags.
+ * Deterministic metadata built from the file name and category.
  *
- * Gemini is an enhancement, not a gate: when it is unavailable, misconfigured,
- * or returns output that cannot be parsed, the upload continues with
- * deterministic metadata built from the file name and category, and the reason
- * is reported back so the admin can review and edit before publishing.
+ * Used whenever the client did not supply a valid prepared result (missing,
+ * malformed, or rejected on re-validation) so publishing is never blocked by
+ * an AI outage — the result is explicitly marked as AI-unavailable and the
+ * admin must review it before it stays public.
  */
-async function generateMetadata(
-  sourceName: string,
-  categoryLabel: string
-): Promise<GeneratedMetadata & { raw: SuggestedMetadata }> {
-  try {
-    const raw = await suggestVideoMetadata({ fileName: sourceName, category: categoryLabel });
-    const cleaned = cleanMetadata(raw);
-    if (cleaned.title && cleaned.description && cleaned.tags.length) {
-      return { ...cleaned, source: "ai", raw };
-    }
-    throw new Error("Gemini returned an incomplete title, description, or tag list");
-  } catch (error: unknown) {
-    // Redacted: the reason is shown in the admin UI and written to logs.
-    const reason = redactKeyMaterial(error instanceof Error ? error.message : "Gemini metadata generation failed");
-    console.warn(`[video-publishing] AI metadata unavailable for "${sourceName}": ${reason}`);
-
-    const raw = fallbackSuggestion(sourceName, categoryLabel);
-    const cleaned = cleanMetadata(raw);
-    if (!cleaned.title || !cleaned.description || !cleaned.tags.length) {
-      throw new Error("Unable to build video metadata — check the file name and category, then try again.");
-    }
-
-    return {
-      ...cleaned,
-      source: "fallback",
-      warning: `AI metadata unavailable (${reason.slice(0, 200)}). File-name metadata was used instead — review the title and description before publishing.`,
-      raw,
-    };
+function fallbackMetadata(sourceName: string, categoryLabel: string): GeneratedMetadata {
+  const cleaned = cleanMetadata(fallbackSuggestion(sourceName, categoryLabel));
+  if (!cleaned.title || !cleaned.description || !cleaned.tags.length) {
+    throw new Error("Unable to build video metadata — check the file name and category, then try again.");
   }
+  return {
+    ...cleaned,
+    source: "fallback",
+    warning:
+      "AI metadata unavailable — deterministic file-name metadata was used instead. Review the title and description before publishing.",
+  };
 }
 
 async function attachTags(service: ServiceClient, videoId: string, tags: string[]) {
@@ -212,9 +236,12 @@ async function attachTags(service: ServiceClient, videoId: string, tags: string[
  * public only after an upload/embed operation succeeds and the admin has
  * clicked Publish in the UI.
  *
- * `prepared` is metadata the admin page already fetched (via the existing
- * suggest route) while the file bytes were in flight. Using it skips a second
- * Gemini call after the file code is known.
+ * `prepared` is metadata the admin browser already generated through the
+ * browser-only OpenRouter client (or its deterministic fallback). Valid
+ * prepared metadata is written as-is after re-validation — the backend never
+ * issues an AI request of its own. When `prepared` is missing or malformed,
+ * deterministic file-name metadata keeps publishing unblocked and marked for
+ * human review.
  */
 export async function createGeneratedVideo({
   service,
@@ -231,16 +258,14 @@ export async function createGeneratedVideo({
   categoryId: string;
   provider: VideoProviderValue;
   thumbnailUrl?: string | null;
-  /** Already generated while the bytes were in flight — skips a second Gemini call. */
+  /** Already generated in the browser — the backend performs no AI call. */
   prepared?: GeneratedMetadata | null;
 }): Promise<{ video: GeneratedVideo; metadata: GeneratedMetadata }> {
   const category = await getCategory(service, categoryId);
-  const preparedMetadata = prepared && isPreparedMetadata(prepared) ? sanitizePreparedMetadata(prepared) : null;
-  // Sanitizing can strip every tag. Fall back to Gemini rather than publishing an untagged row.
-  const metadata =
-    preparedMetadata && preparedMetadata.title.length >= 3 && preparedMetadata.description && preparedMetadata.tags.length
-      ? preparedMetadata
-      : await generateMetadata(sourceName, category.label);
+  const preparedMetadata = toPreparedMetadata(prepared);
+  // Prepared metadata must survive sanitisation (a valid title, description,
+  // and at least one tag) or the deterministic fallback takes over.
+  const metadata = preparedMetadata ?? fallbackMetadata(sourceName, category.label);
   const slugBase = slugify(metadata.title) || "video";
   const slug = `${slugBase}-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
@@ -611,10 +636,8 @@ export function assertPublicHttpUrl(value: string, label = "URL"): string {
 
 export function sourceNameFromUrl(value: string): string {
   // Markdown wrappers and trailing punctuation are stripped first so the file
-  // name Gemini is given never contains them.
-  const url = new URL(normalizePastedLink(value));
-  const name = decodeURIComponent(url.pathname.split("/").pop() || "remote-video");
-  return name.slice(0, 240) || "remote-video";
+  // name handed to the metadata flow never contains them.
+  return sourceFileNameFrom(value);
 }
 
 /**
