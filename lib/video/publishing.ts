@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { suggestVideoMetadata } from "@/lib/metadata/openrouter";
-import { fallbackSuggestion, redactKeyMaterial, type SuggestedMetadata } from "@/lib/metadata/suggestion";
+import { fallbackSuggestion, isValidDescription, redactKeyMaterial, type SuggestedMetadata } from "@/lib/metadata/suggestion";
 import { normalizeEmbedSource, normalizePastedLink } from "@/lib/video/links";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
@@ -119,13 +119,13 @@ export function isPreparedMetadata(value: unknown): value is GeneratedMetadata {
   const title = typeof meta.title === "string" ? meta.title.trim() : "";
   const description = typeof meta.description === "string" ? meta.description.trim() : "";
   const tags = Array.isArray(meta.tags) ? meta.tags.filter((tag) => typeof tag === "string" && tag.trim()) : [];
-  return (meta.source === "ai" || meta.source === "fallback") && title.length >= 3 && description.length > 0 && tags.length > 0;
+  return (meta.source === "ai" || meta.source === "fallback") && title.length >= 3 && isValidDescription(description) && tags.length > 0;
 }
 
 function sanitizePreparedMetadata(meta: GeneratedMetadata): GeneratedMetadata {
   return {
     title: meta.title.replace(/\s+/g, " ").trim().slice(0, 160),
-    description: meta.description.replace(/\s+/g, " ").trim().slice(0, 1000),
+    description: meta.description.replace(/\s+/g, " ").trim(),
     tags: normalizeTags(meta.tags),
     source: meta.source,
     ...(meta.warning ? { warning: String(meta.warning).slice(0, 400) } : {}),
@@ -135,7 +135,7 @@ function sanitizePreparedMetadata(meta: GeneratedMetadata): GeneratedMetadata {
 function cleanMetadata(raw: SuggestedMetadata): { title: string; description: string; tags: string[] } {
   return {
     title: raw.title?.replace(/\s+/g, " ").trim().slice(0, 160),
-    description: raw.description?.replace(/\s+/g, " ").trim().slice(0, 1000),
+    description: raw.description?.replace(/\s+/g, " ").trim(),
     tags: normalizeTags(Array.isArray(raw.tags) ? raw.tags : []),
   };
 }
@@ -155,10 +155,10 @@ async function generateMetadata(
   try {
     const raw = await suggestVideoMetadata({ fileName: sourceName, category: categoryLabel });
     const cleaned = cleanMetadata(raw);
-    if (cleaned.title && cleaned.description && cleaned.tags.length) {
+    if (cleaned.title && isValidDescription(cleaned.description) && cleaned.tags.length) {
       return { ...cleaned, source: "ai", raw };
     }
-    throw new Error("The AI provider returned an incomplete title, description, or tag list");
+    throw new Error("The AI provider returned an incomplete title or tag list, or a description outside the 25-30 word limit");
   } catch (error: unknown) {
     // Redacted: the reason is shown in the admin UI and written to logs.
     const reason = redactKeyMaterial(error instanceof Error ? error.message : "AI metadata generation failed");
@@ -166,7 +166,7 @@ async function generateMetadata(
 
     const raw = fallbackSuggestion(sourceName, categoryLabel);
     const cleaned = cleanMetadata(raw);
-    if (!cleaned.title || !cleaned.description || !cleaned.tags.length) {
+    if (!cleaned.title || !isValidDescription(cleaned.description) || !cleaned.tags.length) {
       throw new Error("Unable to build video metadata — check the file name and category, then try again.");
     }
 
@@ -242,7 +242,7 @@ export async function createGeneratedVideo({
   const preparedMetadata = prepared && isPreparedMetadata(prepared) ? sanitizePreparedMetadata(prepared) : null;
   // Sanitizing can strip every tag. Fall back to the AI provider rather than publishing an untagged row.
   const metadata =
-    preparedMetadata && preparedMetadata.title.length >= 3 && preparedMetadata.description && preparedMetadata.tags.length
+    preparedMetadata && preparedMetadata.title.length >= 3 && isValidDescription(preparedMetadata.description) && preparedMetadata.tags.length
       ? preparedMetadata
       : await generateMetadata(sourceName, category.label);
   const slugBase = slugify(metadata.title) || "video";

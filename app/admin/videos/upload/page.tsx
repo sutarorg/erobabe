@@ -38,6 +38,7 @@ type Item = {
   error?: string;
   metadataWarning?: string;
   title?: string;
+  description?: string;
   slug?: string;
   videoId?: string;
   /** An existing video this link duplicates (from the duplicate detector). */
@@ -279,7 +280,9 @@ export default function UploadPage() {
     patchItem(item.id, {
       phase: "processing",
       waiting: true,
-      detail: isEmbed ? "Embedding the player & generating AI metadata…" : "Generating AI metadata…",
+      detail: isEmbed
+        ? "Embedding the player & generating AI metadata…"
+        : thumbnailPath ? "Generating AI metadata…" : "Selecting a vibrant video frame & generating AI metadata…",
     });
 
     // Direct files go through the direct-URL route; player pages (Streamtape
@@ -312,6 +315,7 @@ export default function UploadPage() {
           ? `${savedAs} · AI metadata unavailable — file-name metadata used, please review`
           : savedAs,
       title: result.title,
+      description: result.description,
       slug: result.slug,
       videoId: result.videoId,
       metadataWarning: result.metadataWarning || undefined,
@@ -422,8 +426,8 @@ export default function UploadPage() {
         <h1 className="text-[20px] font-semibold">Publish videos by link</h1>
         <p className="mt-1 text-[12px] text-ink-3">
           Paste direct video URLs or player-page links below. Erobabe saves the link and plays the video straight from the
-          original host — it does not download, upload, or re-encode the file. You control the category and each
-          video&apos;s optional thumbnail; AI (DeepSeek V3.2 via OpenRouter) generates the title, description, and tags.
+          original host — it does not copy or host the full video file. You control the category and each
+          video&apos;s optional thumbnail; AI (DeepSeek V3.2 via OpenRouter) generates a non-graphic title, a 25–30-word description, and tags.
         </p>
       </div>
 
@@ -479,6 +483,11 @@ export default function UploadPage() {
                 Markdown links, angle-bracket links, and pasted <code className="font-mono">&lt;iframe&gt;</code> code are
                 accepted too — for example{" "}
                 <code className="font-mono">[https://streamtape.com/v/abc/Hands_Only.mp4.ts.mp4](https://streamtape.com/v/abc/Hands_Only.mp4.ts.mp4)</code>.
+              </p>
+              <p className="mt-2 text-[11px] leading-relaxed text-ink-3">
+                No thumbnail uploaded? Direct video files automatically get a sharp, vibrant 1280×720 thumbnail selected
+                from actual video frames. Your uploaded image always takes priority. Embedded player pages do not expose
+                frames; supply an image or a direct file link instead.
               </p>
             </div>
           </div>
@@ -632,6 +641,7 @@ export default function UploadPage() {
                     )}
 
                     {item.title && <p className="mt-1 text-[11px] text-ink-2">Title: {item.title}</p>}
+                    {item.description && <p className="mt-1 text-[11px] leading-relaxed text-ink-3">Description: {item.description}</p>}
                     {item.metadataWarning && (
                       <p role="status" aria-live="polite" className="mt-1.5 text-[10.5px] leading-relaxed text-amber-300">
                         {item.metadataWarning}
@@ -641,7 +651,9 @@ export default function UploadPage() {
                     {item.phase === "idle" && (
                       <p className="mt-1.5 text-[10.5px] text-ink-3">
                         {item.detail}
-                        {!item.thumbnailPreview && item.kind === "direct" && " · No thumbnail chosen? A frame is captured from the video automatically."}
+                        {!item.thumbnailPreview && (item.kind === "direct"
+                          ? " · No thumbnail chosen? A vibrant frame is selected from the video automatically."
+                          : " · Add a thumbnail or use a direct video-file URL for automatic frame capture.")}
                       </p>
                     )}
                     {(item.phase === "uploading" || item.phase === "processing") && (
@@ -732,7 +744,8 @@ export default function UploadPage() {
       </form>
 
       <p className="mt-4 text-[11px] leading-relaxed text-ink-3">
-        Erobabe saves the video URL — it does not download or host the video file. The original video host is responsible
+        Erobabe saves the video URL and fetches frame samples only when generating a thumbnail — it does not copy or host
+        the full video file. The original video host is responsible
         for serving the media. If the remote host blocks hotlinking, expires the URL, or returns non-video content, the
         public player will report the failure to the viewer.
       </p>

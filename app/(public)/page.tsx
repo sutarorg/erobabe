@@ -5,6 +5,7 @@ import Hero from "@/src/components/Hero";
 import VideoSection from "@/src/components/VideoSection";
 import InlineAd from "@/src/components/InlineAd";
 import PublicVideoCard from "@/src/components/PublicVideoCard";
+import FourRowVideoGrid from "@/src/components/FourRowVideoGrid";
 import { getCarouselVideos, getPublicCategories, getPublishedVideos } from "@/lib/public/catalog";
 import { LOGO_URL, type HeroSlide } from "@/src/data/content";
 import type { Metadata } from "next";
@@ -42,7 +43,7 @@ export default async function HomePage({
     ? videos.filter((video) => video.title.toLowerCase().includes(query.toLowerCase()))
     : videos;
 
-  const featuredVideos = mappedVideos.slice(0, 20);
+  const featuredVideos = mappedVideos.slice(0, 16);
   const latestVideos = mappedVideos.slice(0, 16);
   const categoryCards = categories.map((category) => ({
     id: category.id,
@@ -72,7 +73,7 @@ export default async function HomePage({
             </Link>
           </div>
         ) : (
-          <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          <div className="mt-6 grid grid-cols-2 gap-4 @md:grid-cols-3 @lg:grid-cols-4">
             {mappedVideos.map((video) => (
               <PublicVideoCard key={video.slug} video={video} />
             ))}
@@ -107,11 +108,11 @@ export default async function HomePage({
 
       <section className="mt-8">
         <VideoSection title="Featured Videos">
-          <div className="video-grid mt-3.5 grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
+          <FourRowVideoGrid className="video-grid mt-3.5">
             {featuredVideos.map((video) => (
               <PublicVideoCard key={video.slug} video={video} />
             ))}
-          </div>
+          </FourRowVideoGrid>
         </VideoSection>
       </section>
 
@@ -121,11 +122,11 @@ export default async function HomePage({
 
       <section className="mt-8">
         <VideoSection title="Latest Videos">
-          <div className="video-grid mt-3.5 grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
+          <FourRowVideoGrid className="video-grid mt-3.5">
             {latestVideos.map((video) => (
               <PublicVideoCard key={video.slug} video={video} />
             ))}
-          </div>
+          </FourRowVideoGrid>
         </VideoSection>
       </section>
     </div>

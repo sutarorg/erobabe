@@ -195,8 +195,11 @@ describe("admin upload page — publishing", () => {
           videoId: "vid-1",
           slug: "video-1",
           title: "Test Video",
+          description: "Mature video available in the erobabe library. Explore this listing and discover related videos in the same category, with straightforward navigation and convenient playback controls.",
           status: "published",
           metadataSource: "ai",
+          thumbnailSource: "frame",
+          thumbnailUrl: "https://cdn.example.com/automatic-frame.jpg",
         },
       ],
       succeeded: 1,
@@ -368,8 +371,11 @@ describe("admin upload page — link formats and routing", () => {
           videoId: "vid-1",
           slug: "video-1",
           title: "Test Video",
+          description: "Mature video available in the erobabe library. Explore this listing and discover related videos in the same category, with straightforward navigation and convenient playback controls.",
           status: "published",
           metadataSource: "ai",
+          thumbnailSource: "frame",
+          thumbnailUrl: "https://cdn.example.com/automatic-frame.jpg",
         },
       ],
       succeeded: 1,
@@ -391,6 +397,7 @@ describe("admin upload page — link formats and routing", () => {
 
     await waitFor(() => expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy());
     expect(screen.getByText(/Direct video file on cdn\.example\.com/)).toBeTruthy();
+    expect(screen.getByText(/25–30-word description/)).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
@@ -405,5 +412,8 @@ describe("admin upload page — link formats and routing", () => {
         })
       );
     });
+    expect(await screen.findByRole("img", { name: "Automatic thumbnail from a video frame" }))
+      .toHaveAttribute("src", "https://cdn.example.com/automatic-frame.jpg");
+    expect(screen.getByText(/Description: Mature video available/)).toBeTruthy();
   });
 });

@@ -72,20 +72,20 @@ export default function VideoPage({
 
   const others = useMemo(() => VIDEOS.filter((v) => v.id !== video.id), [video.id]);
 
-  /* 20 each → 4 rows × 5 columns */
+  /* Up to 16 each → four rows with at most four columns. */
   const moreLikeThis = useMemo(() => {
     const same = others.filter((v) => v.category === video.category);
     const rest = others.filter((v) => v.category !== video.category);
-    return [...same, ...rest].slice(0, 20);
+    return [...same, ...rest].slice(0, 16);
   }, [others, video.category]);
 
   const recommended = useMemo(
-    () => seededOrder(others, video.id).slice(0, 20),
+    () => seededOrder(others, video.id).slice(0, 16),
     [others, video.id]
   );
 
   const topRated = useMemo(
-    () => [...others].sort((a, b) => b.rating - a.rating || b.viewsNum - a.viewsNum).slice(0, 20),
+    () => [...others].sort((a, b) => b.rating - a.rating || b.viewsNum - a.viewsNum).slice(0, 16),
     [others]
   );
 
@@ -207,7 +207,7 @@ export default function VideoPage({
         Demo watch page — the player is a placeholder. No media is hosted or streamed.
       </p>
 
-      {/* 4 rows × 5 columns each */}
+      {/* Four rows, at most four columns each. */}
       <GridSection title="More like this" sub={video.category} videos={moreLikeThis} onOpen={onOpen} />
       <GridSection title="Recommended" sub="Picked for you" videos={recommended} onOpen={onOpen} />
       <GridSection title="Top Rated" sub="Highest rated right now" videos={topRated} onOpen={onOpen} />

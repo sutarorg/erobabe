@@ -91,7 +91,11 @@ export async function POST(req: NextRequest) {
           videoId: generated.video.id,
           slug: video.slug,
           title: video.title,
+          description: generated.metadata.description,
           status: "published",
+          thumbnailUrl,
+          thumbnailSource: thumbnailUrl ? "uploaded" : "none",
+          ...(!thumbnailUrl ? { thumbnailWarning: "Embedded players do not expose video frames. Add a thumbnail manually or use a direct video-file URL for automatic capture." } : {}),
           metadataSource: generated.metadata.source,
           ...(generated.metadata.warning ? { metadataWarning: generated.metadata.warning } : {}),
         });

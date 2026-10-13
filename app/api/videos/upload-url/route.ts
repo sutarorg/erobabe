@@ -9,7 +9,7 @@ import {
   requireActiveAdmin,
   sourceNameFromUrl,
 } from "@/lib/video/publishing";
-import { resolveThumbnailUrl } from "@/lib/video/storage";
+import { removeThumbnailObject, resolveThumbnailUrl } from "@/lib/video/storage";
 import { normalizeRemoteEntries } from "@/lib/video/entries";
 import { classifyVideoSource, normalizePastedLink } from "@/lib/video/links";
 import { describeDuplicate, findDuplicateVideos, sourceKeyOf } from "@/lib/video/duplicates";
@@ -21,7 +21,8 @@ const MAX_URLS_PER_REQUEST = 20;
  * Frame capture downloads part of the video, so one publish request may take a
  * while on a large batch. Raised for serverless hosts that enforce a limit.
  */
-export const maxDuration = 60;
+export const runtime = "nodejs";
+export const maxDuration = 300;
 
 /**
  * Validates that the URL path ends with a video extension (case-insensitive).
@@ -64,8 +65,8 @@ function assertVideoUrl(urlString: string): string {
  *
  * The admin pastes direct video-file links. The URL is stored in
  * `videos.playable_url` and the browser plays the video straight from the
- * original host — Erobabe never downloads, transfers, or re-encodes the
- * video bytes.
+ * original host. Only frame samples are fetched to make a thumbnail; the
+ * full video is never copied to storage or re-encoded.
  *
  * `embed_url` is NULL for direct-link videos — they use a native `<video>`
  * player, not an iframe.
@@ -143,6 +144,7 @@ export async function POST(req: NextRequest) {
 
     for (const entry of validEntries) {
       let videoId: string | null = null;
+      let generatedThumbnailUrl: string | null = null;
 
       const duplicate = duplicates.get(entry.url);
       if (duplicate && !entry.allowDuplicate) {
@@ -171,6 +173,7 @@ export async function POST(req: NextRequest) {
           try {
             thumbnailUrl = await generateFrameThumbnail(service, user.id, entry.url);
             thumbnailSource = "frame";
+            generatedThumbnailUrl = thumbnailUrl;
           } catch (frameError) {
             thumbnailWarning = `Automatic thumbnail failed (${errorMessageFrom(frameError, "unknown error")}). Add one manually from the video list.`;
           }
@@ -217,6 +220,7 @@ export async function POST(req: NextRequest) {
           videoId: generated.video.id,
           slug: video.slug,
           title: video.title,
+          description: generated.metadata.description,
           status: "published",
           metadataSource: generated.metadata.source,
           ...(generated.metadata.warning ? { metadataWarning: generated.metadata.warning } : {}),
@@ -225,6 +229,8 @@ export async function POST(req: NextRequest) {
           ...(thumbnailWarning ? { thumbnailWarning } : {}),
         });
       } catch (publishError: unknown) {
+        // If record creation failed, no row owns the generated storage object.
+        if (!videoId && generatedThumbnailUrl) await removeThumbnailObject(service, generatedThumbnailUrl);
         if (videoId) {
           await failUpload({
             service,

@@ -196,7 +196,8 @@ async function chatCompletion(prompt: string, model: string, key: string, option
 
 /**
  * Asks the model for title, description, tags, and category for one file.
- * Retries once with a larger budget when the reply is empty or truncated.
+ * Retries once with corrective feedback when the reply is incomplete, outside
+ * the description word limit, empty, or truncated.
  */
 export async function suggestVideoMetadata(params: SuggestMetadataParams): Promise<SuggestedMetadata> {
   const key = openRouterApiKey();
@@ -204,6 +205,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
 
   const model = openRouterModelName();
   const prompt = buildPrompt(params);
+  let correction = "";
   const baseTokens = suggestionOutputTokens();
   let lastError: MetadataError | null = null;
 
@@ -211,7 +213,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
     const maxTokens = attempt === 0 ? baseTokens : Math.min(baseTokens * 2, 16_384);
     let result: ChatResult;
     try {
-      result = await chatCompletion(prompt, model, key, {
+      result = await chatCompletion(prompt + correction, model, key, {
         maxTokens,
         temperature: attempt === 0 ? 0.7 : 0.2,
       });
@@ -242,6 +244,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
     const validation = validateSuggestionPayload(result.text, params.category);
     if (validation.ok) return validation.suggestion;
 
+    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object that meets every requirement, including a description of 25-30 words.\n`;
     const truncated = result.finishReason === "length" && !parseLooseJson(result.text);
     lastError = new MetadataError(
       truncated

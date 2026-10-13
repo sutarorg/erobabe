@@ -218,8 +218,8 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
     return { eyebrow: "Top Rated", title: routeCategory ?? "Top Rated All" };
   }, [isSearching, query, page, routeCategory]);
 
-  /** Featured: 4 rows × 5 columns = 20. Latest: 4 rows × 4 columns = 16. */
-  const featuredVideos = useMemo(() => FEATURED_VIDEOS.slice(0, 20), []);
+  /** Featured and Latest: four rows with at most four columns (16 cards). */
+  const featuredVideos = useMemo(() => FEATURED_VIDEOS.slice(0, 16), []);
   const latestVideos = useMemo(() => LATEST_VIDEOS.slice(0, 16), []);
 
   const toggleLike = useCallback((id: string) => {
@@ -341,13 +341,12 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
               />
             </section>
 
-            {/* Featured — 20 scenes in 4 rows × 5 columns, no horizontal scroll */}
+            {/* Featured — 16 scenes in 4 rows × 4 columns, no horizontal scroll */}
             <section ref={featuredRef} className="mt-8 scroll-mt-[68px]">
               <VideoSection title="Featured Videos">
                 <VideoGrid
                   videos={featuredVideos}
                   onOpen={openVideo}
-                  maxColumns={5}
                   className="video-grid mt-3.5"
                 />
               </VideoSection>
@@ -364,7 +363,6 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
                 <VideoGrid
                   videos={latestVideos}
                   onOpen={openVideo}
-                  maxColumns={4}
                   className="video-grid mt-3.5"
                 />
               </VideoSection>
