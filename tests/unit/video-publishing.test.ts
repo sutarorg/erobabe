@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { SuggestedMetadata } from "@/lib/metadata/suggestion";
+import { isValidDescription, type SuggestedMetadata } from "@/lib/metadata/suggestion";
 import { createFakeSupabase } from "./helpers/fake-supabase";
 
 /**
@@ -54,7 +54,7 @@ function seedDb() {
 function aiSuggestion(overrides: Partial<SuggestedMetadata> = {}): SuggestedMetadata {
   return {
     title: "Evening in Velvet",
-    description: "An elegant, slow-paced portrait captured in soft cinematic light.",
+    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings.",
     tags: ["mature", "boudoir", "4k"],
     category: "Boudoir",
     reasoning: "AI-generated suggestion, requires human review",
@@ -102,7 +102,8 @@ describe("createGeneratedVideo metadata", () => {
     expect(metadata.source).toBe("fallback");
     expect(metadata.warning).toMatch(/AI metadata unavailable/);
     expect(metadata.title).toBe("Evening In Velvet");
-    expect(metadata.description).toMatch(/replace it before publishing/);
+    expect(isValidDescription(metadata.description)).toBe(true);
+    expect(metadata.description).not.toContain("AI metadata");
     expect(metadata.tags).toContain("boudoir");
     expect(video.title).toBe("Evening In Velvet");
   });
@@ -153,7 +154,7 @@ describe("createGeneratedVideo metadata", () => {
 
     const prepared = {
       title: "Already Written",
-      description: "Prepared while the bytes were in flight.",
+      description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings.",
       tags: ["mature", "4k"],
       source: "ai" as const,
     };
@@ -184,6 +185,36 @@ describe("createGeneratedVideo metadata", () => {
     });
 
     expect(aiState.calls).toBe(1);
+    expect(metadata.title).toBe("Evening in Velvet");
+  });
+
+  it.each([24, 31])("uses a valid fallback instead of publishing a %i-word AI description", async (count) => {
+    aiState.suggest = async () => aiSuggestion({ description: Array(count).fill("word").join(" ") });
+    const { video, metadata } = await createGeneratedVideo({
+      service: dbState.client as never,
+      userId: "admin-1",
+      sourceName: "clip.mp4",
+      categoryId: CATEGORY_ID,
+      provider: "direct_url",
+    });
+    expect(metadata.source).toBe("fallback");
+    expect(metadata.warning).toContain("25-30 word limit");
+    expect(isValidDescription(metadata.description)).toBe(true);
+    expect(video.description).toBe(metadata.description);
+  });
+
+  it("regenerates prepared metadata whose description is outside the word limit", async () => {
+    aiState.suggest = async () => aiSuggestion();
+    const { metadata } = await createGeneratedVideo({
+      service: dbState.client as never,
+      userId: "admin-1",
+      sourceName: "clip.mp4",
+      categoryId: CATEGORY_ID,
+      provider: "direct_url",
+      prepared: { title: "Already Written", description: "Too short.", tags: ["mature"], source: "ai" },
+    });
+    expect(aiState.calls).toBe(1);
+    expect(isValidDescription(metadata.description)).toBe(true);
     expect(metadata.title).toBe("Evening in Velvet");
   });
 

@@ -31,7 +31,7 @@ function fakeSupabase(row: Record<string, any>) {
     insert: async () => ({ data: null, error: null }),
     // Awaiting the chain directly (the related-videos query) yields a list.
     then: (resolve: (value: unknown) => unknown) =>
-      Promise.resolve({ data: [row], error: null }).then(resolve),
+      Promise.resolve({ data: Array.from({ length: 20 }, (_, index) => ({ ...row, id: `related-${index}`, slug: `related-${index}` })), error: null }).then(resolve),
   };
   return { from: () => builder };
 }
@@ -70,6 +70,18 @@ describe("/video/[slug] watch page", () => {
     expect(html).toContain("2 days ago");
     expect(html).not.toMatch(/\d{1,2}\/\d{1,2}\/\d{2,4}/);
     expect(html).not.toContain("published_at");
+  });
+
+  it("uses the shared four-row grid for More like this, with no five-column layout", async () => {
+    const html = await renderPage();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const grid = doc.querySelector("[data-grid-rows='4']") as HTMLElement;
+    expect(html).toContain("More like this");
+    expect(html).not.toContain("grid-cols-5");
+    expect(grid).toBeTruthy();
+    // The no-JS/SSR layout starts at two columns, therefore eight cards.
+    expect(grid.style.gridTemplateColumns).toBe("repeat(2, minmax(0, 1fr))");
+    expect(grid.children).toHaveLength(8);
   });
 
   it("renders Like and Share buttons", async () => {

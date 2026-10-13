@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { isValidDescription } from "@/lib/metadata/suggestion";
 import { openRouterDiagnostics, probeOpenRouter, suggestVideoMetadata } from "@/lib/metadata/openrouter";
 
 /**
@@ -35,7 +36,7 @@ suite("OpenRouter live API", () => {
     const suggestion = await suggestVideoMetadata({ fileName: "Hands_Only.mp4.ts.mp4", category: "Boudoir" });
     console.log("[live-openrouter] suggestion:", suggestion);
     expect(suggestion.title.length).toBeGreaterThan(2);
-    expect(suggestion.description.length).toBeGreaterThan(0);
+    expect(isValidDescription(suggestion.description)).toBe(true);
     expect(suggestion.tags.length).toBeGreaterThan(0);
     expect(suggestion.category).toBeTruthy();
   }, 60_000);

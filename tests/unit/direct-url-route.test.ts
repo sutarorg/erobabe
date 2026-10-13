@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createHarness, jsonRequest, ADMIN_ID, CATEGORY_ID } from "./helpers/video-route-harness";
+import { isValidDescription } from "@/lib/metadata/suggestion";
 import type { FakeDb } from "./helpers/fake-supabase";
 
 /**
@@ -55,11 +56,12 @@ vi.mock("@/lib/video/frame-thumbnail", () => ({
 }));
 
 import { POST } from "@/app/api/videos/upload-url/route";
+import { POST as publishEmbed } from "@/app/api/videos/embed/route";
 
 function aiSuggestion() {
   return {
     title: "Evening in Velvet",
-    description: "An elegant, slow-paced portrait captured in soft cinematic light.",
+    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings.",
     tags: ["mature", "boudoir", "4k"],
     category: "Boudoir",
     reasoning: "AI-generated suggestion, requires human review",
@@ -76,6 +78,8 @@ function setupHarness(overrides: Partial<FakeDb> = {}) {
 beforeEach(() => {
   aiState.suggest = null;
   aiState.calls = 0;
+  frameState.calls = [];
+  frameState.generate = async () => "https://cdn.example.com/video-thumbnails/auto.jpg";
   setupHarness();
 });
 
@@ -425,6 +429,37 @@ describe("POST /api/videos/upload-url — duplicate detector and automatic thumb
     expect(harness.db.videos[0].thumbnail_url).toBe("https://cdn.example.com/video-thumbnails/auto.jpg");
   });
 
+  it("preserves an admin-uploaded thumbnail and never attempts automatic capture", async () => {
+    aiState.suggest = async () => aiSuggestion();
+    const harness = setupHarness();
+    const res = await POST(jsonRequest("/api/videos/upload-url", {
+      categoryId: CATEGORY_ID,
+      entries: [{ url: "https://cdn.example.com/custom.mp4", thumbnailPath: `${ADMIN_ID}/custom.jpg` }],
+    }));
+    const body = await res.json();
+    expect(body.results[0].thumbnailSource).toBe("uploaded");
+    expect(body.results[0].thumbnailUrl).toBe(`https://cdn.example.com/video-thumbnails/${ADMIN_ID}/custom.jpg`);
+    expect(frameState.calls).toEqual([]);
+    expect(harness.db.videos[0].thumbnail_url).toBe(body.results[0].thumbnailUrl);
+    expect(isValidDescription(body.results[0].description)).toBe(true);
+    expect(harness.db.videos[0].description).toBe(body.results[0].description);
+  });
+
+  it("cleans up an automatic thumbnail if no video record could be created", async () => {
+    aiState.suggest = async () => aiSuggestion();
+    const harness = setupHarness();
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null });
+    harness.service.storage.from = () => ({ remove });
+    frameState.generate = async () => `https://cdn.example.com/video-thumbnails/${ADMIN_ID}/auto.jpg`;
+    const res = await POST(jsonRequest("/api/videos/upload-url", {
+      categoryId: "invalid-category",
+      entries: [{ url: "https://cdn.example.com/orphan.mp4" }],
+    }));
+    expect(res.status).toBe(422);
+    expect(harness.db.videos).toHaveLength(0);
+    expect(remove).toHaveBeenCalledWith([`${ADMIN_ID}/auto.jpg`]);
+  });
+
   it("still publishes, with a warning, when frame capture fails", async () => {
     aiState.suggest = async () => aiSuggestion();
     frameState.generate = async () => {
@@ -440,5 +475,36 @@ describe("POST /api/videos/upload-url — duplicate detector and automatic thumb
     expect(body.results[0].thumbnailSource).toBe("none");
     expect(body.results[0].thumbnailWarning).toMatch(/No usable frame/);
     expect(harness.db.videos[0].thumbnail_url).toBeNull();
+  });
+});
+
+
+describe("embed publishing — thumbnail limitations and description length", () => {
+  it("reports missing frame access instead of silently promising an automatic thumbnail", async () => {
+    aiState.suggest = async () => aiSuggestion();
+    const harness = setupHarness();
+    const res = await publishEmbed(jsonRequest("/api/videos/embed", {
+      categoryId: CATEGORY_ID,
+      entries: [{ source: "https://player.example.com/embed/clip" }],
+    }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.results[0].thumbnailSource).toBe("none");
+    expect(body.results[0].thumbnailWarning).toMatch(/direct video-file URL/);
+    expect(isValidDescription(body.results[0].description)).toBe(true);
+    expect(harness.db.videos[0].description).toBe(body.results[0].description);
+    expect(frameState.calls).toEqual([]);
+  });
+
+  it("preserves an embed's supplied image without showing a capture warning", async () => {
+    aiState.suggest = async () => aiSuggestion();
+    const res = await publishEmbed(jsonRequest("/api/videos/embed", {
+      categoryId: CATEGORY_ID,
+      entries: [{ source: "https://player.example.com/embed/clip", thumbnailPath: `${ADMIN_ID}/custom.jpg` }],
+    }));
+    const body = await res.json();
+    expect(body.results[0].thumbnailSource).toBe("uploaded");
+    expect(body.results[0].thumbnailWarning).toBeUndefined();
+    expect(frameState.calls).toEqual([]);
   });
 });

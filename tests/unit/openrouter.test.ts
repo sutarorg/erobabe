@@ -35,7 +35,7 @@ const fetchMock = vi.fn();
 function modelOutput(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
     title: "Evening in Velvet",
-    description: "An elegant, slow-paced portrait captured in soft cinematic light.",
+    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings.",
     tags: ["mature", "boudoir", "4k"],
     category: "Boudoir",
     ...overrides,
@@ -183,6 +183,26 @@ describe("suggestVideoMetadata", () => {
     expect(suggestion.title).toBe("Evening in Velvet");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sentBody(1).max_tokens).toBe(4096);
+  });
+
+  it("retries an incorrect word count with corrective feedback", async () => {
+    fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ description: "A short catalog description." })))
+      .mockResolvedValueOnce(chatReply(modelOutput()));
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(suggestion.description.split(/\s+/)).toHaveLength(26);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const messages = sentBody(1).messages as Array<{ content: string }>;
+    expect(messages[0].content).toContain("previous suggestion failed validation");
+    expect(messages[0].content).toContain("description must contain 25-30 words");
+  });
+
+  it("rejects repeatedly overlong descriptions rather than silently accepting them", async () => {
+    fetchMock.mockImplementation(async () => chatReply(modelOutput({ description: Array(31).fill("word").join(" ") })));
+    const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
+    expect(error).toBeInstanceOf(MetadataError);
+    expect(error.code).toBe("bad_output");
+    expect(error.message).toContain("25-30 words");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("reports a truncated reply as truncated, not as malformed JSON", async () => {

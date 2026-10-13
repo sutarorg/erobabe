@@ -36,8 +36,34 @@ Open http://localhost:3000
 
 Videos are published by pasting direct MP4 URLs into the admin panel
 (`/admin/videos/upload`). Erobabe saves the link and plays the video straight
-from the original host — it never downloads, transfers, or re-encodes the
-video file. No hosting-provider credentials, relay, or upload service is needed.
+from the original host — it does not copy or host the full video file. Only
+frame samples are fetched when generating a thumbnail. No hosting-provider
+credentials, relay, or video-upload service is needed.
+
+### Thumbnails, metadata, and video grids
+
+- If no image is uploaded for a direct video link, ffmpeg automatically samples
+  frames, rejects blank/dark/washed-out candidates, scores detail, contrast,
+  colour, and exposure, and saves a vibrant 1280×720 JPEG. Uploaded images
+  take priority; bulk generation also preserves images uploaded during capture.
+- Capture needs a Node.js host that can execute the bundled ffmpeg binary (or
+  `FFMPEG_PATH`), reach the media URL, and write to Supabase's public
+  `video-thumbnails` bucket. Unreachable or unusable footage produces an admin
+  warning, not a fabricated image. Embed-only player pages need a supplied
+  image or a direct video-file link; they do not expose frames to this app.
+- AI titles are descriptive, search-friendly, and non-graphic, up to 160
+  characters. Generated descriptions **must contain 25–30 words**. Invalid AI
+  descriptions are retried with feedback; prepared metadata and deterministic
+  fallbacks obey the same limit. AI failure notices remain in the admin UI,
+  not the public description. These rules apply to newly generated metadata,
+  not a retroactive rewrite of existing records.
+- “More like this”, Featured, and Latest sections share a responsive four-row
+  grid with at most four columns (16 cards). At narrower widths the visible
+  count follows the column count, preventing a fifth row. The legacy
+  five-column video mode has been removed.
+
+Visual-quality scoring is a thumbnail heuristic, not a guarantee of increased
+click-through or conversion rates. Review generated metadata and images.
 
 ## Routes
 

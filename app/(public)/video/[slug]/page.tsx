@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
 import VideoActions from "@/src/components/VideoActions";
+import FourRowVideoGrid from "@/src/components/FourRowVideoGrid";
+import { LOGO_URL } from "@/src/data/content";
 import { Eye } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -80,7 +82,7 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
     .eq("status", "published")
     .eq("visibility", "public")
     .neq("id", video.id)
-    .limit(20);
+    .limit(16);
 
   const videoJsonLd = {
     "@context": "https://schema.org",
@@ -187,11 +189,11 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
       {related && related.length > 0 && (
         <section className="mt-8 border-t border-line pt-5">
           <h2 className="text-[15px] font-semibold">More like this</h2>
-          <div className="mt-3.5 grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          <FourRowVideoGrid className="video-grid mt-3.5">
             {related.map((v: any) => (
-              <Link key={v.id} href={`/video/${v.slug}`} className="group">
+              <Link key={v.id} href={`/video/${v.slug}`} className="group min-w-0">
                 <div className="relative aspect-video overflow-hidden rounded-lg border border-line bg-card">
-                  <img src={v.thumbnail_url} alt={v.title} className="h-full w-full object-cover group-hover:scale-105 transition-transform" loading="lazy" />
+                  <img src={v.thumbnail_url || LOGO_URL} alt={v.title} className="h-full w-full object-cover group-hover:scale-105 transition-transform" loading="lazy" />
                   {v.duration_seconds && (
                     <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">
                       {formatDuration(v.duration_seconds)}
@@ -201,7 +203,7 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
                 <p className="mt-1.5 line-clamp-2 text-[12px] font-medium leading-tight group-hover:text-accent">{v.title}</p>
               </Link>
             ))}
-          </div>
+          </FourRowVideoGrid>
         </section>
       )}
     </div>

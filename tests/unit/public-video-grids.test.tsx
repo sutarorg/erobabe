@@ -16,8 +16,12 @@ const video: PublicVideo = {
   category_slug: "couples",
 };
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), notFound: () => { throw new Error("not found"); } }));
+
 vi.mock("@/lib/public/catalog", () => ({
   getPublishedVideos: async () => [video],
+  getCarouselVideos: async () => [],
+  getPublicCategories: async () => [],
   getPopularVideos: async () => [video],
   getCategoryBySlug: async () => ({
     category: { id: "1", slug: "couples", label: "Couples", icon: "heart" },
@@ -25,10 +29,11 @@ vi.mock("@/lib/public/catalog", () => ({
   }),
 }));
 
-const [latest, popular, category] = await Promise.all([
+const [latest, popular, category, home] = await Promise.all([
   import("@/app/(public)/latest/page"),
   import("@/app/(public)/popular/page"),
   import("@/app/(public)/category/[slug]/page"),
+  import("@/app/(public)/page"),
 ]);
 
 describe("public listing grids and video cards", () => {
@@ -45,6 +50,19 @@ describe("public listing grids and video cards", () => {
     expect(html).toContain("lucide-eye");
     expect(html).toContain(`dateTime="${video.published_at}"`);
     expect(html).not.toContain("<span>Couples</span>");
+  });
+
+  it("uses the same four-row component for both homepage video sections", async () => {
+    const html = renderToStaticMarkup(await home.default({ searchParams: Promise.resolve({}) }));
+    expect(html.match(/data-grid-rows="4"/g)).toHaveLength(2);
+    expect(html).not.toContain("grid-cols-5");
+    expect(html).not.toContain("repeat(auto-fill");
+  });
+
+  it("removes the old five-column layout from search results too", async () => {
+    const html = renderToStaticMarkup(await home.default({ searchParams: Promise.resolve({ q: "First" }) }));
+    expect(html).toContain("@lg:grid-cols-4");
+    expect(html).not.toContain("grid-cols-5");
   });
 
   it("shows zero views, a safe fallback for missing publication dates, and omits category from card", async () => {

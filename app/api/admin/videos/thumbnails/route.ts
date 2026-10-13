@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { errorMessageFrom, httpErrorStatus, requireActiveAdmin } from "@/lib/video/publishing";
 import { generateFrameThumbnail } from "@/lib/video/frame-thumbnail";
+import { removeThumbnailObject } from "@/lib/video/storage";
 import { revalidatePublicTag } from "@/lib/public/revalidate";
 
 /**
@@ -9,7 +10,8 @@ import { revalidatePublicTag } from "@/lib/public/revalidate";
  * so an admin's own image is never overwritten.
  */
 
-export const maxDuration = 60;
+export const runtime = "nodejs";
+export const maxDuration = 300;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PER_REQUEST = 10;
@@ -27,14 +29,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "A valid video id is required" }, { status: 400 });
     }
 
+    const uniqueIds = [...new Set(ids)];
     const { data, error } = await service
       .from("videos")
       .select("id, slug, title, thumbnail_url, playable_url, provider")
-      .in("id", ids);
+      .in("id", uniqueIds);
     if (error) throw error;
 
     const results: Array<Record<string, unknown>> = [];
-    for (const id of ids) {
+    for (const id of uniqueIds) {
       const video = ((data || []) as any[]).find((row) => String(row.id) === id);
       if (!video) {
         results.push({ id, status: "failed", error: "Video not found" });
@@ -49,20 +52,39 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
+      let thumbnailUrl: string | null = null;
       try {
-        const thumbnailUrl = await generateFrameThumbnail(service, user.id, String(video.playable_url));
-        const { error: updateError } = await service.from("videos").update({ thumbnail_url: thumbnailUrl }).eq("id", id);
+        thumbnailUrl = await generateFrameThumbnail(service, user.id, String(video.playable_url));
+        // A manual upload may finish while ffmpeg runs. Never overwrite it.
+        const { data: updated, error: updateError } = await service.from("videos")
+          .update({ thumbnail_url: thumbnailUrl })
+          .eq("id", id)
+          .is("thumbnail_url", null)
+          .select("id")
+          .maybeSingle();
         if (updateError) throw updateError;
-        await service.from("audit_logs").insert({
-          actor_id: user.id,
-          action: "video_thumbnail_generated",
-          target_type: "video",
-          target_id: id,
-          level: "info",
-          metadata: { slug: video.slug, source: "frame" },
-        });
+        if (!updated) {
+          await removeThumbnailObject(service, thumbnailUrl);
+          results.push({ id, status: "skipped", error: "Video was removed or a thumbnail was added while generation was running" });
+          continue;
+        }
+        // A logging outage must not undo a thumbnail already saved to the row.
+        try {
+          const { error: auditError } = await service.from("audit_logs").insert({
+            actor_id: user.id,
+            action: "video_thumbnail_generated",
+            target_type: "video",
+            target_id: id,
+            level: "info",
+            metadata: { slug: video.slug, source: "frame" },
+          });
+          if (auditError) console.warn(`[video-thumbnails] Thumbnail saved, but audit logging failed for ${id}`);
+        } catch {
+          console.warn(`[video-thumbnails] Thumbnail saved, but audit logging failed for ${id}`);
+        }
         results.push({ id, status: "generated", thumbnailUrl });
       } catch (frameError) {
+        if (thumbnailUrl) await removeThumbnailObject(service, thumbnailUrl);
         results.push({ id, status: "failed", error: errorMessageFrom(frameError, "Frame capture failed") });
       }
     }

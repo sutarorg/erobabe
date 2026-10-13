@@ -39,7 +39,7 @@ export default function InfiniteVideoGrid({
   maxRows = 24,
 }: InfiniteVideoGridProps) {
   const gridRef = useRef<HTMLDivElement>(null);
-  const columns = useContainerColumns(gridRef, 5);
+  const columns = useContainerColumns(gridRef);
   const [rows, setRows] = useState(GRID_ROWS);
   const [loading, setLoading] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
