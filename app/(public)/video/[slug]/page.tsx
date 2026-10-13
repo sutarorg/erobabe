@@ -118,7 +118,7 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
         ← Back to home
       </Link>
 
-      {/* Prefer direct media URLs to avoid third-party embed ads when available. The iframe sandbox blocks popups and top-level navigation while retaining scripts and presentation needed by most players. */}
+      {/* Prefer direct media URLs when available. Third-party players may reject sandboxed iframes; keep the provider's normal embed context so its player can initialize. */}
       <div className="relative mt-3 aspect-video overflow-hidden rounded-xl border border-line bg-black">
         {video.playable_url ? (
           <video
@@ -140,7 +140,6 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
             allowFullScreen
             loading="lazy"
             referrerPolicy="strict-origin-when-cross-origin"
-            sandbox="allow-scripts allow-same-origin allow-presentation"
           />
         ) : (
           <>
