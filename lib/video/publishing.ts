@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { suggestVideoMetadata } from "@/lib/metadata/openrouter";
-import { fallbackSuggestion, isValidDescription, redactKeyMaterial, type SuggestedMetadata } from "@/lib/metadata/suggestion";
+import { fallbackSuggestion, isValidDescription, normalizeDescription, redactKeyMaterial, type SuggestedMetadata } from "@/lib/metadata/suggestion";
 import { normalizeEmbedSource, normalizePastedLink } from "@/lib/video/links";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
@@ -132,10 +132,16 @@ function sanitizePreparedMetadata(meta: GeneratedMetadata): GeneratedMetadata {
   };
 }
 
-function cleanMetadata(raw: SuggestedMetadata): { title: string; description: string; tags: string[] } {
+function cleanMetadata(raw: SuggestedMetadata, categoryLabel?: string): { title: string; description: string; tags: string[] } {
+  // Word count is the most common reason an AI suggestion used to be thrown
+  // away wholesale, so an off-count description is repaired here too: the
+  // provider client already tries, and prepared metadata arriving from the
+  // admin page never went through it at all.
+  const description = String(raw.description ?? "").replace(/\s+/g, " ").trim();
+  const repaired = normalizeDescription(description, categoryLabel);
   return {
     title: raw.title?.replace(/\s+/g, " ").trim().slice(0, 160),
-    description: raw.description?.replace(/\s+/g, " ").trim(),
+    description: repaired ? repaired.description : description,
     tags: normalizeTags(Array.isArray(raw.tags) ? raw.tags : []),
   };
 }
@@ -147,6 +153,10 @@ function cleanMetadata(raw: SuggestedMetadata): { title: string; description: st
  * or returns output that cannot be parsed, the upload continues with
  * deterministic metadata built from the file name and category, and the reason
  * is reported back so the admin can review and edit before publishing.
+ *
+ * A description outside the 25-30 word range is repaired rather than treated as
+ * a failure — losing the AI title and story blurb over a word count is what
+ * used to push uploads onto file-name metadata.
  */
 async function generateMetadata(
   sourceName: string,
@@ -154,18 +164,18 @@ async function generateMetadata(
 ): Promise<GeneratedMetadata & { raw: SuggestedMetadata }> {
   try {
     const raw = await suggestVideoMetadata({ fileName: sourceName, category: categoryLabel });
-    const cleaned = cleanMetadata(raw);
+    const cleaned = cleanMetadata(raw, categoryLabel);
     if (cleaned.title && isValidDescription(cleaned.description) && cleaned.tags.length) {
-      return { ...cleaned, source: "ai", raw };
+      return { ...cleaned, source: "ai", raw: { ...raw, description: cleaned.description } };
     }
-    throw new Error("The AI provider returned an incomplete title or tag list, or a description outside the 25-30 word limit");
+    throw new Error("The AI provider returned an incomplete title or tag list, or a description too short to repair");
   } catch (error: unknown) {
     // Redacted: the reason is shown in the admin UI and written to logs.
     const reason = redactKeyMaterial(error instanceof Error ? error.message : "AI metadata generation failed");
     console.warn(`[video-publishing] AI metadata unavailable for "${sourceName}": ${reason}`);
 
     const raw = fallbackSuggestion(sourceName, categoryLabel);
-    const cleaned = cleanMetadata(raw);
+    const cleaned = cleanMetadata(raw, categoryLabel);
     if (!cleaned.title || !isValidDescription(cleaned.description) || !cleaned.tags.length) {
       throw new Error("Unable to build video metadata — check the file name and category, then try again.");
     }

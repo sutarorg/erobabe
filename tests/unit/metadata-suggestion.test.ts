@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   buildPrompt,
+  CATEGORY_STORIES,
   descriptionWordCount,
   isValidDescription,
   KNOWN_CATEGORIES,
+  MAX_DESCRIPTION_WORDS,
+  MIN_DESCRIPTION_WORDS,
   fallbackSuggestion,
   humanizeFileName,
+  normalizeDescription,
   parseLooseJson,
   redactKeyMaterial,
   validateSuggestionPayload,
@@ -88,10 +92,55 @@ describe("description word limits and title prompt", () => {
     expect(descriptionWordCount(description)).toBe(count);
   });
 
-  it.each([1, 24, 31, 100])("rejects a description containing %i words", (count) => {
-    const result = validateSuggestionPayload(modelOutput({ description: Array(count).fill("word").join(" ") }));
+  it("rejects a fragment too thin to repair into a description", () => {
+    const result = validateSuggestionPayload(modelOutput({ description: "A short catalog description." }));
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toMatch(/description.*25-30 words/);
+  });
+
+  it.each([24, 31, 100])("repairs a %i-word description into the published range instead of discarding it", (count) => {
+    const result = validateSuggestionPayload(modelOutput({ description: Array(count).fill("word").join(" ") }), "Boudoir");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(isValidDescription(result.suggestion.description)).toBe(true);
+      expect(result.suggestion.title).toBe("Evening in Velvet");
+      expect(result.suggestion.reasoning).toMatch(/human review/);
+    }
+  });
+
+  it("keeps the model's own words when it trims an overlong description", () => {
+    const source = `${Array(20).fill("word").join(" ")}. ${Array(11).fill("extra").join(" ")}.`;
+    const result = validateSuggestionPayload(modelOutput({ description: source }), "Boudoir");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(descriptionWordCount(result.suggestion.description)).toBe(30);
+      expect(result.suggestion.description.startsWith(Array(20).fill("word").join(" "))).toBe(true);
+      // Trimming only ever removes model words; it never substitutes generated ones.
+      expect(result.suggestion.description).not.toContain("unhurried");
+    }
+  });
+
+  it("extends a short description with story sentences for the selected category", () => {
+    const short = "Low light, soft fabric, and a long quiet moment before anything else begins.";
+    const boudoir = validateSuggestionPayload(modelOutput({ description: short }), "Boudoir");
+    expect(boudoir.ok).toBe(true);
+    if (boudoir.ok) {
+      expect(isValidDescription(boudoir.suggestion.description)).toBe(true);
+      expect(boudoir.suggestion.description.startsWith(short)).toBe(true);
+      expect(boudoir.suggestion.reasoning).toMatch(/extended from 13 words/);
+    }
+  });
+
+  it("prefers the admin's selected category over the category the model returned", () => {
+    const result = validateSuggestionPayload(modelOutput({ category: "Solo" }), "Boudoir");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.suggestion.category).toBe("Boudoir");
+  });
+
+  it("lets the model choose a category only when the admin chose none", () => {
+    const result = validateSuggestionPayload(modelOutput({ category: "Solo" }));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.suggestion.category).toBe("Solo");
   });
 
   it("counts irregular and Unicode whitespace consistently and normalizes output", () => {
@@ -116,6 +165,41 @@ describe("description word limits and title prompt", () => {
     expect(prompt).not.toContain("max 60 characters");
     const example = prompt.split("Example JSON:\n")[1];
     expect(validateSuggestionPayload(example).ok).toBe(true);
+  });
+
+  it("asks for a story voice and pins the metadata to the admin's category", () => {
+    const prompt = buildPrompt({ fileName: "evening_in_velvet.mp4", category: "Massage" });
+    expect(prompt).toMatch(/story voice/i);
+    expect(prompt).toMatch(/read like the title of a short story/i);
+    expect(prompt).toContain('The admin has already chosen the category "Massage"');
+    expect(prompt).toContain('must be exactly "Massage"');
+    expect(prompt).toContain("story-like description");
+    expect(prompt).toContain("hands that begin with nothing but patience");
+    // The example the model is shown must itself be valid for that category.
+    const example = prompt.split("Example JSON:\n")[1];
+    const validated = validateSuggestionPayload(example, "Massage");
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.suggestion.category).toBe("Massage");
+      expect(validated.suggestion.title).toContain("A Story of Warm Oil and Patience");
+    }
+  });
+
+  it.each([...KNOWN_CATEGORIES])("produces a valid story example for %s", (category) => {
+    const prompt = buildPrompt({ fileName: "evening_in_velvet.mp4", category });
+    const example = prompt.split("Example JSON:\n")[1];
+    const validated = validateSuggestionPayload(example, category);
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.suggestion.category).toBe(category);
+      expect(isValidDescription(validated.suggestion.description)).toBe(true);
+      expect(validated.suggestion.title.length).toBeGreaterThan(0);
+      expect(validated.suggestion.title.length).toBeLessThanOrEqual(160);
+    }
+  });
+
+  it.each([...KNOWN_CATEGORIES])("writes a 25-30 word story blurb for %s", (category) => {
+    expect(isValidDescription(CATEGORY_STORIES[category].blurb)).toBe(true);
   });
 });
 
@@ -190,14 +274,23 @@ describe("parseLooseJson", () => {
 });
 
 describe("fallbackSuggestion", () => {
-  it("builds reviewable metadata from the file name and category", () => {
+  it("builds reviewable story metadata from the file name and category", () => {
     const suggestion = fallbackSuggestion("evening_in_velvet-4k.mov", "Boudoir");
-    expect(suggestion.title).toBe("Evening In Velvet 4k");
+    expect(suggestion.title).toBe("Evening In Velvet 4k — A Story in Low Light and Soft Fabric");
     expect(suggestion.category).toBe("Boudoir");
     expect(suggestion.tags).toContain("boudoir");
     expect(suggestion.tags.length).toBeGreaterThan(0);
     expect(isValidDescription(suggestion.description)).toBe(true);
     expect(suggestion.description).not.toMatch(/AI metadata|replace|unavailable/i);
+  });
+
+  it.each([...KNOWN_CATEGORIES])("writes %s metadata in a story voice, not a catalog boilerplate voice", (category) => {
+    const suggestion = fallbackSuggestion("evening_in_velvet.mov", category);
+    expect(suggestion.category).toBe(category);
+    expect(suggestion.title).toContain(CATEGORY_STORIES[category].titleHook);
+    expect(suggestion.description).toBe(CATEGORY_STORIES[category].blurb);
+    expect(suggestion.description).not.toMatch(/explore this listing|playback controls|related videos/i);
+    expect(isValidDescription(suggestion.description)).toBe(true);
   });
 
   it("always lands on a known category and a permitted tag", () => {
@@ -207,8 +300,86 @@ describe("fallbackSuggestion", () => {
   });
 
   it("drops long id runs and falls back to the category for empty names", () => {
-    expect(fallbackSuggestion("", "Solo").title).toBe("Solo video");
+    expect(fallbackSuggestion("", "Solo").title).toBe("Solo — A Private Story With No Audience");
     expect(humanizeFileName("evening_in_velvet_20240512_1080p.mov")).toBe("Evening In Velvet 1080p");
+  });
+
+  it("drops stacked container suffixes instead of putting them in the title", () => {
+    expect(humanizeFileName("Hands_Only.mp4.ts.mp4")).toBe("Hands Only");
+    expect(humanizeFileName("evening_in_velvet.mkv.mp4")).toBe("Evening In Velvet");
+    expect(humanizeFileName("evening_in_velvet.ts")).toBe("Evening In Velvet");
+    // A short unknown extension is still stripped; a long trailing word is not.
+    expect(humanizeFileName("clip.mov")).toBe("Clip");
+    expect(humanizeFileName("clip.unknownext")).toBe("Clip Unknownext");
+  });
+});
+
+describe("normalizeDescription", () => {
+  it("leaves an in-range description untouched", () => {
+    const description = Array(27).fill("word").join(" ");
+    expect(normalizeDescription(description, "Boudoir")).toEqual({ description, adjusted: null });
+  });
+
+  it("rejects an empty description and a fragment too thin to repair", () => {
+    expect(normalizeDescription("", "Boudoir")).toBeNull();
+    expect(normalizeDescription("   ", "Boudoir")).toBeNull();
+    expect(normalizeDescription("A short blurb.", "Boudoir")).toBeNull();
+  });
+
+  it("never repeats a closer sentence within one description", () => {
+    const result = normalizeDescription(Array(12).fill("word").join(" "), "Solo");
+    expect(result).not.toBeNull();
+    const sentences = result!.description.split(/(?<=[.!?])\s+/);
+    expect(new Set(sentences).size).toBe(sentences.length);
+  });
+
+  /**
+   * The repair has to land inside the window for every starting length it
+   * claims to handle, in every category — a single uncovered length is what
+   * used to send an upload back to file-name metadata.
+   */
+  it.each([...KNOWN_CATEGORIES])(
+    "lands every repairable length inside 25-30 words for %s",
+    (category) => {
+      for (let count = 8; count <= 60; count += 1) {
+        const source = Array(count).fill("word").join(" ");
+        const result = normalizeDescription(source, category);
+        expect(result, `${count} words`).not.toBeNull();
+        const words = descriptionWordCount(result!.description);
+        expect(words, `${count} words → ${result!.description}`).toBeGreaterThanOrEqual(MIN_DESCRIPTION_WORDS);
+        expect(words, `${count} words → ${result!.description}`).toBeLessThanOrEqual(MAX_DESCRIPTION_WORDS);
+      }
+    }
+  );
+
+  it.each([8, 12, 17, 21, 24])("extends a %i-word description into range", (count) => {
+    const result = normalizeDescription(Array(count).fill("word").join(" "), "Romantic");
+    expect(result).not.toBeNull();
+    expect(isValidDescription(result!.description)).toBe(true);
+    expect(result!.adjusted).toMatch(/^extended from/);
+  });
+
+  it("cuts an overlong description on a sentence boundary when it can", () => {
+    const source = `${Array(26).fill("word").join(" ")}. ${Array(26).fill("tail").join(" ")}.`;
+    const result = normalizeDescription(source, "Romantic");
+    expect(result).not.toBeNull();
+    expect(descriptionWordCount(result!.description)).toBe(26);
+    expect(result!.description).not.toContain("tail");
+    expect(result!.adjusted).toMatch(/^trimmed from 52 words/);
+  });
+
+  it("trims a single long run-on sentence without breaking a word", () => {
+    const result = normalizeDescription(Array(48).fill("word").join(" "), "Romantic");
+    expect(result).not.toBeNull();
+    expect(descriptionWordCount(result!.description)).toBe(30);
+    expect(result!.description.endsWith(".")).toBe(true);
+  });
+
+  it("drops a dangling connector left by a hard cut", () => {
+    const words = [...Array(29).fill("word"), "and"];
+    const result = normalizeDescription(words.join(" "), "Romantic");
+    expect(result).not.toBeNull();
+    expect(result!.description.endsWith("and.")).toBe(false);
   });
 });
 
