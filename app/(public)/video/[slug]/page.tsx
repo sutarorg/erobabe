@@ -118,7 +118,7 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
         ← Back to home
       </Link>
 
-      {/* Prefer direct media URLs to avoid third-party embed ads when available. The iframe sandbox blocks popups and top-level navigation while retaining scripts and presentation needed by most players. */}
+      {/* Prefer direct media URLs when available. Some providers, including Streamtape, reject sandboxed or referrer-restricted embeds, so keep third-party embeds in their normal browser context. */}
       <div className="relative mt-3 aspect-video overflow-hidden rounded-xl border border-line bg-black">
         {video.playable_url ? (
           <video
@@ -139,8 +139,6 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
             allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
             allowFullScreen
             loading="lazy"
-            referrerPolicy="strict-origin-when-cross-origin"
-            sandbox="allow-scripts allow-same-origin allow-presentation"
           />
         ) : (
           <>
