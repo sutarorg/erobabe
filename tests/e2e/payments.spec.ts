@@ -1,13 +1,13 @@
 import { test, expect } from "@playwright/test";
 
 /**
- * Public-surface tests for the NOWPayments and Gemini routes.
+ * Public-surface tests for the NOWPayments routes and the retired AI routes.
  *
  * These assert reachability and access control only — no real payment, no AI
  * request, no credentials required:
  *  - the IPN endpoint answers probes but rejects unsigned notifications;
- *  - checkout, status, and suggestion endpoints require authentication;
- *  - the retired Bcon/Groq routes are gone.
+ *  - checkout and status endpoints require authentication;
+ *  - the retired Bcon/Groq routes and the removed Gemini routes are gone.
  */
 test.describe("NOWPayments public surface", () => {
   test("IPN endpoint answers a parameter-less probe", async ({ request }) => {
@@ -48,25 +48,21 @@ test.describe("NOWPayments public surface", () => {
   });
 });
 
-test.describe("Gemini suggestion surface", () => {
-  test("suggestions require authentication", async ({ request }) => {
-    const res = await request.post("/api/gemini/suggest", {
-      data: { fileName: "clip.mp4" },
-    });
-    expect(res.status()).toBe(401);
-  });
-
-  test("suggestions reject GET", async ({ request }) => {
-    const res = await request.get("/api/gemini/suggest");
-    expect(res.status()).toBe(405);
-  });
-});
-
 test.describe("Retired provider routes", () => {
   test("Bcon and Groq routes are gone", async ({ request }) => {
     expect((await request.post("/api/bcon/create", { data: {} })).status()).toBe(404);
     expect((await request.get("/api/bcon/callback")).status()).toBe(404);
     expect((await request.post("/api/groq/suggest", { data: {} })).status()).toBe(404);
     expect((await request.get("/api/admin/bcon")).status()).toBe(404);
+  });
+
+  test("Gemini AI routes are gone — AI runs browser-side via OpenRouter", async ({ request }) => {
+    expect((await request.post("/api/gemini/suggest", { data: {} })).status()).toBe(404);
+    expect((await request.get("/api/gemini/suggest")).status()).toBe(404);
+    expect((await request.post("/api/admin/gemini/health")).status()).toBe(404);
+    expect((await request.get("/api/admin/gemini/health")).status()).toBe(404);
+    // No backend AI proxy replaced it.
+    expect((await request.post("/api/openrouter", { data: {} })).status()).toBe(404);
+    expect((await request.post("/api/ai", { data: {} })).status()).toBe(404);
   });
 });

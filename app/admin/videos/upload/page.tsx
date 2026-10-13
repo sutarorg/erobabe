@@ -14,8 +14,10 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { postJson } from "@/src/utils/api";
 import { splitUrlEntries } from "@/lib/video/entries";
-import { classifyVideoSource, type VideoSourceKind } from "@/lib/video/links";
+import { classifyVideoSource, sourceFileNameFrom, type VideoSourceKind } from "@/lib/video/links";
 import { uploadWithProgress } from "@/src/utils/uploadFile";
+import { suggestVideoMetadata } from "@/lib/openrouter/browser-client";
+import { fallbackSuggestion, redactKeyMaterial, type PreparedMetadata } from "@/lib/metadata/suggestions";
 
 type Category = { id: string; label: string };
 type Phase = "idle" | "uploading" | "processing" | "published" | "failed";
@@ -219,6 +221,57 @@ export default function UploadPage() {
     return target.storagePath;
   }
 
+  /**
+   * Generates catalog metadata for one entry directly in the browser via the
+   * browser-only OpenRouter client (DeepSeek V3.2). The validated result is
+   * sent along with the authorized publishing request — the backend performs
+   * no AI call of its own.
+   *
+   * When the key is missing or the request fails, the deterministic
+   * filename-and-category fallback is used instead and explicitly marked as
+   * AI-unavailable metadata requiring human review. Only cancellation
+   * propagates as an error — a failed AI request never blocks publishing.
+   */
+  async function generatePreparedMetadata(
+    item: Item,
+    controller: AbortController
+  ): Promise<PreparedMetadata> {
+    let fileName = "untitled";
+    try {
+      fileName = sourceFileNameFrom(item.source);
+    } catch {
+      // Publishing validates the URL properly; the model just needs a name.
+    }
+
+    try {
+      const suggestion = await suggestVideoMetadata(
+        { fileName, category: categoryLabel || "Mature" },
+        { signal: controller.signal }
+      );
+      return {
+        title: suggestion.title,
+        description: suggestion.description,
+        tags: suggestion.tags,
+        source: "ai",
+      };
+    } catch (aiError: unknown) {
+      // Cancelled requests must stay cancelled — never silently fall back.
+      if (controller.signal.aborted) throw aiError;
+
+      const reason = redactKeyMaterial(
+        aiError instanceof Error ? aiError.message : "OpenRouter request failed"
+      ).slice(0, 200);
+      const fallback = fallbackSuggestion(fileName, categoryLabel || "Mature");
+      return {
+        title: fallback.title,
+        description: fallback.description,
+        tags: fallback.tags,
+        source: "fallback",
+        warning: `AI metadata unavailable (${reason}). Deterministic file-name metadata will be used — review the title and description before publishing.`,
+      };
+    }
+  }
+
   async function publishItem(item: Item, controller: AbortController) {
     let thumbnailPath = item.thumbnailPath;
 
@@ -233,20 +286,31 @@ export default function UploadPage() {
     patchItem(item.id, {
       phase: "processing",
       waiting: true,
-      detail: isEmbed ? "Embedding the player & generating AI metadata…" : "Generating AI metadata…",
+      detail: "Generating AI metadata in the browser…",
+    });
+
+    // AI metadata is generated here, in the browser, through OpenRouter's
+    // DeepSeek V3.2 — then validated and sanitised before it is sent with the
+    // publishing request below.
+    const metadata = await generatePreparedMetadata(item, controller);
+    if (controller.signal.aborted) throw new Error("Publishing cancelled");
+
+    patchItem(item.id, {
+      detail: isEmbed ? "Embedding the player & saving the video…" : "Saving the video URL…",
     });
 
     // Direct files go through the direct-URL route; player pages (Streamtape
-    // `/v/…`, iframe markup, …) go through the embed route. Both generate the
-    // metadata server-side and answer with the same per-entry shape.
+    // `/v/…`, iframe markup, …) go through the embed route. Both re-validate
+    // the prepared metadata server-side and answer with the same per-entry
+    // shape.
     const json = isEmbed
       ? await postJson<any>("/api/videos/embed", {
           categoryId,
-          entries: [{ source: item.source, thumbnailPath: thumbnailPath || null }],
+          entries: [{ source: item.source, thumbnailPath: thumbnailPath || null, metadata }],
         })
       : await postJson<any>("/api/videos/upload-url", {
           categoryId,
-          entries: [{ url: item.source, thumbnailPath: thumbnailPath || null }],
+          entries: [{ url: item.source, thumbnailPath: thumbnailPath || null, metadata }],
         });
 
     const result = json.results?.[0];
@@ -306,6 +370,7 @@ export default function UploadPage() {
       try {
         await publishItem(item, controller);
       } catch (publishError: any) {
+        if (controller.signal.aborted) continue; // cancelled — handled below
         failures += 1;
         patchItem(item.id, {
           phase: "failed",
@@ -355,7 +420,8 @@ export default function UploadPage() {
         <p className="mt-1 text-[12px] text-ink-3">
           Paste direct video URLs or player-page links below. Erobabe saves the link and plays the video straight from the
           original host — it does not download, upload, or re-encode the file. You control the category and each
-          video&apos;s optional thumbnail; Gemini generates the title, description, and tags.
+          video&apos;s optional thumbnail; OpenRouter&apos;s DeepSeek V3.2 generates the title, description, and tags
+          directly in your browser before the video is published.
         </p>
       </div>
 

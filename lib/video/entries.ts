@@ -10,8 +10,15 @@ import { iframeSourceFrom, looksLikeIframeMarkup, normalizePastedLink } from "./
 
 export const MAX_ENTRIES_PER_REQUEST = 20;
 
-export type PublishEntry = { source: string; thumbnailPath: string | null };
-export type RemoteEntry = { url: string; thumbnailPath: string | null };
+/**
+ * Browser-prepared metadata travelling with a publish entry. Typed as
+ * `unknown` here on purpose: the routes validate it against the zod schema in
+ * `lib/video/publishing.ts` before it can reach the database.
+ */
+export type PreparedMetadataInput = unknown;
+
+export type PublishEntry = { source: string; thumbnailPath: string | null; metadata?: PreparedMetadataInput };
+export type RemoteEntry = { url: string; thumbnailPath: string | null; metadata?: PreparedMetadataInput };
 
 /** Turns one pasted blob into a single normalised source string. */
 function normalizeEntry(raw: unknown): string {
@@ -60,19 +67,21 @@ function toThumbnailPath(value: unknown): string | null {
 }
 
 /**
- * Normalises an embed request body into `{ source, thumbnailPath }` entries so
- * every iframe can carry its own thumbnail. The legacy single `embed` field is
- * still accepted, and pasted Markdown/iframe wrappers are unwrapped first.
+ * Normalises an embed request body into `{ source, thumbnailPath, metadata }`
+ * entries so every iframe can carry its own thumbnail and browser-prepared
+ * metadata. The legacy single `embed` field is still accepted, and pasted
+ * Markdown/iframe wrappers are unwrapped first.
  */
 export function normalizeEmbedEntries(body: any): PublishEntry[] {
   const raw: any[] = Array.isArray(body?.entries)
     ? body.entries
-    : [{ source: body?.embed ?? body?.source, thumbnailPath: body?.thumbnailPath }];
+    : [{ source: body?.embed ?? body?.source, thumbnailPath: body?.thumbnailPath, metadata: body?.metadata }];
 
   return raw
     .map((entry) => ({
       source: normalizeEntry(entry?.source ?? entry?.url ?? entry?.embed),
       thumbnailPath: toThumbnailPath(entry?.thumbnailPath),
+      metadata: entry?.metadata,
     }))
     .filter((entry) => entry.source)
     .slice(0, MAX_ENTRIES_PER_REQUEST);
@@ -80,8 +89,9 @@ export function normalizeEmbedEntries(body: any): PublishEntry[] {
 
 /**
  * Normalises a remote-upload request body. Accepts
- * `entries: [{ url, thumbnailPath }]` — one thumbnail per link — or the legacy
- * newline-separated `urls` string with a single shared thumbnail.
+ * `entries: [{ url, thumbnailPath, metadata }]` — one thumbnail and one
+ * prepared-metadata payload per link — or the legacy newline-separated `urls`
+ * string with a single shared thumbnail.
  */
 export function normalizeRemoteEntries(body: any): RemoteEntry[] {
   if (Array.isArray(body?.entries)) {
@@ -89,6 +99,7 @@ export function normalizeRemoteEntries(body: any): RemoteEntry[] {
       .map((entry: any) => ({
         url: normalizeEntry(entry?.url ?? entry?.source),
         thumbnailPath: toThumbnailPath(entry?.thumbnailPath),
+        metadata: entry?.metadata,
       }))
       .filter((entry: RemoteEntry) => entry.url)
       .slice(0, MAX_ENTRIES_PER_REQUEST);
@@ -97,5 +108,5 @@ export function normalizeRemoteEntries(body: any): RemoteEntry[] {
   const sharedThumbnail = toThumbnailPath(body?.thumbnailPath);
   return splitUrlEntries(body?.urls || "")
     .slice(0, MAX_ENTRIES_PER_REQUEST)
-    .map((url) => ({ url, thumbnailPath: sharedThumbnail }));
+    .map((url) => ({ url, thumbnailPath: sharedThumbnail, metadata: undefined }));
 }

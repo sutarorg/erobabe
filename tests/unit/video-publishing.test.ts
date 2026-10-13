@@ -1,30 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { SuggestedMetadata } from "@/lib/gemini/client";
 import { createFakeSupabase } from "./helpers/fake-supabase";
 
 /**
- * The upload pipeline must not be blocked by Gemini. When the AI suggestion
- * fails (malformed output, quota, missing key) the video is still created with
- * deterministic file-name metadata, and the reason is reported back so the
- * admin knows it needs reviewing.
+ * The upload pipeline must not be blocked by any AI provider — and the
+ * backend must never call one. Valid metadata prepared in the browser is
+ * re-validated and written as-is; when no valid payload arrives, the video is
+ * still created with deterministic file-name metadata explicitly marked for
+ * human review.
  */
-
-const geminiState = vi.hoisted(() => ({
-  suggest: null as null | ((params: { fileName?: string; category?: string }) => Promise<SuggestedMetadata>),
-  calls: 0,
-}));
-
-vi.mock("@/lib/gemini/client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/gemini/client")>();
-  return {
-    ...actual,
-    suggestVideoMetadata: async (params: { fileName?: string; category?: string }) => {
-      geminiState.calls += 1;
-      if (!geminiState.suggest) throw new Error("suggestVideoMetadata not stubbed");
-      return geminiState.suggest(params);
-    },
-  };
-});
 
 const dbState = vi.hoisted(() => ({ client: null as unknown }));
 
@@ -36,7 +19,7 @@ vi.mock("@/lib/supabase/server", () => ({
   isSupabaseConfigured: () => true,
 }));
 
-import { createGeneratedVideo } from "@/lib/video/publishing";
+import { createGeneratedVideo, toPreparedMetadata, isPreparedMetadata } from "@/lib/video/publishing";
 
 const CATEGORY_ID = "cat-boudoir";
 
@@ -51,44 +34,47 @@ function seedDb() {
   return fake;
 }
 
-function aiSuggestion(overrides: Partial<SuggestedMetadata> = {}): SuggestedMetadata {
+function preparedMetadata(overrides: Record<string, unknown> = {}) {
   return {
     title: "Evening in Velvet",
     description: "An elegant, slow-paced portrait captured in soft cinematic light.",
     tags: ["mature", "boudoir", "4k"],
-    category: "Boudoir",
-    reasoning: "AI-generated suggestion, requires human review",
+    source: "ai" as const,
     ...overrides,
   };
 }
 
 beforeEach(() => {
-  geminiState.suggest = null;
-  geminiState.calls = 0;
   seedDb();
+  vi.unstubAllGlobals();
 });
 
 describe("createGeneratedVideo metadata", () => {
-  it("uses the AI suggestion when Gemini answers", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+  it("uses browser-prepared AI metadata without any backend AI request", async () => {
+    // If the backend tried to call Gemini/OpenRouter it would hit this fetch —
+    // which fails the test by existing at all.
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
     const { video, metadata } = await createGeneratedVideo({
       service: dbState.client as never,
       userId: "admin-1",
       sourceName: "clip.mp4",
       categoryId: CATEGORY_ID,
       provider: "embed",
+      prepared: preparedMetadata(),
     });
 
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(metadata.source).toBe("ai");
     expect(metadata.warning).toBeUndefined();
     expect(metadata.title).toBe("Evening in Velvet");
     expect(video.title).toBe("Evening in Velvet");
   });
 
-  it("keeps publishing with file-name metadata when Gemini fails", async () => {
-    geminiState.suggest = async () => {
-      throw new Error("Gemini returned malformed JSON — its response could not be parsed as JSON");
-    };
+  it("keeps publishing with file-name metadata when no prepared metadata arrives", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
 
     const { video, metadata } = await createGeneratedVideo({
       service: dbState.client as never,
@@ -98,41 +84,97 @@ describe("createGeneratedVideo metadata", () => {
       provider: "embed",
     });
 
-    expect(geminiState.calls).toBe(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(metadata.source).toBe("fallback");
     expect(metadata.warning).toMatch(/AI metadata unavailable/);
+    expect(metadata.warning).toMatch(/review/i);
     expect(metadata.title).toBe("Evening In Velvet");
     expect(metadata.description).toMatch(/replace it before publishing/);
     expect(metadata.tags).toContain("boudoir");
     expect(video.title).toBe("Evening In Velvet");
   });
 
-  it("redacts key material from the warning an admin sees", async () => {
-    geminiState.suggest = async () => {
-      throw new Error(
-        "Request failed: https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=AQ.FakeSecretKeyMaterial1234567890abcdef"
-      );
-    };
-
+  it("rejects malformed prepared metadata and falls back instead of writing it", async () => {
     const { metadata } = await createGeneratedVideo({
       service: dbState.client as never,
       userId: "admin-1",
-      sourceName: "evening_in_velvet_20240512.mov",
+      sourceName: "evening_in_velvet_4k.mp4",
+      categoryId: CATEGORY_ID,
+      provider: "direct_url",
+      prepared: { title: "x", description: "", tags: [], source: "ai" },
+    });
+
+    expect(metadata.source).toBe("fallback");
+    expect(metadata.title).toBe("Evening In Velvet 4k");
+    expect(metadata.warning).toMatch(/AI metadata unavailable/);
+  });
+
+  it("falls back when sanitisation would leave the row untagged", async () => {
+    const { metadata } = await createGeneratedVideo({
+      service: dbState.client as never,
+      userId: "admin-1",
+      sourceName: "clip.mp4",
       categoryId: CATEGORY_ID,
       provider: "embed",
+      prepared: { title: "Valid title here", description: "Valid description.", tags: ["   ", ""], source: "ai" },
+    });
+    expect(metadata.source).toBe("fallback");
+    expect(metadata.tags.length).toBeGreaterThan(0);
+  });
+
+  it("accepts a fallback payload prepared in the browser when the AI was unavailable", async () => {
+    const { video, metadata } = await createGeneratedVideo({
+      service: dbState.client as never,
+      userId: "admin-1",
+      sourceName: "clip.mp4",
+      categoryId: CATEGORY_ID,
+      provider: "direct_url",
+      prepared: {
+        title: "Evening In Velvet 4k",
+        description: "Boudoir video. AI metadata was unavailable — review before publishing.",
+        tags: ["boudoir", "editorial"],
+        source: "fallback",
+        warning: "AI metadata unavailable (key missing). Review the title and description before publishing.",
+      },
     });
 
     expect(metadata.source).toBe("fallback");
     expect(metadata.warning).toMatch(/AI metadata unavailable/);
-    expect(metadata.warning).not.toContain("AQ.FakeSecretKeyMaterial");
+    expect(video.title).toBe("Evening In Velvet 4k");
+  });
+
+  it("sanitises and persists prepared metadata — title, description, tags", async () => {
+    const fake = seedDb();
+    const { video, metadata } = await createGeneratedVideo({
+      service: dbState.client as never,
+      userId: "admin-1",
+      sourceName: "clip.mp4",
+      categoryId: CATEGORY_ID,
+      provider: "direct_url",
+      prepared: preparedMetadata({
+        title: "  Evening   in Velvet  ",
+        description: "Line one.\nLine two.",
+        tags: ["mature", "MATURE", "4k", "made-up-would-need-filtering"],
+      }),
+    });
+
+    // Server-side sanitisation: whitespace collapsed, duplicates removed.
+    expect(metadata.title).toBe("Evening in Velvet");
+    expect(metadata.description).toBe("Line one. Line two.");
+    expect(metadata.tags).toEqual(["mature", "4k", "made-up-would-need-filtering"]);
+
+    const row = fake.db.videos.find((entry) => entry.id === video.id)!;
+    expect(row.title).toBe("Evening in Velvet");
+    expect(row.description).toBe("Line one. Line two.");
+
+    const links = fake.db.video_tags.filter((entry) => entry.video_id === video.id);
+    expect(links).toHaveLength(3);
+    const persistedTags = fake.db.tags.map((entry) => entry.label);
+    expect(persistedTags).toEqual(expect.arrayContaining(["mature", "4k"]));
   });
 
   it("attaches the fallback tags so the video is not left untagged", async () => {
     const fake = seedDb();
-    geminiState.suggest = async () => {
-      throw new Error("Gemini quota or rate limit exceeded");
-    };
-
     const { video } = await createGeneratedVideo({
       service: dbState.client as never,
       userId: "admin-1",
@@ -141,63 +183,37 @@ describe("createGeneratedVideo metadata", () => {
       provider: "embed",
     });
 
-    const links = fake.db.video_tags.filter((row) => row.video_id === video.id);
+    const links = fake.db.video_tags.filter((entry) => entry.video_id === video.id);
     expect(links.length).toBeGreaterThan(0);
     expect(fake.db.tags.length).toBeGreaterThan(0);
   });
+});
 
-  it("skips a second Gemini call when metadata was prepared while the file was uploading", async () => {
-    geminiState.suggest = async () => {
-      throw new Error("suggestVideoMetadata should not run");
-    };
-
-    const prepared = {
-      title: "Already Written",
-      description: "Prepared while the bytes were in flight.",
-      tags: ["mature", "4k"],
-      source: "ai" as const,
-    };
-    const { video, metadata } = await createGeneratedVideo({
-      service: dbState.client as never,
-      userId: "admin-1",
-      sourceName: "clip.mp4",
-      categoryId: CATEGORY_ID,
-      provider: "direct_url",
-      prepared,
-    });
-
-    expect(geminiState.calls).toBe(0);
-    expect(metadata.source).toBe("ai");
-    expect(metadata.title).toBe("Already Written");
-    expect(video.title).toBe("Already Written");
+describe("toPreparedMetadata / isPreparedMetadata", () => {
+  it("accepts a valid payload and sanitises it", () => {
+    const parsed = toPreparedMetadata(preparedMetadata({ title: "A  valid   title", tags: ["mature", "mature", "4k"] }));
+    expect(parsed).not.toBeNull();
+    expect(parsed!.title).toBe("A valid title");
+    expect(parsed!.tags).toEqual(["mature", "4k"]);
+    expect(isPreparedMetadata(preparedMetadata())).toBe(true);
   });
 
-  it("ignores prepared metadata that is not usable and asks Gemini instead", async () => {
-    geminiState.suggest = async () => aiSuggestion();
-    const { metadata } = await createGeneratedVideo({
-      service: dbState.client as never,
-      userId: "admin-1",
-      sourceName: "clip.mp4",
-      categoryId: CATEGORY_ID,
-      provider: "direct_url",
-      prepared: { title: "x", description: "", tags: [], source: "ai" },
-    });
-
-    expect(geminiState.calls).toBe(1);
-    expect(metadata.title).toBe("Evening in Velvet");
+  it("rejects malformed payloads", () => {
+    expect(toPreparedMetadata(null)).toBeNull();
+    expect(toPreparedMetadata("text")).toBeNull();
+    expect(toPreparedMetadata({})).toBeNull();
+    expect(toPreparedMetadata(preparedMetadata({ title: "ab" }))).toBeNull(); // too short
+    expect(toPreparedMetadata(preparedMetadata({ title: "a".repeat(200) }))).toBeNull(); // too long
+    expect(toPreparedMetadata(preparedMetadata({ description: "" }))).toBeNull();
+    expect(toPreparedMetadata(preparedMetadata({ tags: [] }))).toBeNull();
+    expect(toPreparedMetadata(preparedMetadata({ tags: Array(9).fill("mature") }))).toBeNull(); // cap
+    expect(toPreparedMetadata(preparedMetadata({ source: "unknown" }))).toBeNull(); // type-safe source
+    expect(toPreparedMetadata(preparedMetadata({ tags: "mature,4k" }))).toBeNull(); // tags must be an array
+    expect(isPreparedMetadata({ title: "ok title", description: "ok", tags: ["mature"] })).toBe(false);
   });
 
-  it("falls back when Gemini returns an unusable field, such as a blank title", async () => {
-    geminiState.suggest = async () => aiSuggestion({ title: "   " });
-    const { metadata } = await createGeneratedVideo({
-      service: dbState.client as never,
-      userId: "admin-1",
-      sourceName: "clip.mp4",
-      categoryId: CATEGORY_ID,
-      provider: "embed",
-    });
-
-    expect(metadata.source).toBe("fallback");
-    expect(metadata.title.trim().length).toBeGreaterThan(0);
+  it("strips control characters from tags before they can be written", () => {
+    const parsed = toPreparedMetadata(preparedMetadata({ tags: ["ma\nture", "  4k  "] }));
+    expect(parsed!.tags).toEqual(["ma ture", "4k"]);
   });
 });

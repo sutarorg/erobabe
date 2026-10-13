@@ -4,11 +4,82 @@
 **Branch**: arena/2ee39806-erobabe  
 **Base**: Next.js 15 App Router, Supabase, Bcon Global, Resend, Groq
 
-> **Current providers:** NOWPayments for cryptocurrency payments, Google's Gemini
-> API for AI metadata, and **Streamtape for video hosting** (2026-10-12 migration — see
-> `docs/STREAMTAPE_MIGRATION.md`; it supersedes the UFOLOAD migration described below, whose
-> sections are kept as history). The original report body is retained as history; the migration
-> sections describe the active implementation.
+> **Current providers:** NOWPayments for cryptocurrency payments, **OpenRouter's
+> DeepSeek V3.2 for AI metadata — called directly from the admin browser, no
+> backend AI proxy** (2026-10-13 migration, below), and video hosting per the
+> 2026-10-12 Streamtape migration — see `docs/STREAMTAPE_MIGRATION.md`; it
+> supersedes the UFOLOAD migration described below, whose sections are kept as
+> history. Google's Gemini API has been fully retired (client, routes, tests,
+> `@google/genai` dependency). The original report body is retained as history;
+> the migration sections describe the active implementation.
+
+---
+
+## 2026-10-13 — Gemini → OpenRouter DeepSeek V3.2 (browser-direct AI migration)
+
+**Branch**: `arena/f59296b5-erobabe` (from `3e9de01`)
+
+### Summary
+
+- **AI provider:** Google Gemini (`@google/genai`, `GEMINI_API_KEY`,
+  `gemini-flash-latest`, `/api/gemini/suggest`, `/api/admin/gemini/health`)
+  was replaced by **OpenRouter** with the model
+  `deepseek/deepseek-v3.2` at
+  `https://openrouter.ai/api/v1/chat/completions`.
+- **Architecture:** every AI inference request now originates **in the admin
+  browser** through `lib/openrouter/browser-client.ts` (native `fetch()`, no
+  SDK). There is no backend AI proxy — no `/api/openrouter`, no `/api/ai`, no
+  serverless AI function. The key comes from the deliberately public
+  `NEXT_PUBLIC_OPENROUTER_API_KEY` build variable and is never logged or
+  displayed.
+- **Publishing flow:** the upload page generates metadata per entry in the
+  browser, validates/sanitises it (strict zod schema, permitted-tag list,
+  category normalisation), and sends the prepared payload with the existing
+  authorized `POST /api/videos/upload-url` / `/api/videos/embed` requests.
+  Both routes re-validate server-side, pass valid payloads into
+  `createGeneratedVideo()`, and never call an AI provider; when no valid
+  payload arrives they keep the deterministic file-name fallback marked
+  *AI metadata unavailable — requires human review*.
+- **Health UI:** `GeminiCheck` → `OpenRouterCheck` — a direct browser-side
+  probe with loading / success / quota / configuration / connection states;
+  a present key is reported as *untested*, never as verified or operational.
+- **Preserved:** Supabase auth, admin-session enforcement, category/URL
+  validation, thumbnail uploads, tag persistence, audit logging, publication
+  state transitions, the public site, and all unrelated configuration
+  (payments, email, ads, hosting).
+
+### Files added
+
+- `lib/openrouter/browser-client.ts` — browser-only OpenRouter client
+  (typed request/response interfaces, structured `response_format` with one
+  compatible retry, status mapping for 401/403/429/4xx/5xx, network, timeout,
+  cancellation, secret-free errors, tiny health probe).
+- `lib/metadata/suggestions.ts` — isomorphic validation/fallback helpers
+  (permitted tags, category taxonomy, loose-JSON parser, deterministic
+  filename fallback, key redaction).
+- `app/admin/system-health/OpenRouterCheck.tsx` — browser-side health panel.
+- `tests/unit/openrouter-client.test.ts`, `tests/unit/metadata-suggestions.test.ts`,
+  `tests/unit/openrouter-health-check.test.tsx`, `tests/unit/embed-route.test.ts`,
+  `tests/live/openrouter.live.test.ts`.
+
+### Files removed
+
+- `lib/gemini/client.ts`, `app/api/gemini/suggest/route.ts`,
+  `app/api/admin/gemini/health/route.ts`,
+  `app/admin/system-health/GeminiCheck.tsx`,
+  `tests/unit/gemini.test.ts`, `tests/live/gemini.live.test.ts`,
+  dependency `@google/genai` (lockfile updated).
+
+### Files changed (notable)
+
+- `app/admin/videos/upload/page.tsx` — browser-side AI generation with loading
+  state, cancellation, and fallback marking.
+- `lib/video/publishing.ts`, `app/api/videos/upload-url/route.ts`,
+  `app/api/videos/embed/route.ts`, `lib/video/entries.ts` — prepared-metadata
+  contract + server-side re-validation; no backend AI call.
+- `.env.example`, `README.md`, `DEPLOYMENT.md`, `GO_LIVE_CHECKLIST.md`,
+  `tests/e2e/payments.spec.ts`, `tests/live/README.md`, `vitest.live.config.ts`
+  — OpenRouter configuration, deployment and test docs.
 
 ---
 

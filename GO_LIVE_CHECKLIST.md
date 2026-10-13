@@ -74,7 +74,7 @@ automated suite cannot replace it (it has no real provider account).
 
 1. Configure in the hosting environment: `VIDEO_PROVIDER=streamtape`, `STREAMTAPE_LOGIN`,
    `STREAMTAPE_API_KEY`, optional `STREAMTAPE_FOLDER_ID`, `STREAMTAPE_RELAY_URL`,
-   `STREAMTAPE_RELAY_SECRET`, `GEMINI_API_KEY`, and `STREAMTAPE_ADULT_CONTENT_ALLOWED=false`.
+   `STREAMTAPE_RELAY_SECRET`, `NEXT_PUBLIC_OPENROUTER_API_KEY`, and `STREAMTAPE_ADULT_CONTENT_ALLOWED=false`.
 2. Open Admin → **System Health**: *Video Provider* must say `streamtape (blocked — see
    DEPLOYMENT.md)`. Open `/admin/videos/upload`, choose a category and a small **cleared**
    video, press **Generate AI metadata & publish**. Expect an inline error naming
@@ -84,13 +84,13 @@ automated suite cannot replace it (it has no real provider account).
 4. Repeat with a small (10–50 MB) file. Watch the row: *Requesting an upload session…* →
    *Uploading to Streamtape — N%* (real byte progress) → *Finishing the upload…* →
    *Streamtape is converting the video…* → *Published · Streamtape has the video ready to play*.
-   Review the Gemini title, description and tags shown on the row.
+   Review the AI (DeepSeek V3.2) title, description and tags shown on the row.
 5. In the Streamtape file manager, confirm the file exists (in the configured folder).
 6. In Supabase, confirm the `videos` row: `provider='streamtape'`, `provider_file_id` = the
    Streamtape file id, `embed_url=https://streamtape.com/e/{id}`, `status=published`,
    `visibility=public`, `rights_status=cleared`, `moderation_status=approved`; `tags`/`video_tags`
    populated; `audit_logs` has `video_published_from_upload` with `metadata_source: "ai"`.
-   A `fallback` source means Gemini failed — review that title before leaving it public.
+   A `fallback` source means the AI was unavailable — review that title before leaving it public.
 7. Open `/video/[slug]` in a private window, press **Play**, and confirm playback on a
    desktop browser and on a phone.
 8. Press **Cancel** during a larger upload: the row returns to *Cancelled — ready to publish*,
@@ -173,17 +173,19 @@ is needed. Legacy UFOLOAD/Uqload videos are unaffected either way.
 
 ---
 
-## 7. Gemini API
+## 7. OpenRouter AI metadata (DeepSeek V3.2, browser-direct)
 
-- [ ] **Account and API key**: Google AI Studio API key created at https://aistudio.google.com/apikey → `GEMINI_API_KEY` set (server-only, never `NEXT_PUBLIC_*`).
-- [ ] **Model configured**: `GEMINI_MODEL` set to a currently supported model, e.g., `gemini-flash-latest`, matches https://ai.google.dev/gemini-api/docs.
-- [ ] **Metadata generation tested**: publisher sends source filename/URL path, working title, selected category, and existing tags to Gemini; receives validated title, description, tags, and category server-side; blocks publication if Gemini is not configured, errors, or returns incomplete metadata.
-- [ ] **Structured output validated**: title/description lengths, tags against the permitted list, category against the taxonomy — unvalidated model output is never trusted.
-- [ ] **Suggestion route secured**: `/api/gemini/suggest` requires an active admin session, validates and bounds its input, and rate-limits requests.
-- [ ] **Quota/rate-limit failures tested**: quota exhaustion answers 429 with an actionable message; generic provider errors answer 502 without leaking key material or internals.
-- [ ] **No auto-publish**: AI output never auto-publishes video or asserts facts about content not verified; suggestions require human review.
-- [ ] **Privacy**: no video bytes, private rights docs, payment records, or unnecessary personal info sent to Gemini.
-- [ ] **Fallback**: app continues to work without Gemini if not configured (clear configuration error, no silent fallback to another provider).
+- [ ] **Account and API key**: OpenRouter account created, dedicated key made at https://openrouter.ai/keys → `NEXT_PUBLIC_OPENROUTER_API_KEY` set in `.env.local` **and** in the hosting build environment, with a credit limit configured on the key.
+- [ ] **Public-key exposure accepted**: the variable is compiled into the browser bundle by design — anyone can extract it and reuse it separately; restricting the UI to administrators does not prevent that. Documented rotation plan (change value → fresh build → redeploy) and no other secret stored in this variable.
+- [ ] **Model configured**: request model is exactly `deepseek/deepseek-v3.2` at `https://openrouter.ai/api/v1/chat/completions` — verify no silent provider/model substitution in `lib/openrouter/browser-client.ts`.
+- [ ] **Metadata generation tested**: the admin upload page generates title/description/tags **in the browser** and sends the prepared payload with the authorized publishing request; the server re-validates it and never calls any AI provider.
+- [ ] **Structured output validated**: title/description lengths, tags against the permitted list, category against the taxonomy — unvalidated model output never enters the publishing workflow.
+- [ ] **No backend AI endpoint**: `/api/gemini/*`, `/api/openrouter`, `/api/ai`, and AI Edge Functions all absent (404); publishing, auth, thumbnails and DB writes still work server-side.
+- [ ] **Health check states tested**: Admin → System Health → "Test OpenRouter" distinguishes missing key, invalid key (401/403), quota/rate-limit (429), provider 5xx and connection failures; the API key is never displayed or logged; a key present is reported as *untested*, never as verified or operational.
+- [ ] **Quota/rate-limit failures tested**: quota exhaustion surfaces an actionable 429 message; other provider errors surface redacted messages with no key material.
+- [ ] **No auto-publish**: AI output never auto-publishes video or asserts facts about content not verified; suggestions require human review, and fallback metadata is clearly marked AI-unavailable.
+- [ ] **Privacy**: no video bytes, thumbnails, user records, Supabase credentials, payment records, or full URLs with query parameters sent to OpenRouter — only filename, selected category, and existing title/tags.
+- [ ] **Fallback**: app continues to work without a key or during OpenRouter outages (deterministic file-name metadata marked for review; no silent fallback to another AI provider).
 
 ---
 
@@ -261,7 +263,7 @@ is needed. Legacy UFOLOAD/Uqload videos are unaffected either way.
 10. [ ] NOWPayments payment requests, signed-IPN verification, and confirmation processing work per actual API.
 11. [ ] No campaign activates based on unverified payment or unapproved creative.
 12. [ ] Resend transactional emails work with verified sending configuration.
-13. [ ] Gemini metadata suggestions work where configured and never publish automatically.
+13. [ ] OpenRouter metadata suggestions work where configured (browser-direct, key tested) and never publish automatically.
 14. [ ] Public pages use crawlable URLs and dynamic accurate metadata.
 15. [ ] XML sitemap and video sitemap contain only eligible public records.
 16. [ ] SEO and structured-data tests pass.

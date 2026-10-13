@@ -35,14 +35,45 @@ vi.mock("@/src/utils/uploadFile", () => ({
   uploadWithProgress: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The AI request runs in the browser through the OpenRouter client — mocked
+// here so no request is ever made and no API credits are spent.
+const aiState = vi.hoisted(() => ({
+  calls: 0,
+  lastParams: null as null | { fileName?: string; category?: string },
+  suggest: null as null | ((params: { fileName?: string; category?: string }) => Promise<any>),
+}));
+
+vi.mock("@/lib/openrouter/browser-client", () => ({
+  suggestVideoMetadata: async (params: { fileName?: string; category?: string }) => {
+    aiState.calls += 1;
+    aiState.lastParams = params;
+    if (!aiState.suggest) throw new Error("suggestVideoMetadata not stubbed");
+    return aiState.suggest(params);
+  },
+  OPENROUTER_MODEL: "deepseek/deepseek-v3.2",
+}));
+
 // Import the component after mocks are set up.
 import UploadPage from "@/app/admin/videos/upload/page";
 import { postJson } from "@/src/utils/api";
 
 const mockPostJson = postJson as unknown as ReturnType<typeof vi.fn>;
 
+function aiSuggestion() {
+  return {
+    title: "Evening in Velvet",
+    description: "An elegant, slow-paced portrait captured in soft cinematic light.",
+    tags: ["mature", "boudoir", "4k"],
+    category: "Mature",
+    reasoning: "AI-generated suggestion, requires human review",
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  aiState.calls = 0;
+  aiState.lastParams = null;
+  aiState.suggest = async () => aiSuggestion();
 });
 
 afterEach(() => {
@@ -354,10 +385,23 @@ describe("admin upload page — link formats and routing", () => {
         "/api/videos/embed",
         expect.objectContaining({
           categoryId: "cat-1",
-          entries: [{ source: "https://streamtape.com/e/m9XLJGmaJOcbPr2", thumbnailPath: null }],
+          entries: [
+            {
+              source: "https://streamtape.com/e/m9XLJGmaJOcbPr2",
+              thumbnailPath: null,
+              metadata: expect.objectContaining({
+                source: "ai",
+                title: "Evening in Velvet",
+                tags: ["mature", "boudoir", "4k"],
+              }),
+            },
+          ],
         })
       );
     });
+    // Metadata was generated in the browser from the source filename.
+    expect(aiState.calls).toBe(1);
+    expect(aiState.lastParams).toMatchObject({ fileName: "m9XLJGmaJOcbPr2", category: "Mature" });
   });
 
   it("still publishes a direct video file through the direct-URL route", async () => {
@@ -401,9 +445,156 @@ describe("admin upload page — link formats and routing", () => {
         "/api/videos/upload-url",
         expect.objectContaining({
           categoryId: "cat-1",
-          entries: [{ url: "https://cdn.example.com/video1.mp4", thumbnailPath: null }],
+          entries: [
+            {
+              url: "https://cdn.example.com/video1.mp4",
+              thumbnailPath: null,
+              metadata: expect.objectContaining({
+                source: "ai",
+                title: "Evening in Velvet",
+                tags: ["mature", "boudoir", "4k"],
+              }),
+            },
+          ],
         })
       );
     });
+    expect(aiState.calls).toBe(1);
+    expect(aiState.lastParams).toMatchObject({ fileName: "video1.mp4", category: "Mature" });
+  });
+});
+describe("admin upload page — browser-side AI generation", () => {
+  it("shows a loading state while metadata is generated in the browser", async () => {
+    let resolveAI: (value: any) => void = () => {};
+    aiState.suggest = () => new Promise((resolve) => { resolveAI = resolve; });
+    mockPostJson.mockResolvedValue({
+      results: [
+        {
+          url: "https://cdn.example.com/video1.mp4",
+          videoId: "vid-1",
+          slug: "video-1",
+          title: "Evening in Velvet",
+          status: "published",
+          metadataSource: "ai",
+        },
+      ],
+      succeeded: 1,
+      failed: 0,
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Mature")).toBeTruthy());
+    await act(async () => {
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat-1" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(/https:\/\/video\.example\.com/), {
+        target: { value: "https://cdn.example.com/video1.mp4" },
+      });
+      fireEvent.click(screen.getByText(/Add link/));
+    });
+    await waitFor(() => expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
+    });
+
+    await waitFor(() => expect(screen.getByText(/Generating AI metadata in the browser/)).toBeTruthy());
+    // The publishing request must not go out before the metadata is ready.
+    expect(mockPostJson).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveAI(aiSuggestion());
+    });
+
+    await waitFor(() => expect(screen.getByText(/Published/)).toBeTruthy());
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
+    expect(aiState.calls).toBe(1);
+  });
+
+  it("sends deterministic fallback metadata marked for human review when the AI request fails", async () => {
+    aiState.suggest = async () => {
+      throw new Error("OpenRouter rejected the API key (HTTP 401). Create or rotate a key at https://openrouter.ai/keys.");
+    };
+    mockPostJson.mockResolvedValue({
+      results: [
+        {
+          url: "https://cdn.example.com/video1.mp4",
+          videoId: "vid-1",
+          slug: "video-1",
+          title: "Video1",
+          status: "published",
+          metadataSource: "fallback",
+          metadataWarning: "AI metadata unavailable — deterministic file-name metadata was used instead.",
+        },
+      ],
+      succeeded: 1,
+      failed: 0,
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Mature")).toBeTruthy());
+    await act(async () => {
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat-1" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(/https:\/\/video\.example\.com/), {
+        target: { value: "https://cdn.example.com/video1.mp4" },
+      });
+      fireEvent.click(screen.getByText(/Add link/));
+    });
+    await waitFor(() => expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
+    });
+
+    await waitFor(() => expect(mockPostJson).toHaveBeenCalledTimes(1));
+    const [, payload] = mockPostJson.mock.calls[0];
+    expect(payload.entries[0].metadata).toMatchObject({
+      source: "fallback",
+      title: "Video1",
+      warning: expect.stringMatching(/AI metadata unavailable/),
+    });
+    expect(payload.entries[0].metadata.warning).not.toMatch(/sk-or-/);
+
+    // Publishing continues and the result is flagged for review — no AI success claim.
+    await waitFor(() => expect(screen.getByText(/file-name metadata used, please review/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/review those titles and descriptions/)).toBeTruthy());
+  });
+
+  it("does not issue a second request when the entry is already published", async () => {
+    mockPostJson.mockResolvedValue({
+      results: [
+        { url: "https://cdn.example.com/video1.mp4", videoId: "vid-1", slug: "video-1", title: "T", status: "published", metadataSource: "ai" },
+      ],
+      succeeded: 1,
+      failed: 0,
+    });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Mature")).toBeTruthy());
+    await act(async () => {
+      fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat-1" } });
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText(/https:\/\/video\.example\.com/), {
+        target: { value: "https://cdn.example.com/video1.mp4" },
+      });
+      fireEvent.click(screen.getByText(/Add link/));
+    });
+    await waitFor(() => expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
+    });
+    await waitFor(() => expect(screen.getByText(/Published/)).toBeTruthy());
+
+    // Re-submitting skips published entries: no extra AI call, no extra POST.
+    await act(async () => {
+      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
+    });
+    expect(aiState.calls).toBe(1);
+    expect(mockPostJson).toHaveBeenCalledTimes(1);
   });
 });

@@ -7,10 +7,22 @@ import {
   publishVideo,
   requireActiveAdmin,
   sourceNameFromUrl,
+  toPreparedMetadata,
 } from "@/lib/video/publishing";
 import { resolveThumbnailUrl } from "@/lib/video/storage";
 import { normalizeEmbedEntries } from "@/lib/video/entries";
 
+/**
+ * Publishes pasted player-page/iframe sources as embeds.
+ *
+ * Each entry may carry `metadata` — the JSON-safe payload the admin browser
+ * generated with the browser-only OpenRouter client (`title`, `description`,
+ * `tags`, `source: "ai" | "fallback"`, optional `warning`). It is
+ * schema-validated and sanitised server-side before it reaches
+ * `createGeneratedVideo()`; the backend never issues an AI request. Entries
+ * without a valid payload receive the deterministic file-name fallback, and an
+ * active admin session is required before anything is written.
+ */
 export async function POST(req: NextRequest) {
   try {
     const { user, service } = await requireActiveAdmin();
@@ -37,6 +49,7 @@ export async function POST(req: NextRequest) {
           categoryId,
           provider: "embed",
           thumbnailUrl,
+          prepared: toPreparedMetadata(entry.metadata),
         });
         videoId = generated.video.id;
 

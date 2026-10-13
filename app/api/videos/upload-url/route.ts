@@ -8,6 +8,7 @@ import {
   publishVideo,
   requireActiveAdmin,
   sourceNameFromUrl,
+  toPreparedMetadata,
 } from "@/lib/video/publishing";
 import { resolveThumbnailUrl } from "@/lib/video/storage";
 import { normalizeRemoteEntries } from "@/lib/video/entries";
@@ -61,6 +62,17 @@ function assertVideoUrl(urlString: string): string {
  *
  * `embed_url` is NULL for direct-link videos — they use a native `<video>`
  * player, not an iframe.
+ *
+ * Metadata contract: each entry may carry `metadata`, the JSON-safe payload
+ * the admin browser generated through the browser-only OpenRouter client:
+ *
+ *   { title: string (3..160), description: string (1..1000),
+ *     tags: string[] (1..8), source: "ai" | "fallback", warning?: string }
+ *
+ * It is schema-validated and sanitised server-side (never trusted as-is) and
+ * passed to `createGeneratedVideo()` — the backend performs no AI request.
+ * Entries without a valid payload receive the deterministic file-name
+ * fallback. Authorization (active admin session) is checked before any of it.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -94,7 +106,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Validate and deduplicate URLs before processing.
-    const validEntries: Array<{ url: string; thumbnailPath: string | null }> = [];
+    const validEntries: Array<{ url: string; thumbnailPath: string | null; metadata?: unknown }> = [];
     const validationErrors: Array<{ url: string; error: string }> = [];
 
     const seen = new Set<string>();
@@ -107,7 +119,7 @@ export async function POST(req: NextRequest) {
           continue;
         }
         seen.add(normalized);
-        validEntries.push({ url: validatedUrl, thumbnailPath: entry.thumbnailPath });
+        validEntries.push({ url: validatedUrl, thumbnailPath: entry.thumbnailPath, metadata: entry.metadata });
       } catch (error) {
         validationErrors.push({
           url: entry.url.slice(0, 200),
@@ -146,6 +158,7 @@ export async function POST(req: NextRequest) {
           categoryId,
           provider: "direct_url",
           thumbnailUrl,
+          prepared: toPreparedMetadata(entry.metadata),
         });
         videoId = generated.video.id;
 

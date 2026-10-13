@@ -10,6 +10,11 @@ export default defineConfig({
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:3000",
     trace: "on-first-retry",
+    // Optional: point Playwright at a locally provisioned Chromium when the
+    // managed browser download is unavailable (e.g. restricted sandboxes).
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+      ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } }
+      : {}),
   },
   projects: [
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
