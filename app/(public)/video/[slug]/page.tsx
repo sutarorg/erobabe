@@ -137,6 +137,7 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
             title={video.title}
             className="h-full w-full"
             allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
             allowFullScreen
             loading="lazy"
             referrerPolicy="strict-origin-when-cross-origin"
@@ -153,20 +154,6 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
         )}
       </div>
 
-      {video.embed_url && !video.playable_url && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-ink-3">
-          <span>Having trouble with the embedded player?</span>
-          <a
-            href={video.embed_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-semibold text-accent underline underline-offset-2 hover:opacity-80"
-          >
-            Open video on its host
-          </a>
-          <span>· If the host says “Client blocked”, its access policy must be resolved by the host or the video must be replaced with an authorized playable source.</span>
-        </div>
-      )}
 
       <h1 className="mt-4 text-[19px] font-semibold tracking-tight text-ink">{video.title}</h1>
       <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-3">
