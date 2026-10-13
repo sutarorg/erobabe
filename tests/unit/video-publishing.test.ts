@@ -101,11 +101,12 @@ describe("createGeneratedVideo metadata", () => {
     expect(aiState.calls).toBe(1);
     expect(metadata.source).toBe("fallback");
     expect(metadata.warning).toMatch(/AI metadata unavailable/);
-    expect(metadata.title).toBe("Evening In Velvet");
+    // Even the fallback reads like a story title for the selected category.
+    expect(metadata.title).toBe("Evening In Velvet — A Story in Low Light and Soft Fabric");
     expect(isValidDescription(metadata.description)).toBe(true);
     expect(metadata.description).not.toContain("AI metadata");
     expect(metadata.tags).toContain("boudoir");
-    expect(video.title).toBe("Evening In Velvet");
+    expect(video.title).toBe(metadata.title);
   });
 
   it("redacts key material from the warning an admin sees", async () => {
@@ -188,7 +189,7 @@ describe("createGeneratedVideo metadata", () => {
     expect(metadata.title).toBe("Evening in Velvet");
   });
 
-  it.each([24, 31])("uses a valid fallback instead of publishing a %i-word AI description", async (count) => {
+  it.each([24, 31])("repairs a %i-word AI description instead of falling back to the file name", async (count) => {
     aiState.suggest = async () => aiSuggestion({ description: Array(count).fill("word").join(" ") });
     const { video, metadata } = await createGeneratedVideo({
       service: dbState.client as never,
@@ -197,10 +198,26 @@ describe("createGeneratedVideo metadata", () => {
       categoryId: CATEGORY_ID,
       provider: "direct_url",
     });
-    expect(metadata.source).toBe("fallback");
-    expect(metadata.warning).toContain("25-30 word limit");
+    // A word count on its own must not cost the admin the AI title and blurb.
+    expect(metadata.source).toBe("ai");
+    expect(metadata.title).toBe("Evening in Velvet");
+    expect(metadata.warning).toBeUndefined();
     expect(isValidDescription(metadata.description)).toBe(true);
     expect(video.description).toBe(metadata.description);
+  });
+
+  it("falls back only when the AI description is too thin to repair", async () => {
+    aiState.suggest = async () => aiSuggestion({ description: "Too thin to repair." });
+    const { metadata } = await createGeneratedVideo({
+      service: dbState.client as never,
+      userId: "admin-1",
+      sourceName: "clip.mp4",
+      categoryId: CATEGORY_ID,
+      provider: "direct_url",
+    });
+    expect(metadata.source).toBe("fallback");
+    expect(metadata.warning).toMatch(/too short to repair/);
+    expect(isValidDescription(metadata.description)).toBe(true);
   });
 
   it("regenerates prepared metadata whose description is outside the word limit", async () => {

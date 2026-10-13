@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { isValidDescription } from "@/lib/metadata/suggestion";
+import { isValidDescription, KNOWN_CATEGORIES } from "@/lib/metadata/suggestion";
 import { openRouterDiagnostics, probeOpenRouter, suggestVideoMetadata } from "@/lib/metadata/openrouter";
 
 /**
@@ -40,6 +40,22 @@ suite("OpenRouter live API", () => {
     expect(suggestion.tags.length).toBeGreaterThan(0);
     expect(suggestion.category).toBeTruthy();
   }, 60_000);
+
+  /**
+   * The regression this guards: a description outside 25-30 words used to
+   * discard the whole suggestion and drop the upload back onto file-name
+   * metadata. Run this across every category the admin can pick.
+   */
+  it.each([...KNOWN_CATEGORIES])("returns usable %s metadata, whatever the model does with the word count", async (category) => {
+    const suggestion = await suggestVideoMetadata({ fileName: "evening_in_velvet.mp4.ts.mp4", category });
+    console.log(`[live-openrouter] ${category}:`, suggestion);
+    // The admin's selection is authoritative — the model must not override it.
+    expect(suggestion.category).toBe(category);
+    expect(isValidDescription(suggestion.description), suggestion.description).toBe(true);
+    expect(suggestion.title.length).toBeGreaterThan(2);
+    expect(suggestion.title.length).toBeLessThanOrEqual(160);
+    expect(suggestion.tags.length).toBeGreaterThan(0);
+  }, 90_000);
 
   it("rejects a bogus key with an actionable, secret-free message", async () => {
     const real = process.env.OPENROUTER_API_KEY;
