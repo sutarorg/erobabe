@@ -6,35 +6,49 @@
  * upload page, the API routes, and the unit tests.
  */
 
+import { iframeSourceFrom, looksLikeIframeMarkup, normalizePastedLink } from "./links";
+
 export const MAX_ENTRIES_PER_REQUEST = 20;
 
 export type PublishEntry = { source: string; thumbnailPath: string | null };
 export type RemoteEntry = { url: string; thumbnailPath: string | null };
+
+/** Turns one pasted blob into a single normalised source string. */
+function normalizeEntry(raw: unknown): string {
+  const text = String(raw ?? "").trim();
+  if (!text) return "";
+  const fromIframe = iframeSourceFrom(text);
+  if (fromIframe) return fromIframe;
+  return normalizePastedLink(text);
+}
 
 /** Splits pasted iframe markup into one entry per `<iframe>` tag (or per line). */
 export function splitEmbedEntries(raw: string): string[] {
   const text = String(raw || "").trim();
   if (!text) return [];
 
-  if (/<iframe/i.test(text)) {
+  if (looksLikeIframeMarkup(text)) {
     return text
       .split(/<\/iframe\s*>/i)
       .map((chunk) => chunk.trim())
+      .filter(Boolean)
+      .map((chunk) => iframeSourceFrom(chunk) || normalizePastedLink(chunk))
       .filter(Boolean);
   }
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return splitUrlEntries(text);
 }
 
-/** Splits pasted links into one entry per line (or comma), de-duplicated. */
+/**
+ * Splits pasted links into one entry per line (or comma) and normalises each
+ * one, so Markdown links (`[label](https://…)`), angle-bracket links, and URLs
+ * carrying a trailing bracket or comma all collapse to the underlying URL.
+ */
 export function splitUrlEntries(raw: string): string[] {
   return Array.from(
     new Set(
       String(raw || "")
         .split(/\r?\n|,/)
-        .map((line) => line.trim())
+        .map((line) => normalizeEntry(line))
         .filter(Boolean)
     )
   );
@@ -48,7 +62,7 @@ function toThumbnailPath(value: unknown): string | null {
 /**
  * Normalises an embed request body into `{ source, thumbnailPath }` entries so
  * every iframe can carry its own thumbnail. The legacy single `embed` field is
- * still accepted.
+ * still accepted, and pasted Markdown/iframe wrappers are unwrapped first.
  */
 export function normalizeEmbedEntries(body: any): PublishEntry[] {
   const raw: any[] = Array.isArray(body?.entries)
@@ -57,7 +71,7 @@ export function normalizeEmbedEntries(body: any): PublishEntry[] {
 
   return raw
     .map((entry) => ({
-      source: String(entry?.source ?? "").trim(),
+      source: normalizeEntry(entry?.source ?? entry?.url ?? entry?.embed),
       thumbnailPath: toThumbnailPath(entry?.thumbnailPath),
     }))
     .filter((entry) => entry.source)
@@ -73,7 +87,7 @@ export function normalizeRemoteEntries(body: any): RemoteEntry[] {
   if (Array.isArray(body?.entries)) {
     return body.entries
       .map((entry: any) => ({
-        url: String(entry?.url ?? entry?.source ?? "").trim(),
+        url: normalizeEntry(entry?.url ?? entry?.source),
         thumbnailPath: toThumbnailPath(entry?.thumbnailPath),
       }))
       .filter((entry: RemoteEntry) => entry.url)

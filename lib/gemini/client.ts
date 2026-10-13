@@ -45,25 +45,86 @@ export function suggestionOutputTokens(): number {
   return Math.min(MAX_MAX_OUTPUT_TOKENS, Math.max(MIN_MAX_OUTPUT_TOKENS, Math.trunc(raw)));
 }
 
-let geminiClient: GoogleGenAI | null = null;
-let geminiClientKey: string | null = null;
+/**
+ * Which Google endpoint the key is sent to.
+ *
+ * - `gemini` — the Gemini Developer API (generativelanguage.googleapis.com).
+ *   This is where Google AI Studio keys work, including the newer `AQ.`
+ *   "authorization keys" that AI Studio issues by default since May 2026.
+ * - `vertex` — Vertex AI **express mode** (aiplatform.googleapis.com) with the
+ *   same API key and no project/location. Google documents express mode for
+ *   exactly this shape of credential, and it is the fallback used when the
+ *   Developer API rejects a key as "not an API key".
+ */
+export type GeminiBackend = "gemini" | "vertex";
 
-export function getGeminiClient(): GoogleGenAI | null {
-  // Trim whitespace from values copied into a hosting secret, and rebuild the
-  // client if the secret is rotated without restarting a warm server process.
-  const apiKey = String(process.env.GEMINI_API_KEY || "").trim();
-  if (!apiKey) return null;
-  if (!geminiClient || geminiClientKey !== apiKey) {
-    geminiClient = new GoogleGenAI({ apiKey });
-    geminiClientKey = apiKey;
-  }
-  return geminiClient;
+/** Reads the API key from any of the env names Google tooling uses. */
+export function geminiApiKey(): string {
+  return String(
+    process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY || ""
+  ).trim();
 }
 
-/** For tests: drop the cached client so env changes take effect. */
+/**
+ * Backend preference:
+ *
+ * - `GEMINI_API_BACKEND=gemini` (default) starts on the Developer API.
+ * - `GEMINI_API_BACKEND=vertex` starts on Vertex express mode (set this when
+ *   the key only works there).
+ * - `auto`/unset tries the preferred endpoint first and, when it reports the
+ *   credential is not accepted as an API key, retries on the other one.
+ */
+export function geminiStartBackend(): GeminiBackend {
+  const raw = String(process.env.GEMINI_API_BACKEND || "").trim().toLowerCase();
+  if (raw === "vertex" || raw === "aiplatform" || raw === "express") return "vertex";
+  return "gemini";
+}
+
+/** True when the app may switch endpoints after an auth failure. */
+export function geminiCrossBackendFallbackEnabled(): boolean {
+  const raw = String(process.env.GEMINI_API_BACKEND || "").trim().toLowerCase();
+  return raw === "" || raw === "auto";
+}
+
+export function geminiApiVersion(backend: GeminiBackend): string {
+  const override = String(process.env.GEMINI_API_VERSION || "").trim();
+  if (override) return override;
+  // Express-mode samples pin v1; the Developer API defaults to v1beta.
+  return backend === "vertex" ? "v1" : "v1beta";
+}
+
+const clients = new Map<GeminiBackend, { key: string; client: GoogleGenAI }>();
+
+export function getGeminiClient(backend: GeminiBackend = geminiStartBackend()): GoogleGenAI | null {
+  // Trim whitespace from values copied into a hosting secret, and rebuild the
+  // client if the secret is rotated without restarting a warm server process.
+  const apiKey = geminiApiKey();
+  if (!apiKey) return null;
+
+  const cached = clients.get(backend);
+  if (cached && cached.key === apiKey) return cached.client;
+
+  const options =
+    backend === "vertex"
+      ? { vertexai: true, apiKey, httpOptions: { apiVersion: geminiApiVersion(backend) } }
+      : { apiKey, httpOptions: { apiVersion: geminiApiVersion(backend) } };
+
+  const client = new GoogleGenAI(options as ConstructorParameters<typeof GoogleGenAI>[0]);
+  clients.set(backend, { key: apiKey, client });
+  return client;
+}
+
+/** The backend that last answered successfully — remembered per process. */
+let successfulBackend: GeminiBackend | null = null;
+
+export function geminiResolvedBackend(): GeminiBackend | null {
+  return successfulBackend;
+}
+
+/** For tests: drop the cached clients so env changes take effect. */
 export function resetGeminiClientForTests(): void {
-  geminiClient = null;
-  geminiClientKey = null;
+  clients.clear();
+  successfulBackend = null;
   thinkingBudgetSupported = true;
 }
 
@@ -537,18 +598,85 @@ export function coerceSuggestionInput(value: unknown, fallbackCategory?: string)
   };
 }
 
+/**
+ * Near-misses the model produces, mapped onto the permitted vocabulary.
+ * Keeping the mapping here (instead of rejecting the whole suggestion) is what
+ * stops an off-list tag from throwing away a perfectly good AI title.
+ */
+const TAG_SYNONYMS: Record<string, string> = {
+  milf: "mature",
+  "mature woman": "mature",
+  "older woman": "mature",
+  gilf: "mature",
+  homemade: "amateur",
+  "real couple": "couples",
+  couple: "couples",
+  "amateur couple": "amateur",
+  "point of view": "pov",
+  "first person": "pov",
+  girl: "solo",
+  "solo female": "solo",
+  girlgirl: "lesbian",
+  "girl on girl": "lesbian",
+  "two women": "lesbian",
+  bdsm: "kinky",
+  kink: "kinky",
+  fetish: "kinky",
+  bondage: "kinky",
+  lingerie: "boudoir",
+  "lingerie shoot": "boudoir",
+  "date night": "romantic",
+  "role play": "roleplay",
+  cosplay: "roleplay",
+  spa: "massage",
+  sensual: "romantic",
+  "1080p": "hd",
+  uhd: "4k",
+  "2160p": "4k",
+  "high definition": "hd",
+  "4k ultra hd": "4k",
+  "4k uhd": "4k",
+  exclusive: "featured",
+  curated: "editorial",
+  "staff pick": "featured",
+};
+
+/** Lower-cases, trims, and normalises separators so `Girl-On-Girl` matches. */
+function tagKey(raw: string): string {
+  return String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
 function normalizeTags(rawTags: string[]): string[] {
   const allowed = new Set<string>(PERMITTED_TAGS);
   const seen = new Set<string>();
   const tags: string[] = [];
   for (const raw of rawTags) {
-    const tag = String(raw || "").trim().toLowerCase();
+    const key = tagKey(raw);
+    if (!key) continue;
+    const tag = allowed.has(key) ? key : TAG_SYNONYMS[key];
     if (!tag || !allowed.has(tag) || seen.has(tag)) continue;
     seen.add(tag);
     tags.push(tag);
     if (tags.length >= 8) break;
   }
   return tags;
+}
+
+/**
+ * Permitted tags for a suggestion, with a category-derived floor.
+ *
+ * The floor exists so a model that answers with nothing on the list still
+ * yields a usable, publishable tag set — the AI title and description are never
+ * thrown away because of tags.
+ */
+function normalizeTagsWithFallback(rawTags: string[], category: string): string[] {
+  const tags = normalizeTags(rawTags);
+  if (tags.length) return tags;
+  return normalizeTags([category, "editorial", "mature"]);
 }
 
 function normalizeCategory(rawCategory: string, fallback: string): string {
@@ -645,14 +773,22 @@ function isAuthError(error: unknown): boolean {
   return status === 401 || status === 403 || isInvalidApiKeyError(error);
 }
 
-function describeProviderError(error: unknown): string {
-  // Never propagate key material or internal SDK details to callers. Google
-  // currently uses AIza-style keys; also cover opaque AQ-prefixed credentials.
-  return providerErrorText(error)
+/**
+ * Strips key material from anything that may reach a browser, a log, or an
+ * audit row. Google issues both legacy `AIza…` traffic keys and the newer
+ * `AQ.…` authorization keys; both shapes are covered, along with the env
+ * variable names people paste them next to.
+ */
+export function redactKeyMaterial(text: unknown): string {
+  return String(text ?? "")
     .replace(/AIza[0-9A-Za-z\-_]{10,}/gi, "<redacted>")
-    .replace(/\bAQ\.[0-9A-Za-z._~-]{16,}/g, "<redacted>")
-    .replace(/((?:api[_-]?key|apikey|secret|token|bearer)\s*[:=]\s*)[^\s,;)]+/gi, "$1<redacted>")
-    .slice(0, 300);
+    .replace(/\bAQ\.[0-9A-Za-z._~-]{10,}/g, "<redacted>")
+    .replace(/((?:api[_-]?key|apikey|secret|token|bearer)\s*[:=]\s*)[^\s,;)]+/gi, "$1<redacted>");
+}
+
+function describeProviderError(error: unknown): string {
+  // Never propagate key material or internal SDK details to callers.
+  return redactKeyMaterial(providerErrorText(error)).slice(0, 300);
 }
 
 /** Models that reject `thinkingConfig` should get a compatibility retry. */
@@ -719,15 +855,103 @@ async function generateContentWithCompatibility(
   throw new Error("Gemini rejected all supported metadata response configurations");
 }
 
+/* ------------------------------------------------------------------------- */
+/* Backend & model fallbacks                                                  */
+/* ------------------------------------------------------------------------- */
+
+/** The requested model first, then widely available Flash models. */
+export function modelCandidates(): string[] {
+  return Array.from(new Set([geminiModelName(), "gemini-flash-latest", "gemini-2.5-flash"].filter(Boolean)));
+}
+
+/**
+ * The endpoint could not find the model: a 404, or a message that names the
+ * model as unknown / unsupported. Only these advance to the next candidate —
+ * a safety block or a quota problem must not silently switch models.
+ */
+function isModelUnavailableError(error: unknown): boolean {
+  const status = providerErrorStatus(error);
+  const message = providerErrorText(error);
+  if (status !== undefined && status !== 404) {
+    return status === 400 && /model[\s\S]{0,80}(not found|not supported|unsupported|does not exist|unknown)/i.test(message);
+  }
+  return /model[\s\S]{0,80}(not found|not supported|unsupported|does not exist|unknown|is not available)|NOT_FOUND/i.test(
+    message
+  );
+}
+
+/**
+ * The credential was rejected as a *credential* — the signature of an `AQ.`
+ * authorization key being offered to an endpoint that expects a legacy traffic
+ * key. Retrying the same key against the other Google endpoint is the fix
+ * (Google documents `AQ.` keys for both the Gemini API and Vertex express mode).
+ */
+function isCredentialRejectedError(error: unknown): boolean {
+  const status = providerErrorStatus(error);
+  const message = providerErrorText(error);
+  if (/API keys are not supported by this API|ACCESS_TOKEN_TYPE_UNSUPPORTED|API key not valid|API_KEY_INVALID/i.test(message)) {
+    return true;
+  }
+  return status === 401 || status === 403 || /unauthenticated|permission denied|invalid authentication credentials/i.test(message);
+}
+
+/**
+ * Runs one request, falling back across models and — once — across endpoints.
+ *
+ * Order of resilience:
+ *   1. the configured model on the preferred backend
+ *   2. other Flash models on the same backend, if the model is unknown there
+ *   3. the other backend (Developer API ↔ Vertex express) if the credential is
+ *      rejected, which is what an `AQ.` auth key hits on the wrong endpoint
+ */
+async function generateWithBackends(prompt: string, config: Record<string, unknown>): Promise<unknown> {
+  const start = successfulBackend || geminiStartBackend();
+  const backends: GeminiBackend[] =
+    geminiCrossBackendFallbackEnabled() && start === "gemini" ? ["gemini", "vertex"] : start === "gemini" ? ["gemini"] : ["vertex", "gemini"];
+
+  const models = modelCandidates();
+  let lastError: unknown = null;
+
+  for (const backend of backends) {
+    const client = getGeminiClient(backend);
+    if (!client) throw new Error("Gemini is not configured — set the GEMINI_API_KEY server variable");
+
+    let backendError: unknown = null;
+    for (const model of models) {
+      try {
+        const response = await generateContentWithCompatibility(client, model, prompt, config);
+        successfulBackend = backend;
+        return response;
+      } catch (error: unknown) {
+        lastError = error;
+        backendError = error;
+        if (!isModelUnavailableError(error)) break;
+      }
+    }
+
+    if (backendError && !isCredentialRejectedError(backendError)) break;
+  }
+
+  throw lastError || new Error("Gemini request failed");
+}
+
 function mapProviderError(error: unknown): GeminiError {
   if (isQuotaError(error)) {
     return new GeminiError("Gemini quota or rate limit exceeded — try again shortly", 429, "quota_exceeded");
   }
-  if (isInvalidApiKeyError(error)) {
-    return new GeminiError("Gemini rejected the configured API key — verify GEMINI_API_KEY in the server environment", 503, "not_configured");
+  if (isModelUnavailableError(error)) {
+    return new GeminiError(
+      `None of the configured Gemini models (${modelCandidates().join(", ")}) are available to this key. Set GEMINI_MODEL to a model the key can use.`,
+      502,
+      "provider_error"
+    );
   }
-  if (isAuthError(error)) {
-    return new GeminiError("Gemini access was denied — verify the API key and that its Google project can use the Gemini API", 503, "not_configured");
+  if (isInvalidApiKeyError(error) || isAuthError(error)) {
+    return new GeminiError(
+      "Gemini rejected the configured key on both supported endpoints (Gemini API and Vertex express mode). Create a new key in Google AI Studio (keys now start with AQ.), set it as GEMINI_API_KEY, and make sure the Gemini API is enabled for its Google project — then use “Test Gemini” in Admin → System Health to confirm.",
+      503,
+      "not_configured"
+    );
   }
   return new GeminiError(`Gemini request failed: ${describeProviderError(error)}`, 502, "provider_error");
 }
@@ -778,8 +1002,7 @@ function buildPrompt(params: SuggestMetadataParams): string {
 /* ------------------------------------------------------------------------- */
 
 export async function suggestVideoMetadata(params: SuggestMetadataParams): Promise<SuggestedMetadata> {
-  const client = getGeminiClient();
-  if (!client) {
+  if (!geminiApiKey()) {
     throw new GeminiError("Gemini is not configured — set the GEMINI_API_KEY server variable", 503, "not_configured");
   }
 
@@ -801,7 +1024,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
 
     let response: unknown;
     try {
-      response = await generateContentWithCompatibility(client, geminiModelName(), prompt, config);
+      response = await generateWithBackends(prompt, config);
     } catch (error: unknown) {
       const failure = mapProviderError(error);
       // Quota and credential problems will not fix themselves on retry; a
@@ -857,17 +1080,19 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
       continue;
     }
 
-    const tags = normalizeTags(validated.data.tags);
-    if (!tags.length) {
-      lastFailure = new GeminiError("Gemini returned no permitted tags", 502, "bad_output");
-      continue;
-    }
+    // Tags are the one field the model most often answers off-list. Losing the
+    // whole AI suggestion over them is wrong: map near-misses onto the
+    // permitted vocabulary and, if nothing survives, fall back to the
+    // category's own tags rather than discarding the generated title and
+    // description.
+    const category = normalizeCategory(validated.data.category, params.category || "Mature");
+    const tags = normalizeTagsWithFallback(validated.data.tags, category);
 
     return {
       title: validated.data.title,
       description: validated.data.description,
       tags,
-      category: normalizeCategory(validated.data.category, params.category || "Mature"),
+      category,
       reasoning: "AI-generated suggestion, requires human review",
     };
   }
@@ -876,6 +1101,105 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
     lastFailure ||
     new GeminiError("Gemini returned malformed JSON — its response could not be parsed as JSON", 502, "bad_output")
   );
+}
+
+/* ------------------------------------------------------------------------- */
+/* Live diagnostics                                                           */
+/* ------------------------------------------------------------------------- */
+
+export interface GeminiProbeResult {
+  ok: boolean;
+  /** Key present at all (never the key itself). */
+  configured: boolean;
+  /** `AQ.` authorization key, `AIza` traffic key, or unknown shape. */
+  keyKind: "authorization" | "standard" | "unknown" | "missing";
+  /** Endpoint that answered (or was tried last). */
+  backend: GeminiBackend;
+  /** Model that answered (or was tried last). */
+  model: string;
+  /** Round-trip time in milliseconds. */
+  latencyMs: number;
+  /** Short, secret-free error description when `ok` is false. */
+  error?: string;
+  /** Actionable next step when `ok` is false. */
+  hint?: string;
+}
+
+function keyKindOf(key: string): GeminiProbeResult["keyKind"] {
+  if (!key) return "missing";
+  if (/^AQ\./i.test(key)) return "authorization";
+  if (/^AIza/i.test(key)) return "standard";
+  return "unknown";
+}
+
+/**
+ * Configuration summary for the admin UI — no network call, no key material.
+ */
+export function geminiDiagnostics() {
+  const key = geminiApiKey();
+  return {
+    configured: Boolean(key),
+    keyKind: keyKindOf(key),
+    startBackend: geminiStartBackend(),
+    crossBackendFallback: geminiCrossBackendFallbackEnabled(),
+    resolvedBackend: successfulBackend,
+    model: geminiModelName(),
+    modelCandidates: modelCandidates(),
+    apiVersion: geminiApiVersion(geminiStartBackend()),
+    maxOutputTokens: suggestionOutputTokens(),
+    thinkingConfigured: Boolean(thinkingConfigForRequest()),
+  };
+}
+
+/**
+ * Sends one tiny real request so an admin can prove the key works end-to-end.
+ *
+ * Deliberately minimal (a handful of output tokens, no schema) — it proves
+ * authentication and model access, not suggestion quality. Like every other
+ * call in this module it never returns key material.
+ */
+export async function probeGemini(): Promise<GeminiProbeResult> {
+  const key = geminiApiKey();
+  const startedAt = Date.now();
+  const base: GeminiProbeResult = {
+    ok: false,
+    configured: Boolean(key),
+    keyKind: keyKindOf(key),
+    backend: successfulBackend || geminiStartBackend(),
+    model: geminiModelName(),
+    latencyMs: 0,
+  };
+
+  if (!key) {
+    return { ...base, hint: "Set GEMINI_API_KEY in the server environment and redeploy." };
+  }
+
+  const config: Record<string, unknown> = { candidateCount: 1, temperature: 0, maxOutputTokens: 32 };
+  try {
+    const response = await generateWithBackends("Reply with the single word: ok", config);
+    const text = extractResponseText(response).trim();
+    return {
+      ...base,
+      ok: true,
+      backend: successfulBackend || base.backend,
+      latencyMs: Date.now() - startedAt,
+      ...(text ? {} : { hint: "The model answered without text — metadata suggestions may still work." }),
+    };
+  } catch (error: unknown) {
+    const mapped = mapProviderError(error);
+    return {
+      ...base,
+      backend: successfulBackend || base.backend,
+      latencyMs: Date.now() - startedAt,
+      error: mapped.message,
+      hint:
+        mapped.code === "quota_exceeded"
+          ? "Wait for the quota window to reset, or use a key from a project with available quota."
+          : mapped.code === "not_configured"
+            ? "Create a new key in Google AI Studio (they are issued as AQ. authorization keys), enable the Gemini API for its Google project, and update GEMINI_API_KEY."
+            : "Check GEMINI_MODEL against the models the key can use, then try again.",
+    };
+  }
 }
 
 /**

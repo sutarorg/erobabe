@@ -1,7 +1,9 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { inspectNowpaymentsSetup } from "@/lib/nowpayments/client";
 import { getSiteUrl } from "@/lib/site";
+import { geminiDiagnostics } from "@/lib/gemini/client";
 import NowpaymentsCheck from "./NowpaymentsCheck";
+import GeminiCheck from "./GeminiCheck";
 
 export default async function SystemHealthAdmin() {
   const supabase = createServiceClient();
@@ -40,6 +42,15 @@ export default async function SystemHealthAdmin() {
     }
   }
 
+  // Real Gemini configuration check — reported without calling Google (the
+  // "Test Gemini" button below performs the live probe on demand).
+  const gemini = geminiDiagnostics();
+  const geminiStatus = !gemini.configured
+    ? "Not configured"
+    : gemini.resolvedBackend
+      ? `Verified · ${gemini.resolvedBackend}`
+      : "Configured";
+
   const checks = [
     { name: "Database", status: dbStatus, latency: dbLatency, desc: "Supabase PostgreSQL" },
     { name: "Auth", status: "Operational", latency: "—", desc: "Supabase Auth" },
@@ -51,7 +62,14 @@ export default async function SystemHealthAdmin() {
       desc: "Videos play directly from admin-supplied URLs. No hosting-provider API or relay is needed.",
     },
     { name: "Resend", status: process.env.RESEND_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "Transactional email" },
-    { name: "Gemini", status: process.env.GEMINI_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "AI metadata assistant" },
+    {
+      name: "Gemini",
+      status: geminiStatus,
+      latency: "—",
+      desc: gemini.configured
+        ? `AI metadata assistant · key: ${gemini.keyKind} · model ${gemini.model} (fallback ${gemini.modelCandidates.slice(1).join(", ") || "—"})`
+        : "AI metadata assistant · GEMINI_API_KEY is not set",
+    },
   ];
 
   return (
@@ -74,8 +92,10 @@ export default async function SystemHealthAdmin() {
 
       <NowpaymentsCheck />
 
+      <GeminiCheck />
+
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
-        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the NOWPayments API. The video provider uses direct URLs and requires no external API check.</p>
+        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the NOWPayments API. The video provider uses direct URLs and requires no external API check. Use “Test Gemini” to prove the AI metadata key with a live call.</p>
       </div>
     </div>
   );

@@ -14,6 +14,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { postJson } from "@/src/utils/api";
 import { splitUrlEntries } from "@/lib/video/entries";
+import { classifyVideoSource, type VideoSourceKind } from "@/lib/video/links";
 import { uploadWithProgress } from "@/src/utils/uploadFile";
 
 type Category = { id: string; label: string };
@@ -22,6 +23,12 @@ type Phase = "idle" | "uploading" | "processing" | "published" | "failed";
 type Item = {
   id: string;
   source: string;
+  /** `direct` = media file (native player), `embed` = player page (iframe). */
+  kind: VideoSourceKind;
+  /** Lower-cased host, shown on the entry badge. */
+  host?: string;
+  /** Why the entry was classified this way. */
+  note?: string;
   thumbnail: File | null;
   thumbnailPreview: string | null;
   thumbnailPath: string | null;
@@ -44,20 +51,9 @@ function newId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-/**
- * Lightweight URL validation for the client side.
- * Full validation happens server-side — this is a convenience check so the
- * admin sees inline errors before submitting.
- */
-function isValidVideoUrl(raw: string): boolean {
-  try {
-    const url = new URL(raw.trim());
-    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
-    const pathname = url.pathname.toLowerCase();
-    return /\.(mp4|webm|mov|m4v|mkv|avi|wmv|flv|ts|mpg|mpeg|3gp)$/.test(pathname);
-  } catch {
-    return false;
-  }
+/** Mode override for one entry — the admin can always outvote the detection. */
+function modeLabel(kind: VideoSourceKind) {
+  return kind === "embed" ? "Embed player" : "Direct file";
 }
 
 export default function UploadPage() {
@@ -106,30 +102,39 @@ export default function UploadPage() {
     const entries = splitUrlEntries(pasteBuffer);
     if (!entries.length) return;
 
-    // Validate and deduplicate client-side.
+    // Validate and deduplicate client-side. Full validation happens
+    // server-side — this exists so the admin sees inline errors before
+    // submitting, and so each link is routed to the right publishing route.
     const seen = new Set(items.map((item) => item.source.trim().toLowerCase()));
     const valid: Item[] = [];
     const invalid: string[] = [];
 
     for (const entry of entries) {
-      const normalized = entry.trim().toLowerCase();
+      let classified;
+      try {
+        classified = classifyVideoSource(entry);
+      } catch (classificationError: any) {
+        invalid.push(`${entry} (${classificationError.message || "not a usable video link"})`);
+        continue;
+      }
+
+      const normalized = classified.url.trim().toLowerCase();
       if (seen.has(normalized)) {
         invalid.push(`${entry} (duplicate)`);
         continue;
       }
       seen.add(normalized);
-      if (!isValidVideoUrl(entry)) {
-        invalid.push(`${entry} (not a valid direct video URL)`);
-        continue;
-      }
       valid.push({
         id: newId(),
-        source: entry.trim(),
+        source: classified.url,
+        kind: classified.kind,
+        host: classified.host,
+        note: classified.note,
         thumbnail: null,
         thumbnailPreview: null,
         thumbnailPath: null,
         phase: "idle",
-        detail: "Ready to publish",
+        detail: classified.kind === "embed" ? "Ready to publish as an embed" : "Ready to publish",
       });
     }
 
@@ -214,38 +219,6 @@ export default function UploadPage() {
     return target.storagePath;
   }
 
-  /**
-   * Asks the suggest route for metadata. A failure just means the server-side
-   * fallback is used — it must never block publishing.
-   */
-  function beginMetadata(url: string): Promise<{ title: string; description: string; tags: string[]; source: "ai" } | null> {
-    const label = categoryLabel || "";
-    // Derive a filename from the URL for Gemini.
-    let fileName: string;
-    try {
-      fileName = decodeURIComponent(new URL(url).pathname.split("/").pop() || "remote-video");
-    } catch {
-      fileName = "remote-video";
-    }
-
-    return postJson<{ suggestion?: { title?: string; description?: string; tags?: unknown } }>("/api/gemini/suggest", {
-      fileName: fileName.slice(0, 240),
-      title: fileName.replace(/\.[^.]+$/, "").slice(0, 160),
-      category: label.slice(0, 80),
-    })
-      .then((result) => {
-        const suggestion = result?.suggestion;
-        const title = typeof suggestion?.title === "string" ? suggestion.title.trim() : "";
-        const description = typeof suggestion?.description === "string" ? suggestion.description.trim() : "";
-        const tags = Array.isArray(suggestion?.tags)
-          ? suggestion.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
-          : [];
-        if (title.length < 3 || !description || tags.length === 0) return null;
-        return { title, description, tags, source: "ai" as const };
-      })
-      .catch(() => null);
-  }
-
   async function publishItem(item: Item, controller: AbortController) {
     let thumbnailPath = item.thumbnailPath;
 
@@ -256,14 +229,25 @@ export default function UploadPage() {
       patchItem(item.id, { thumbnailPath });
     }
 
-    patchItem(item.id, { phase: "processing", waiting: true, detail: "Generating AI metadata…" });
-
-    // Generate metadata in parallel with nothing else — the server also
-    // generates metadata if we don't send it, so we can let the server do it.
-    const json = await postJson<any>("/api/videos/upload-url", {
-      categoryId,
-      entries: [{ url: item.source, thumbnailPath: thumbnailPath || null }],
+    const isEmbed = item.kind === "embed";
+    patchItem(item.id, {
+      phase: "processing",
+      waiting: true,
+      detail: isEmbed ? "Embedding the player & generating AI metadata…" : "Generating AI metadata…",
     });
+
+    // Direct files go through the direct-URL route; player pages (Streamtape
+    // `/v/…`, iframe markup, …) go through the embed route. Both generate the
+    // metadata server-side and answer with the same per-entry shape.
+    const json = isEmbed
+      ? await postJson<any>("/api/videos/embed", {
+          categoryId,
+          entries: [{ source: item.source, thumbnailPath: thumbnailPath || null }],
+        })
+      : await postJson<any>("/api/videos/upload-url", {
+          categoryId,
+          entries: [{ url: item.source, thumbnailPath: thumbnailPath || null }],
+        });
 
     const result = json.results?.[0];
     if (!result || result.status === "failed") {
@@ -272,13 +256,15 @@ export default function UploadPage() {
 
     if (result.metadataSource === "fallback") fallbackRef.current += 1;
 
+    const savedAs = isEmbed ? "Published · player embedded" : "Published · video URL saved";
+
     patchItem(item.id, {
       phase: "published",
       waiting: false,
       detail:
         result.metadataSource === "fallback"
-          ? "Published · AI metadata unavailable — file-name metadata used, please review"
-          : "Published · video URL saved",
+          ? `${savedAs} · AI metadata unavailable — file-name metadata used, please review`
+          : savedAs,
       title: result.title,
       slug: result.slug,
       videoId: result.videoId,
@@ -367,9 +353,9 @@ export default function UploadPage() {
       <div>
         <h1 className="text-[20px] font-semibold">Publish videos by link</h1>
         <p className="mt-1 text-[12px] text-ink-3">
-          Paste direct MP4 video URLs below. Erobabe saves the link and plays the video straight from the original host —
-          it does not download, upload, or re-encode the file. You control the category and each video&apos;s optional
-          thumbnail; Gemini generates the title, description, and tags.
+          Paste direct video URLs or player-page links below. Erobabe saves the link and plays the video straight from the
+          original host — it does not download, upload, or re-encode the file. You control the category and each
+          video&apos;s optional thumbnail; Gemini generates the title, description, and tags.
         </p>
       </div>
 
@@ -408,8 +394,13 @@ export default function UploadPage() {
               <p className="text-[12px] font-medium text-accent">How it works</p>
               <p className="mt-1 text-[11px] leading-relaxed text-ink-3">
                 Erobabe saves the video URL you paste — it does not upload or host the video file. The original video host
-                remains responsible for serving the media. Paste one direct MP4 URL per line (up to {MAX_URLS} at a time).
-                Each line becomes its own entry with its own optional thumbnail.
+                remains responsible for serving the media. Paste one link per line (up to {MAX_URLS} at a time); each line
+                becomes its own entry with its own optional thumbnail. Direct video files (ending in .mp4, .webm, .ts, …)
+                play in Erobabe&apos;s own player; player pages such as Streamtape{" "}
+                <code className="font-mono">/v/&lt;id&gt;/Name.mp4.ts.mp4</code> are embedded as an iframe automatically.
+                Markdown links, angle-bracket links, and pasted <code className="font-mono">&lt;iframe&gt;</code> code are
+                accepted too — for example{" "}
+                <code className="font-mono">[https://streamtape.com/v/abc/Hands_Only.mp4.ts.mp4](https://streamtape.com/v/abc/Hands_Only.mp4.ts.mp4)</code>.
               </p>
             </div>
           </div>
@@ -418,19 +409,19 @@ export default function UploadPage() {
         {/* ---- Add URLs ---- */}
         <div className="mt-5 rounded-lg border border-dashed border-line bg-void p-4">
           <label className="block">
-            <span className="mb-1 block text-[11px] font-medium">Direct video URLs</span>
+            <span className="mb-1 block text-[11px] font-medium">Video URLs or player links</span>
             <textarea
               value={pasteBuffer}
               onChange={(event) => setPasteBuffer(event.target.value)}
               rows={5}
               className="w-full rounded-md border border-line bg-card px-3 py-2 font-mono text-[12px]"
               placeholder={
-                "https://video.example.com/video7/717/70.mp4\nhttps://cdn.example.com/video-two.mp4\nhttps://media.example.com/clip_4k.mp4"
+                "https://video.example.com/video7/717/70.mp4\n[https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4](https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4)\n<iframe src=\"https://host.example/embed/abc123\" allowfullscreen></iframe>"
               }
             />
             <span className="mt-1 block text-[10.5px] text-ink-3">
-              One public video URL per line (up to {MAX_URLS}). Each must be a direct link to a video file (e.g. ending in
-              .mp4).
+              One link per line (up to {MAX_URLS}). Direct file links, Markdown links, player pages (Streamtape, Uqload,
+              DoodStream, …) and iframe embed code are all accepted and routed automatically.
             </span>
           </label>
           <button
@@ -483,15 +474,62 @@ export default function UploadPage() {
 
                   {/* Source URL + status */}
                   <div className="min-w-[220px] flex-1">
+                    {(item.note || item.host) && (
+                      <p className="mb-1 flex flex-wrap items-center gap-1.5 text-[10px] text-ink-3">
+                        <span
+                          className={`rounded-full px-1.5 py-0.5 font-medium ${
+                            item.kind === "embed" ? "bg-accent/15 text-accent" : "bg-white/5 text-ink-2"
+                          }`}
+                        >
+                          {modeLabel(item.kind)}
+                        </span>
+                        {item.note}
+                      </p>
+                    )}
                     <label className="block">
-                      <span className="mb-1 block text-[10.5px] font-medium text-ink-3">Direct video URL</span>
+                      <span className="mb-1 block text-[10.5px] font-medium text-ink-3">Video URL</span>
                       <input
                         value={item.source}
-                        onChange={(event) => patchItem(item.id, { source: event.target.value })}
+                        onChange={(event) => {
+                          const next = event.target.value;
+                          let patch: Partial<Item> = { source: next };
+                          try {
+                            const detected = classifyVideoSource(next);
+                            patch = {
+                              source: detected.url,
+                              kind: detected.kind,
+                              host: detected.host,
+                              note: detected.note,
+                            };
+                          } catch {
+                            // Leave the text as typed; publishing reports the real problem.
+                          }
+                          patchItem(item.id, patch);
+                        }}
                         disabled={running || item.phase === "published"}
                         className="w-full rounded-md border border-line bg-card px-2.5 py-1.5 font-mono text-[11px] disabled:opacity-60"
                       />
                     </label>
+
+                    {/* Manual override — the admin always outvotes detection. */}
+                    <div className="mt-1 flex items-center gap-1">
+                      {(["direct", "embed"] as VideoSourceKind[]).map((kind) => (
+                        <button
+                          key={kind}
+                          type="button"
+                          onClick={() => patchItem(item.id, { kind, note: `Manually set to ${modeLabel(kind)}` })}
+                          disabled={running || item.phase === "published"}
+                          aria-pressed={item.kind === kind}
+                          className={`h-6 rounded px-2 text-[10px] font-medium disabled:opacity-50 ${
+                            item.kind === kind
+                              ? "bg-accent/20 text-accent"
+                              : "border border-line text-ink-3 hover:bg-white/5 hover:text-ink"
+                          }`}
+                        >
+                          {modeLabel(kind)}
+                        </button>
+                      ))}
+                    </div>
 
                     {item.title && <p className="mt-1 text-[11px] text-ink-2">Title: {item.title}</p>}
                     {item.metadataWarning && (

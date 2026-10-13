@@ -35,6 +35,7 @@ export default async function HomePage({
     label: category.label,
     slug: category.slug,
     icon: category.icon || undefined,
+    image: category.image_url || undefined,
   }));
 
   if (query) {

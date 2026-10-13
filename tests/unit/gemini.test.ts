@@ -11,6 +11,8 @@ import { createFakeSupabase } from "./helpers/fake-supabase";
 const genaiState = vi.hoisted(() => ({
   generateContent: null as null | ((args: Record<string, unknown>) => Promise<Record<string, unknown>>),
   lastArgs: null as null | Record<string, unknown>,
+  /** Every client the code constructed, in order (options only — never a key). */
+  clientOptions: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@google/genai", () => ({
@@ -22,7 +24,9 @@ vi.mock("@google/genai", () => ({
         return genaiState.generateContent(args);
       },
     };
-    constructor(public options: Record<string, unknown>) {}
+    constructor(public options: Record<string, unknown>) {
+      genaiState.clientOptions.push(options);
+    }
   },
   Type: { OBJECT: "OBJECT", STRING: "STRING", ARRAY: "ARRAY", NUMBER: "NUMBER" },
 }));
@@ -37,8 +41,10 @@ import {
   GeminiError,
   DEFAULT_MAX_OUTPUT_TOKENS,
   fallbackSuggestion,
+  geminiDiagnostics,
   humanizeFileName,
   parseLooseJson,
+  probeGemini,
   resetGeminiClientForTests,
   suggestVideoMetadata,
 } from "@/lib/gemini/client";
@@ -79,13 +85,16 @@ beforeEach(() => {
   resetGeminiClientForTests();
   genaiState.generateContent = null;
   genaiState.lastArgs = null;
+  genaiState.clientOptions = [];
   process.env.GEMINI_API_KEY = "test-gemini-key";
   delete process.env.GEMINI_MODEL;
+  delete process.env.GEMINI_API_BACKEND;
 });
 
 afterEach(() => {
   delete process.env.GEMINI_API_KEY;
   delete process.env.GEMINI_MODEL;
+  delete process.env.GEMINI_API_BACKEND;
   vi.restoreAllMocks();
 });
 
@@ -179,11 +188,20 @@ describe("suggestVideoMetadata", () => {
     expect(suggestion.tags).toEqual(["mature", "4k"]);
   });
 
-  it("rejects output with no permitted tags", async () => {
+  it("keeps a usable suggestion when the model answers with off-list tags", async () => {
     genaiState.generateContent = async () => ({ text: modelOutput({ tags: ["nope", "alsono"] }) });
-    const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
-    expect(error).toBeInstanceOf(GeminiError);
-    expect(error.message).toMatch(/no permitted tags/);
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
+    // The AI title/description survive; tags fall back to the category vocabulary
+    // instead of throwing the whole suggestion away.
+    expect(suggestion.title).toBe("Evening in Velvet");
+    expect(suggestion.tags.length).toBeGreaterThan(0);
+    expect(suggestion.tags).toContain("boudoir");
+  });
+
+  it("maps near-miss tags onto the permitted vocabulary", async () => {
+    genaiState.generateContent = async () => ({ text: modelOutput({ tags: ["MILF", "girl-on-girl", "4K UHD"] }) });
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(suggestion.tags).toEqual(["mature", "lesbian", "4k"]);
   });
 
   it("falls back to a known category for invalid model categories", async () => {
@@ -217,7 +235,9 @@ describe("suggestVideoMetadata", () => {
     expect(error).toBeInstanceOf(GeminiError);
     expect(error.status).toBe(503);
     expect(error.code).toBe("not_configured");
-    expect(calls).toBe(1);
+    // A rejected key is retried once against the other Google endpoint (Gemini
+    // API ↔ Vertex express mode) — that is what makes an AQ. key work.
+    expect(calls).toBe(2);
   });
 
   it("maps auth failures to a configuration error", async () => {
@@ -229,6 +249,55 @@ describe("suggestVideoMetadata", () => {
     const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
     expect(error).toBeInstanceOf(GeminiError);
     expect(error.status).toBe(503);
+  });
+
+  it("retries an AQ. authorization key rejected by the Gemini API on Vertex express mode", async () => {
+    process.env.GEMINI_API_KEY = "AQ.Ab8RN6-test-authorization-key";
+    resetGeminiClientForTests();
+
+    const rejected = new Error("API keys are not supported by this API. Expected OAuth2 access token.");
+    (rejected as unknown as Record<string, unknown>).status = 401;
+    let calls = 0;
+    genaiState.generateContent = async () => {
+      calls += 1;
+      if (calls === 1) throw rejected;
+      return { text: modelOutput() };
+    };
+
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
+    expect(suggestion.title).toBe("Evening in Velvet");
+    expect(calls).toBe(2);
+    // The same key is re-sent, but the second client is the express-mode one.
+    expect(genaiState.clientOptions[0]).toMatchObject({ apiKey: "AQ.Ab8RN6-test-authorization-key" });
+    expect(genaiState.clientOptions[0].vertexai).toBeUndefined();
+    expect(genaiState.clientOptions[1]).toMatchObject({ vertexai: true, apiKey: "AQ.Ab8RN6-test-authorization-key" });
+  });
+
+  it("honours GEMINI_API_BACKEND=vertex without trying the Gemini API first", async () => {
+    process.env.GEMINI_API_BACKEND = "vertex";
+    resetGeminiClientForTests();
+    genaiState.generateContent = async () => ({ text: modelOutput() });
+
+    await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(genaiState.clientOptions[0]).toMatchObject({ vertexai: true });
+  });
+
+  it("falls back to another Flash model when the configured model is unknown", async () => {
+    process.env.GEMINI_MODEL = "gemini-does-not-exist";
+    resetGeminiClientForTests();
+
+    const missing = new Error("models/gemini-does-not-exist is not found for API version v1beta");
+    (missing as unknown as Record<string, unknown>).status = 404;
+    let calls = 0;
+    genaiState.generateContent = async () => {
+      calls += 1;
+      if (calls === 1) throw missing;
+      return { text: modelOutput() };
+    };
+
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
+    expect(suggestion.title).toBe("Evening in Velvet");
+    expect(genaiState.lastArgs).toMatchObject({ model: "gemini-flash-latest" });
   });
 
   it("parses a fenced JSON block instead of failing", async () => {
@@ -366,6 +435,48 @@ describe("suggestVideoMetadata", () => {
     expect(error.status).toBe(502);
     expect(error.message).not.toContain("AQ.FakeKeyMaterial");
     expect(error.message).toMatch(/redacted/);
+  });
+});
+
+describe("geminiDiagnostics / probeGemini", () => {
+  it("reports the key shape without leaking the key", () => {
+    process.env.GEMINI_API_KEY = "AQ.Ab8RN6-very-secret-value";
+    resetGeminiClientForTests();
+    const diagnostics = geminiDiagnostics();
+    expect(diagnostics.configured).toBe(true);
+    expect(diagnostics.keyKind).toBe("authorization");
+    expect(JSON.stringify(diagnostics)).not.toContain("very-secret-value");
+  });
+
+  it("reports a missing key", () => {
+    delete process.env.GEMINI_API_KEY;
+    resetGeminiClientForTests();
+    const diagnostics = geminiDiagnostics();
+    expect(diagnostics.configured).toBe(false);
+    expect(diagnostics.keyKind).toBe("missing");
+  });
+
+  it("probes the live API and reports the endpoint that answered", async () => {
+    genaiState.generateContent = async () => ({ text: "ok" });
+    const probe = await probeGemini();
+    expect(probe).toMatchObject({ ok: true, configured: true, backend: "gemini", model: "gemini-flash-latest" });
+    expect(probe.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("probes and reports an actionable failure without key material", async () => {
+    process.env.GEMINI_API_KEY = "AQ.Ab8RN6-very-secret-value";
+    resetGeminiClientForTests();
+    const denied = new Error("API key not valid. Please pass a valid API key.");
+    (denied as unknown as Record<string, unknown>).status = 400;
+    genaiState.generateContent = async () => {
+      throw denied;
+    };
+
+    const probe = await probeGemini();
+    expect(probe.ok).toBe(false);
+    expect(probe.error).toBeTruthy();
+    expect(probe.hint).toMatch(/Google AI Studio/);
+    expect(JSON.stringify(probe)).not.toContain("very-secret-value");
   });
 });
 

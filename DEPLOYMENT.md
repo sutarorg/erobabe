@@ -613,16 +613,27 @@ route: `/api/gemini/suggest`.
 1. Go to https://aistudio.google.com/apikey → **Create API key** (a Google
    Cloud project may be required — follow the current AI Studio flow).
 2. Copy the key — this is `GEMINI_API_KEY` (server-only, never expose to the
-   browser, never a `NEXT_PUBLIC_*` variable).
+   browser, never a `NEXT_PUBLIC_*` variable). New keys are issued as
+   **Authorization keys starting with `AQ.`**; they are supported here the same
+   as the older `AIza` traffic keys (`GOOGLE_API_KEY` and
+   `GOOGLE_GENAI_API_KEY` are accepted as fallbacks for the same value).
 3. Set env: `GEMINI_API_KEY=<key>`, `GEMINI_MODEL=gemini-flash-latest` (or
    another currently supported low-latency text model per the docs above).
+   Optional: `GEMINI_API_BACKEND=gemini` (default) or `vertex` to start on
+   Vertex AI express mode; `auto`/unset retries the same key against the other
+   Google endpoint when one rejects it as "not an API key".
 4. In Vercel → Project → **Settings** → **Environment Variables**, set both
    for Production (and Preview if you test there), then redeploy.
-5. Test: go to `/admin/videos/upload`, choose a category and source, then
-   publish. The server must generate title, description, and tags with Gemini
+5. Test: open **Admin → System Health** and press **Test Gemini**. It sends
+   one tiny real request and reports the endpoint that answered (Gemini API or
+   Vertex express mode), the model, the latency, and — on failure — exactly why
+   Google rejected the call. Then go to `/admin/videos/upload`, choose a
+   category and source, then publish. The server must generate title, description, and tags with Gemini
    before it creates the video record. Alternatively POST to
    `/api/gemini/suggest` as an admin with `{ "fileName": "clip.mp4" }` and
-   expect a `{ suggestion, note }` response.
+   expect a `{ suggestion, note }` response. To check a key from a terminal
+   instead (no deploy needed), run `GEMINI_API_KEY=AQ.… npm run test:live` —
+   see `tests/live/README.md`. It needs outbound HTTPS to Google.
 6. Optional tuning: `GEMINI_MAX_OUTPUT_TOKENS` (default `2048`) is the
    per-suggestion output budget — thinking tokens are counted against it, so
    keep it well above the ~150 tokens the JSON payload needs.
@@ -643,7 +654,9 @@ route: `/api/gemini/suggest`.
    generation. AI output is not proof of rights, age, consent, or factual
    attributes, and suggestions require human review.
 9. Diagnose: `GEMINI_API_KEY` missing → 503 "not configured"; wrong key →
-   503; quota/rate limit → 429; malformed model output → 502. The key never
+   503 (the message names both endpoints that were tried); quota/rate limit →
+   429; unknown model → the next Flash model in `gemini-flash-latest,
+   gemini-2.5-flash` is tried; malformed model output → 502. The key never
    appears in responses, logs, or client bundles (verified in CI by the
    client-bundle secret check).
 10. "Gemini returned malformed JSON" means the model's text could not be parsed

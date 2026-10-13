@@ -107,6 +107,26 @@ describe("createGeneratedVideo metadata", () => {
     expect(video.title).toBe("Evening In Velvet");
   });
 
+  it("redacts key material from the warning an admin sees", async () => {
+    geminiState.suggest = async () => {
+      throw new Error(
+        "Request failed: https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=AQ.FakeSecretKeyMaterial1234567890abcdef"
+      );
+    };
+
+    const { metadata } = await createGeneratedVideo({
+      service: dbState.client as never,
+      userId: "admin-1",
+      sourceName: "evening_in_velvet_20240512.mov",
+      categoryId: CATEGORY_ID,
+      provider: "embed",
+    });
+
+    expect(metadata.source).toBe("fallback");
+    expect(metadata.warning).toMatch(/AI metadata unavailable/);
+    expect(metadata.warning).not.toContain("AQ.FakeSecretKeyMaterial");
+  });
+
   it("attaches the fallback tags so the video is not left untagged", async () => {
     const fake = seedDb();
     geminiState.suggest = async () => {

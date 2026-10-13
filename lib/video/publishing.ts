@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { fallbackSuggestion, suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
+import { fallbackSuggestion, redactKeyMaterial, suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
+import { normalizeEmbedSource, normalizePastedLink } from "@/lib/video/links";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
 
@@ -158,7 +159,8 @@ async function generateMetadata(
     }
     throw new Error("Gemini returned an incomplete title, description, or tag list");
   } catch (error: unknown) {
-    const reason = error instanceof Error ? error.message : "Gemini metadata generation failed";
+    // Redacted: the reason is shown in the admin UI and written to logs.
+    const reason = redactKeyMaterial(error instanceof Error ? error.message : "Gemini metadata generation failed");
     console.warn(`[video-publishing] AI metadata unavailable for "${sourceName}": ${reason}`);
 
     const raw = fallbackSuggestion(sourceName, categoryLabel);
@@ -608,14 +610,24 @@ export function assertPublicHttpUrl(value: string, label = "URL"): string {
 }
 
 export function sourceNameFromUrl(value: string): string {
-  const url = new URL(value);
+  // Markdown wrappers and trailing punctuation are stripped first so the file
+  // name Gemini is given never contains them.
+  const url = new URL(normalizePastedLink(value));
   const name = decodeURIComponent(url.pathname.split("/").pop() || "remote-video");
   return name.slice(0, 240) || "remote-video";
 }
 
+/**
+ * Turns pasted embed handlebars into a storable iframe source.
+ *
+ * Accepts `<iframe src="…">` markup, Markdown links (`[label](https://…)`),
+ * angle-bracket links, and bare player-page URLs — then applies the public-URL
+ * safety checks. Player pages whose watch URL is not the frameable one (for
+ * example Streamtape `/v/<id>` → `/e/<id>`) are converted to their embed URL.
+ */
 export function extractIframeSource(value: string): string {
-  const trimmed = value.trim();
-  const match = trimmed.match(/<iframe\b[^>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/i);
-  const source = (match?.[1] || match?.[2] || match?.[3] || trimmed).replace(/&amp;/g, "&");
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) throw new Error("Paste an iframe URL or iframe embed code");
+  const source = normalizeEmbedSource(trimmed);
   return assertPublicHttpUrl(source, "Embed source");
 }

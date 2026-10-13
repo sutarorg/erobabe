@@ -20,6 +20,8 @@ export type PublicCategory = {
   label: string;
   slug: string;
   icon: string | null;
+  /** Admin-uploaded card thumbnail; falls back to the icon when NULL. */
+  image_url?: string | null;
   description?: string | null;
   video_count?: number;
 };
@@ -108,9 +110,20 @@ async function countPublicVideos(
 async function loadCategories(): Promise<PublicCategory[]> {
   const supabase = tryCreateServiceClient();
   if (!supabase) return [];
-  const { data } = await supabase.from("categories").select("id, label, slug, icon, video_count").order("label");
+  // `image_url` arrives with migration 00000000000009; select it first and fall
+  // back to the pre-migration column list so an un-migrated database still
+  // renders the category index (with icons) instead of nothing.
+  let rows: any[] | null = null;
+  const withImage = await supabase.from("categories").select("id, label, slug, icon, image_url, video_count").order("label");
+  if (withImage.error) {
+    const withoutImage = await supabase.from("categories").select("id, label, slug, icon, video_count").order("label");
+    rows = withoutImage.data || [];
+  } else {
+    rows = withImage.data || [];
+  }
+
   return Promise.all(
-    (data || []).map(async (row: any) => {
+    (rows || []).map(async (row: any) => {
       const storedCount = Number(row.video_count) || 0;
       const publicCount = await countPublicVideos(supabase, String(row.id));
       return {
@@ -118,6 +131,7 @@ async function loadCategories(): Promise<PublicCategory[]> {
         label: String(row.label),
         slug: String(row.slug || ""),
         icon: row.icon ? String(row.icon) : null,
+        image_url: row.image_url ? String(row.image_url) : null,
         video_count: publicCount ?? storedCount,
       };
     })
@@ -183,7 +197,12 @@ export async function getCategoryBySlug(slug: string): Promise<{ category: Publi
     async () => {
       const supabase = tryCreateServiceClient();
       if (!supabase) return { category: null, videos: [] };
-      const { data: category } = await supabase.from("categories").select("id, label, slug, icon, description").eq("slug", slug).maybeSingle();
+      const categoryQuery = () =>
+        supabase.from("categories").select("id, label, slug, icon, image_url, description").eq("slug", slug).maybeSingle();
+      const { data: categoryRow, error: categoryError } = await categoryQuery();
+      const category = categoryError
+        ? (await supabase.from("categories").select("id, label, slug, icon, description").eq("slug", slug).maybeSingle()).data
+        : categoryRow;
       if (!category) return { category: null, videos: [] };
       const { data } = await publishedQuery(supabase)
         .eq("category_id", category.id)
@@ -195,6 +214,7 @@ export async function getCategoryBySlug(slug: string): Promise<{ category: Publi
           label: String(category.label),
           slug: String(category.slug || slug),
           icon: category.icon ? String(category.icon) : null,
+          image_url: (category as any).image_url ? String((category as any).image_url) : null,
           description: category.description ? String(category.description) : null,
         },
         videos: (data || []).map(mapVideo),

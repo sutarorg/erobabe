@@ -1,53 +1,66 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import VideoManager, { type AdminVideo } from "./VideoManager";
 
 export default async function AdminVideosPage() {
   const supabase = createServiceClient();
-  const { data: videos } = await supabase.from("videos").select("id, slug, title, status, visibility, moderation_status, view_count, created_at, category:categories(label)").order("created_at", { ascending: false }).limit(100);
+  const { data: videos } = await supabase
+    .from("videos")
+    .select(
+      "id, slug, title, status, visibility, provider, thumbnail_url, playable_url, embed_url, view_count, created_at, category:categories(label)"
+    )
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  const rows: AdminVideo[] = (videos || []).map((video: any) => {
+    const category = Array.isArray(video.category) ? video.category[0] : video.category;
+    return {
+      id: String(video.id),
+      slug: String(video.slug),
+      title: String(video.title),
+      status: String(video.status || "draft"),
+      visibility: video.visibility || null,
+      provider: video.provider || null,
+      thumbnail_url: video.thumbnail_url || null,
+      playable_url: video.playable_url || null,
+      embed_url: video.embed_url || null,
+      view_count: Number(video.view_count) || 0,
+      created_at: String(video.created_at || new Date().toISOString()),
+      category_label: category?.label ? String(category.label) : null,
+    };
+  });
+
+  const withThumbnails = rows.filter((video) => video.thumbnail_url).length;
 
   return (
     <div>
-      <div className="flex items-center justify-between">
-        <h1 className="text-[20px] font-semibold">Videos</h1>
-        <Link href="/admin/videos/upload" className="inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white">Upload</Link>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-[20px] font-semibold">Videos</h1>
+          <p className="mt-1 text-[12px] text-ink-3">
+            Manage the published library: change or remove a thumbnail, or delete a video.{" "}
+            {rows.length > 0 && (
+              <span className="tabular-nums">
+                {rows.length} videos · {withThumbnails} with a thumbnail
+              </span>
+            )}
+          </p>
+        </div>
+        <Link href="/admin/videos/upload" className="inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white">
+          Upload
+        </Link>
       </div>
 
-      {(videos || []).length === 0 ? (
+      {rows.length === 0 ? (
         <div className="mt-8 rounded-lg border border-dashed border-line bg-pcard p-12 text-center">
           <p className="text-[14px] font-medium">No videos published yet</p>
           <p className="mt-1 text-[12px] text-ink-3">Upload your first video to get started.</p>
-          <Link href="/admin/videos/upload" className="mt-4 inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white">Upload video</Link>
+          <Link href="/admin/videos/upload" className="mt-4 inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white">
+            Upload video
+          </Link>
         </div>
       ) : (
-        <div className="mt-6 overflow-x-auto rounded-lg border border-line">
-          <table className="w-full text-left text-[12.5px]">
-            <thead className="border-b border-line bg-pcard text-[11px] uppercase tracking-wider text-ink-3">
-              <tr>
-                <th className="px-4 py-3">Title</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Views</th>
-                <th className="px-4 py-3">Created</th>
-                <th className="px-4 py-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(videos || []).map((v: any) => (
-                <tr key={v.id} className="border-b border-line/50 hover:bg-white/[0.02]">
-                  <td className="px-4 py-3">
-                    <p className="font-medium">{v.title}</p>
-                    <p className="text-[11px] text-ink-3">{v.category?.label || "—"}</p>
-                  </td>
-                  <td className="px-4 py-3"><span className="rounded-full bg-white/5 px-2 py-1 text-[10px] uppercase">{v.status}</span></td>
-                  <td className="px-4 py-3 tabular-nums">{v.view_count || 0}</td>
-                  <td className="px-4 py-3 text-[11px] text-ink-3">{new Date(v.created_at).toLocaleDateString()}</td>
-                  <td className="px-4 py-3">
-                    <Link href={`/video/${v.slug}`} target="_blank" className="text-accent hover:underline text-[11px]">View</Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <VideoManager initialVideos={rows} />
       )}
     </div>
   );

@@ -36,10 +36,19 @@ export default async function CategoriesPage() {
               href={`/category/${cat.slug}`}
               prefetch
               aria-label={`Browse ${cat.label}, ${videoCount} ${videoCount === 1 ? "video" : "videos"}`}
-              className="group relative flex min-h-[132px] min-w-0 flex-col items-start rounded-xl border border-line bg-card p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/45 hover:bg-card-hover"
+              className="group relative flex min-h-[132px] min-w-0 flex-col items-start overflow-hidden rounded-xl border border-line bg-card p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/45 hover:bg-card-hover"
             >
-              <div className="flex w-full items-start justify-between gap-2">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 transition-colors group-hover:border-accent/45 group-hover:bg-accent/15">
+              {/* Admin-uploaded card thumbnail, when one is set. */}
+              {cat.image_url ? (
+                <img
+                  src={cat.image_url}
+                  alt=""
+                  loading="lazy"
+                  className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-40 transition-opacity duration-200 group-hover:opacity-55"
+                />
+              ) : null}
+              <div className="relative flex w-full items-start justify-between gap-2">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 backdrop-blur-sm transition-colors group-hover:border-accent/45 group-hover:bg-accent/15">
                   <CategoryIcon
                     icon={cat.icon}
                     fallbackKey={cat.slug || cat.label}
@@ -48,10 +57,10 @@ export default async function CategoriesPage() {
                 </span>
                 <ArrowUpRight className="h-4 w-4 shrink-0 text-ink-3 opacity-0 transition-all duration-200 group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-accent group-hover:opacity-100" aria-hidden />
               </div>
-              <span className="mt-3 block w-full break-words text-[13px] font-semibold leading-snug text-ink transition-colors group-hover:text-accent">
+              <span className="relative mt-3 block w-full break-words text-[13px] font-semibold leading-snug text-ink transition-colors group-hover:text-accent">
                 {cat.label}
               </span>
-              <span className="mt-1.5 text-[11px] font-medium text-ink-3">
+              <span className="relative mt-1.5 text-[11px] font-medium text-ink-3">
                 {videoCount} {videoCount === 1 ? "video" : "videos"}
               </span>
             </Link>
