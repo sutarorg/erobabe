@@ -118,7 +118,7 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
         ← Back to home
       </Link>
 
-      {/* Prefer direct media URLs to avoid third-party embed ads when available. The iframe sandbox blocks popups and top-level navigation while retaining scripts and presentation needed by most players. */}
+      {/* Prefer direct media URLs when available. Third-party providers can still block embeds at their own discretion. */}
       <div className="relative mt-3 aspect-video overflow-hidden rounded-xl border border-line bg-black">
         {video.playable_url ? (
           <video
@@ -140,7 +140,6 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
             allowFullScreen
             loading="lazy"
             referrerPolicy="strict-origin-when-cross-origin"
-            sandbox="allow-scripts allow-same-origin allow-presentation"
           />
         ) : (
           <>
@@ -153,6 +152,21 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
           </>
         )}
       </div>
+
+      {video.embed_url && !video.playable_url && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-ink-3">
+          <span>Having trouble with the embedded player?</span>
+          <a
+            href={video.embed_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold text-accent underline underline-offset-2 hover:opacity-80"
+          >
+            Open video on its host
+          </a>
+          <span>· If the host says “Client blocked”, its access policy must be resolved by the host or the video must be replaced with an authorized playable source.</span>
+        </div>
+      )}
 
       <h1 className="mt-4 text-[19px] font-semibold tracking-tight text-ink">{video.title}</h1>
       <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-3">
