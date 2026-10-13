@@ -490,7 +490,7 @@ describe("embed publishing — thumbnail limitations and description length", ()
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.results[0].thumbnailSource).toBe("none");
-    expect(body.results[0].thumbnailWarning).toMatch(/direct video-file URL/);
+    expect(body.results[0].thumbnailWarning).toMatch(/Add one manually/);
     expect(isValidDescription(body.results[0].description)).toBe(true);
     expect(harness.db.videos[0].description).toBe(body.results[0].description);
     expect(frameState.calls).toEqual([]);

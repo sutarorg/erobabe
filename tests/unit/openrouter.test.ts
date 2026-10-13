@@ -152,22 +152,24 @@ describe("suggestVideoMetadata", () => {
     expect(sentBody()).toMatchObject({ model: "deepseek/deepseek-chat", max_tokens: 1024 });
   });
 
-  it("uses a neutral non-explicit prompt and treats source data as untrusted", async () => {
+  it("treats source data as untrusted and keeps the guardrails in the prompt", async () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput()));
     await suggestVideoMetadata({ fileName: "clip.mp4" });
     const messages = sentBody().messages as Array<{ role: string; content: string }>;
     expect(messages[0].role).toBe("user");
-    expect(messages[0].content).toMatch(/non-explicit catalog metadata/i);
     expect(messages[0].content).toMatch(/untrusted source data/i);
-    expect(messages[0].content).not.toMatch(/adult video platform|pornographic/i);
+    // Whatever the model writes, the prompt holds the legal line.
+    expect(messages[0].content).toMatch(/consenting adult aged 18 or over/i);
+    expect(messages[0].content).toMatch(/Never mention or imply minors/i);
   });
 
-  it("anchors the prompt on the admin-selected category and asks for a story voice", async () => {
+  it("anchors the prompt on the admin-selected category and asks for a one-clause title", async () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ category: "Boudoir" })));
     await suggestVideoMetadata({ fileName: "evening_in_velvet.mp4", category: "Boudoir" });
     const messages = sentBody().messages as Array<{ content: string }>;
     expect(messages[0].content).toContain('The admin has already chosen the category "Boudoir"');
-    expect(messages[0].content).toMatch(/story voice/i);
+    expect(messages[0].content).toMatch(/ONE clause/i);
+    expect(messages[0].content).toMatch(/Never use a hyphen, en dash, em dash/i);
     expect(messages[0].content).toMatch(/low light, soft fabric/i);
   });
 

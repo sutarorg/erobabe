@@ -33,7 +33,7 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
 }));
 
-const CategoriesAdmin = (await import("@/app/admin/categories/page")).default;
+const CategoriesAdmin = (await import("@/app/admin/(dashboard)/categories/page")).default;
 
 async function render() {
   return renderToStaticMarkup(await (CategoriesAdmin as any)());

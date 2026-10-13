@@ -6,12 +6,14 @@ import {
   isValidDescription,
   KNOWN_CATEGORIES,
   MAX_DESCRIPTION_WORDS,
+  MAX_TITLE_LENGTH,
   MIN_DESCRIPTION_WORDS,
   fallbackSuggestion,
   humanizeFileName,
   normalizeDescription,
   parseLooseJson,
   redactKeyMaterial,
+  sanitizeTitle,
   validateSuggestionPayload,
 } from "@/lib/metadata/suggestion";
 
@@ -155,22 +157,23 @@ describe("description word limits and title prompt", () => {
     expect(isValidDescription(fallbackSuggestion("clip.mp4", category).description)).toBe(true);
   });
 
-  it("requests engaging, supported keywords without graphic wording or invented facts", () => {
+  it("asks for a tube-style one-clause title and pins the metadata to the admin's category", () => {
     const prompt = buildPrompt({ fileName: "evening_in_velvet.mp4", category: "Boudoir" });
-    expect(prompt).toContain("search-friendly title (max 160 characters)");
+    expect(prompt).toContain("search-friendly");
     expect(prompt).toContain("25-30 words, not characters");
-    expect(prompt).toContain("non-graphic");
     expect(prompt).toContain("untrusted source data");
+    // The title instruction is the point of the change: one clause, no dash.
+    expect(prompt).toContain("ONE clause");
+    expect(prompt).toMatch(/Never use a hyphen, en dash, em dash/);
+    expect(prompt).toMatch(/consenting adult aged 18 or over/);
     expect(prompt).not.toContain("max 200 characters");
     expect(prompt).not.toContain("max 60 characters");
     const example = prompt.split("Example JSON:\n")[1];
     expect(validateSuggestionPayload(example).ok).toBe(true);
   });
 
-  it("asks for a story voice and pins the metadata to the admin's category", () => {
+  it("shows a complete, dash-free title for the admin's category", () => {
     const prompt = buildPrompt({ fileName: "evening_in_velvet.mp4", category: "Massage" });
-    expect(prompt).toMatch(/story voice/i);
-    expect(prompt).toMatch(/read like the title of a short story/i);
     expect(prompt).toContain('The admin has already chosen the category "Massage"');
     expect(prompt).toContain('must be exactly "Massage"');
     expect(prompt).toContain("story-like description");
@@ -181,11 +184,22 @@ describe("description word limits and title prompt", () => {
     expect(validated.ok).toBe(true);
     if (validated.ok) {
       expect(validated.suggestion.category).toBe("Massage");
-      expect(validated.suggestion.title).toContain("A Story of Warm Oil and Patience");
+      expect(validated.suggestion.title).toBe(CATEGORY_STORIES.Massage.titleExample);
+      expect(validated.suggestion.title).not.toMatch(/[\u2010-\u2015\u2212]/);
     }
   });
 
-  it.each([...KNOWN_CATEGORIES])("produces a valid story example for %s", (category) => {
+  it("never lets a dash survive into a validated title", () => {
+    const payload = { ...JSON.parse(modelOutput()), title: "Evening in Velvet \u2014 A Story in Low Light" };
+    const result = validateSuggestionPayload(JSON.stringify(payload), "Boudoir");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.suggestion.title).not.toMatch(/[\u2010-\u2015\u2212]/);
+      expect(result.suggestion.title).toBe("Evening in Velvet A Story in Low Light");
+    }
+  });
+
+  it.each([...KNOWN_CATEGORIES])("produces a valid, dash-free title example for %s", (category) => {
     const prompt = buildPrompt({ fileName: "evening_in_velvet.mp4", category });
     const example = prompt.split("Example JSON:\n")[1];
     const validated = validateSuggestionPayload(example, category);
@@ -193,8 +207,9 @@ describe("description word limits and title prompt", () => {
     if (validated.ok) {
       expect(validated.suggestion.category).toBe(category);
       expect(isValidDescription(validated.suggestion.description)).toBe(true);
-      expect(validated.suggestion.title.length).toBeGreaterThan(0);
-      expect(validated.suggestion.title.length).toBeLessThanOrEqual(160);
+      expect(validated.suggestion.title).toBe(CATEGORY_STORIES[category].titleExample);
+      expect(validated.suggestion.title).not.toMatch(/[\u2010-\u2015\u2212]/);
+      expect(validated.suggestion.title.length).toBeLessThanOrEqual(MAX_TITLE_LENGTH);
     }
   });
 
@@ -274,9 +289,9 @@ describe("parseLooseJson", () => {
 });
 
 describe("fallbackSuggestion", () => {
-  it("builds reviewable story metadata from the file name and category", () => {
+  it("builds reviewable metadata from the file name and category, with no invented subtitle", () => {
     const suggestion = fallbackSuggestion("evening_in_velvet-4k.mov", "Boudoir");
-    expect(suggestion.title).toBe("Evening In Velvet 4k — A Story in Low Light and Soft Fabric");
+    expect(suggestion.title).toBe("Evening In Velvet 4k");
     expect(suggestion.category).toBe("Boudoir");
     expect(suggestion.tags).toContain("boudoir");
     expect(suggestion.tags.length).toBeGreaterThan(0);
@@ -284,10 +299,11 @@ describe("fallbackSuggestion", () => {
     expect(suggestion.description).not.toMatch(/AI metadata|replace|unavailable/i);
   });
 
-  it.each([...KNOWN_CATEGORIES])("writes %s metadata in a story voice, not a catalog boilerplate voice", (category) => {
+  it.each([...KNOWN_CATEGORIES])("writes %s metadata without a dash in the title", (category) => {
     const suggestion = fallbackSuggestion("evening_in_velvet.mov", category);
     expect(suggestion.category).toBe(category);
-    expect(suggestion.title).toContain(CATEGORY_STORIES[category].titleHook);
+    expect(suggestion.title).toBe("Evening In Velvet");
+    expect(suggestion.title).not.toMatch(/[\u2010-\u2015\u2212-]/);
     expect(suggestion.description).toBe(CATEGORY_STORIES[category].blurb);
     expect(suggestion.description).not.toMatch(/explore this listing|playback controls|related videos/i);
     expect(isValidDescription(suggestion.description)).toBe(true);
@@ -300,7 +316,7 @@ describe("fallbackSuggestion", () => {
   });
 
   it("drops long id runs and falls back to the category for empty names", () => {
-    expect(fallbackSuggestion("", "Solo").title).toBe("Solo — A Private Story With No Audience");
+    expect(fallbackSuggestion("", "Solo").title).toBe("Solo Scene");
     expect(humanizeFileName("evening_in_velvet_20240512_1080p.mov")).toBe("Evening In Velvet 1080p");
   });
 
@@ -383,3 +399,37 @@ describe("normalizeDescription", () => {
   });
 });
 
+describe("sanitizeTitle", () => {
+  it("strips em, en, and separator dashes", () => {
+    expect(sanitizeTitle("A Quiet Sunday Morning \u2014 An Unscripted Story")).toBe("A Quiet Sunday Morning An Unscripted Story");
+    expect(sanitizeTitle("Petite Amateur \u2013 Hardcore Fun")).toBe("Petite Amateur Hardcore Fun");
+    expect(sanitizeTitle("Petite Amateur - Hardcore Fun")).toBe("Petite Amateur Hardcore Fun");
+  });
+
+  it("keeps a hyphen inside a word", () => {
+    expect(sanitizeTitle("Girl-On-Girl Session In Soft Light")).toBe("Girl-On-Girl Session In Soft Light");
+  });
+
+  it("removes markdown, emoji, quotes, exclamation marks, and a colon subtitle", () => {
+    expect(sanitizeTitle("**Bold Title** With Emphasis")).toBe("Bold Title With Emphasis");
+    expect(sanitizeTitle("Hot Scene \u{1F525} Tonight!")).toBe("Hot Scene Tonight");
+    expect(sanitizeTitle('"Quoted Title" ')).toBe("Quoted Title");
+    expect(sanitizeTitle("Title.")).toBe("Title");
+    // "<subject>: <subtitle>" is the same dash-shaped habit in another costume.
+    expect(sanitizeTitle("Roleplay: The Naughty Nurse")).toBe("Roleplay The Naughty Nurse");
+    expect(sanitizeTitle("Who Is The Boss?")).toBe("Who Is The Boss");
+  });
+
+  it("collapses whitespace and caps the length on a word boundary", () => {
+    expect(sanitizeTitle("  Too    many   spaces  ")).toBe("Too many spaces");
+    const long = sanitizeTitle(Array(60).fill("word").join(" "));
+    expect(long.length).toBeLessThanOrEqual(MAX_TITLE_LENGTH);
+    expect(long.endsWith("word")).toBe(true);
+  });
+
+  it("returns an empty string when nothing publishable is left", () => {
+    expect(sanitizeTitle("")).toBe("");
+    expect(sanitizeTitle("---")).toBe("");
+    expect(sanitizeTitle("\u{1F525}\u{1F525}")).toBe("");
+  });
+});

@@ -10,11 +10,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) redirect("/auth/sign-in?next=/admin");
+  if (!user) redirect("/admin/signin?next=/admin");
 
   const { data: profile } = await supabase.from("profiles").select("role, status").eq("id", user.id).single();
   if (!profile || profile.role !== "admin" || profile.status !== "active") {
-    redirect("/auth/sign-in?next=/admin");
+    redirect("/admin/signin?next=/admin");
   }
 
   return (

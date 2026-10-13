@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Eye } from "lucide-react";
 import { formatDuration, formatTimeAgo } from "@/lib/site";
 import type { PublicVideo } from "@/lib/public/catalog";
+import ThumbImage from "./ThumbImage";
 
 const FALLBACK_THUMB = "https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png";
 
@@ -14,7 +15,7 @@ export default function PublicVideoCard({ video }: { video: PublicVideo }) {
   return (
     <Link href={`/video/${video.slug}`} prefetch className="group min-w-0">
       <div className="relative aspect-video overflow-hidden rounded-lg border border-line bg-card">
-        <img
+        <ThumbImage
           src={video.thumbnail_url || FALLBACK_THUMB}
           alt={video.title}
           className="h-full w-full object-cover transition-transform group-hover:scale-105"

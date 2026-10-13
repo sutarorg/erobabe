@@ -11,6 +11,7 @@ import {
 import { resolveThumbnailUrl } from "@/lib/video/storage";
 import { normalizeEmbedEntries } from "@/lib/video/entries";
 import { describeDuplicate, findDuplicateVideos, sourceKeyOf } from "@/lib/video/duplicates";
+import { tryStreamtapeThumbnailFor } from "@/lib/video/streamtape-thumbnails";
 
 export async function POST(req: NextRequest) {
   try {
@@ -52,7 +53,8 @@ export async function POST(req: NextRequest) {
       }
       try {
         const embedUrl = extractIframeSource(entry.source);
-        const thumbnailUrl = resolveThumbnailUrl(service, user.id, entry.thumbnailPath);
+        let thumbnailUrl = resolveThumbnailUrl(service, user.id, entry.thumbnailPath);
+        let thumbnailSource: "uploaded" | "streamtape" | "none" = thumbnailUrl ? "uploaded" : "none";
         const generated = await createGeneratedVideo({
           service,
           userId: user.id,
@@ -72,6 +74,26 @@ export async function POST(req: NextRequest) {
           embedUrl,
           thumbnailUrl,
         });
+
+        // An embedded player exposes no frames to capture, so the only
+        // automatic source is the matching image in the Streamtape thumbnails
+        // folder. Best-effort: publishing never fails over a missing image.
+        if (!thumbnailUrl) {
+          const auto = await tryStreamtapeThumbnailFor(service, user.id, {
+            id: generated.video.id,
+            slug: video.slug,
+            title: video.title,
+            thumbnail_url: null,
+            embed_url: embedUrl,
+            source_key: sourceKeyOf(embedUrl),
+            extraNames: [sourceNameFromUrl(embedUrl)],
+          });
+          if (auto) {
+            await service.from("videos").update({ thumbnail_url: auto.thumbnailUrl }).eq("id", generated.video.id);
+            thumbnailUrl = auto.thumbnailUrl;
+            thumbnailSource = "streamtape";
+          }
+        }
         await service.from("audit_logs").insert({
           actor_id: user.id,
           action: "video_published_from_embed",
@@ -81,7 +103,8 @@ export async function POST(req: NextRequest) {
           metadata: {
             provider: "embed",
             host: new URL(embedUrl).hostname,
-            has_custom_thumbnail: Boolean(thumbnailUrl),
+            has_custom_thumbnail: thumbnailSource === "uploaded",
+            thumbnail_source: thumbnailSource,
             duplicate_override: Boolean(duplicate),
           },
         });
@@ -94,8 +117,8 @@ export async function POST(req: NextRequest) {
           description: generated.metadata.description,
           status: "published",
           thumbnailUrl,
-          thumbnailSource: thumbnailUrl ? "uploaded" : "none",
-          ...(!thumbnailUrl ? { thumbnailWarning: "Embedded players do not expose video frames. Add a thumbnail manually or use a direct video-file URL for automatic capture." } : {}),
+          thumbnailSource,
+          ...(!thumbnailUrl ? { thumbnailWarning: "Embedded players do not expose video frames and no image in the Streamtape thumbnails folder matched this video. Add one manually from the video list." } : {}),
           metadataSource: generated.metadata.source,
           ...(generated.metadata.warning ? { metadataWarning: generated.metadata.warning } : {}),
         });

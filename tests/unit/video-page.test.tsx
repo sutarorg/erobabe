@@ -89,6 +89,25 @@ describe("/video/[slug] watch page", () => {
     expect(html).toContain(">Like<");
     expect(html).toContain(">Share<");
   });
+
+  it("gives every related card a view count and a publication age, like the home page", async () => {
+    const html = await renderPage();
+    const grid = new DOMParser()
+      .parseFromString(html, "text/html")
+      .querySelector("[data-grid-rows='4']") as HTMLElement;
+
+    const cards = Array.from(grid.children) as HTMLElement[];
+    expect(cards.length).toBeGreaterThan(0);
+
+    for (const card of cards) {
+      expect(card.textContent).toMatch(/[\d,]+ views/);
+      expect(card.querySelector("time")).toBeTruthy();
+      expect(card.querySelector("time")?.textContent).toBe("2 days ago");
+      // The same card component the homepage grid uses.
+      expect(card.getAttribute("href")).toMatch(/^\/video\//);
+      expect(card.querySelector("img")).toBeTruthy();
+    }
+  });
 });
 
 const VideoActions = (await import("@/src/components/VideoActions")).default;
