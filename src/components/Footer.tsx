@@ -7,7 +7,6 @@ interface FooterProps {
   onNavigate: (key: NavKey) => void;
   onOpenPage?: (path: string) => void;
   onAdvertise?: () => void;
-  onAdmin?: () => void;
   useLinks?: boolean;
 }
 
@@ -49,7 +48,7 @@ function LinkColumn({
 const linkClass =
   "w-fit text-[12.5px] text-ink-3 transition-colors duration-150 hover:text-accent";
 
-export default function Footer({ onNavigate, onOpenPage, onAdvertise, onAdmin, useLinks = false }: FooterProps) {
+export default function Footer({ onNavigate, onOpenPage, onAdvertise, useLinks = false }: FooterProps) {
   return (
     <footer className="mt-10 border-t border-line">
       <div className="mx-auto w-full max-w-[1200px] px-4 py-8 @sm:px-5 @2xl:px-7">
@@ -127,19 +126,6 @@ export default function Footer({ onNavigate, onOpenPage, onAdvertise, onAdmin, u
                 ) : (
                   <button type="button" onClick={onAdvertise} className={linkClass}>
                     Advertise with us
-                  </button>
-                )}
-              </li>
-            )}
-            {onAdmin && (
-              <li>
-                {useLinks ? (
-                  <Link href="/admin" prefetch className={linkClass}>
-                    Admin portal
-                  </Link>
-                ) : (
-                  <button type="button" onClick={onAdmin} className={linkClass}>
-                    Admin portal
                   </button>
                 )}
               </li>

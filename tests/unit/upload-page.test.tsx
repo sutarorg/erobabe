@@ -36,7 +36,7 @@ vi.mock("@/src/utils/uploadFile", () => ({
 }));
 
 // Import the component after mocks are set up.
-import UploadPage from "@/app/admin/videos/upload/page";
+import UploadPage from "@/app/admin/(dashboard)/videos/upload/page";
 import { postJson } from "@/src/utils/api";
 
 const mockPostJson = postJson as unknown as ReturnType<typeof vi.fn>;

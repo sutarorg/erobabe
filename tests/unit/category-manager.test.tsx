@@ -12,7 +12,7 @@ import React from "react";
 vi.mock("@/src/utils/api", () => ({ postJson: vi.fn(), getJson: vi.fn() }));
 vi.mock("@/src/utils/uploadFile", () => ({ uploadWithProgress: vi.fn().mockResolvedValue(undefined) }));
 
-import CategoryManager from "@/app/admin/categories/CategoryManager";
+import CategoryManager from "@/app/admin/(dashboard)/categories/CategoryManager";
 import { postJson } from "@/src/utils/api";
 import { uploadWithProgress } from "@/src/utils/uploadFile";
 

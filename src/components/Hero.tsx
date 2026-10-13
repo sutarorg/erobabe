@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { HERO_SLIDES, type HeroSlide } from "../data/content";
 import { cn } from "../utils/cn";
+import ThumbImage from "./ThumbImage";
 
 /**
  * Callbacks are optional so the hero can be rendered from Server Components.
@@ -69,7 +70,7 @@ export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProp
               active ? "opacity-100" : "pointer-events-none opacity-0"
             )}
           >
-            <img
+            <ThumbImage
               src={slide.image}
               alt={slide.alt}
               draggable={false}

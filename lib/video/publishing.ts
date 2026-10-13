@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { suggestVideoMetadata } from "@/lib/metadata/openrouter";
-import { fallbackSuggestion, isValidDescription, normalizeDescription, redactKeyMaterial, type SuggestedMetadata } from "@/lib/metadata/suggestion";
+import { fallbackSuggestion, isValidDescription, normalizeDescription, redactKeyMaterial, sanitizeTitle, type SuggestedMetadata } from "@/lib/metadata/suggestion";
 import { normalizeEmbedSource, normalizePastedLink } from "@/lib/video/links";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
@@ -124,7 +124,7 @@ export function isPreparedMetadata(value: unknown): value is GeneratedMetadata {
 
 function sanitizePreparedMetadata(meta: GeneratedMetadata): GeneratedMetadata {
   return {
-    title: meta.title.replace(/\s+/g, " ").trim().slice(0, 160),
+    title: sanitizeTitle(meta.title),
     description: meta.description.replace(/\s+/g, " ").trim(),
     tags: normalizeTags(meta.tags),
     source: meta.source,
@@ -140,7 +140,7 @@ function cleanMetadata(raw: SuggestedMetadata, categoryLabel?: string): { title:
   const description = String(raw.description ?? "").replace(/\s+/g, " ").trim();
   const repaired = normalizeDescription(description, categoryLabel);
   return {
-    title: raw.title?.replace(/\s+/g, " ").trim().slice(0, 160),
+    title: sanitizeTitle(raw.title ?? ""),
     description: repaired ? repaired.description : description,
     tags: normalizeTags(Array.isArray(raw.tags) ? raw.tags : []),
   };

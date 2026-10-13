@@ -101,10 +101,9 @@ interface PublicSiteProps {
   path: string;
   onRoute: (path: string) => void;
   onAdvertise: () => void;
-  onAdmin?: () => void;
 }
 
-export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: PublicSiteProps) {
+export default function PublicSite({ path, onRoute, onAdvertise }: PublicSiteProps) {
   /* ---- local view state (frontend only) -------------------------- */
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -374,7 +373,6 @@ export default function PublicSite({ path, onRoute, onAdvertise, onAdmin }: Publ
           onNavigate={navigate}
           onOpenPage={(p) => onRoute(p)}
           onAdvertise={onAdvertise}
-          onAdmin={onAdmin}
         />
       </main>
 

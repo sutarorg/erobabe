@@ -1,9 +1,17 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
+/**
+ * `/admin/signin` is the administrator sign-in page. It has to be reachable
+ * *without* a session — it is the page that creates one — so it is excluded
+ * from the protected `/admin` tree even though it sits on that path.
+ */
+const ADMIN_SIGNIN_PATH = /^\/admin\/sign-?in\/?$/;
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const isProtected = pathname.startsWith("/admin") || pathname.startsWith("/advertiser");
+  const isAdminSignIn = ADMIN_SIGNIN_PATH.test(pathname);
+  const isProtected = isAdminSignIn ? false : pathname.startsWith("/admin") || pathname.startsWith("/advertiser");
 
   // Public pages skip the Supabase round-trip so navigation stays instant.
   // Auth is still enforced on /admin and /advertiser.

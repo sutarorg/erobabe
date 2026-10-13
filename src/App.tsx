@@ -45,7 +45,6 @@ export default function App() {
         path={parts.slice(1).join("/")}
         onRoute={(p) => go(p ? `/site/${p}` : "/site")}
         onAdvertise={() => go("/advertise")}
-        onAdmin={() => go("/admin")}
       />
     );
   }

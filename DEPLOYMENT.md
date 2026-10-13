@@ -406,6 +406,50 @@ Each video has its own thumbnail picker. A custom thumbnail is uploaded to the
 public `video-thumbnails` bucket through the existing signed-upload flow
 (`POST /api/videos/storage-token` → browser `PUT`).
 
+Three further sources fill in a video that has none, in this order:
+
+1. **A frame from the video itself** — `POST /api/admin/videos/thumbnails` runs
+   ffmpeg over the direct URL and stores a captured frame.
+2. **The Streamtape file manager** — see the next section. This is the automatic
+   fallback at publish time for both direct-URL and embed publishing.
+3. **A manual pick** from `/admin/videos` → *Add thumbnail*.
+
+### Thumbnails from the Streamtape file manager
+
+If the thumbnail images live in the Streamtape file manager — one image per
+video in a folder such as `home/thumbnails`, each named after its video —
+Erobabe can attach them itself.
+
+- `STREAMTAPE_LOGIN` and `STREAMTAPE_API_KEY` (server-only; Streamtape panel →
+  *Account Settings*) authorise a read of the file manager. Both are required;
+  without them the importer answers `503` with an actionable message and
+  publishing continues with whatever thumbnail it already has.
+- `STREAMTAPE_THUMBNAIL_FOLDER_NAME` (default `thumbnails`) names the folder to
+  look for; the file manager is searched breadth-first to a shallow depth, and
+  common spellings (`thumbs`, `thumnails`) are recognised. Set
+  `STREAMTAPE_THUMBNAIL_FOLDER_ID` to skip the search entirely.
+- Matching is by name: the image name is compared against the video's title,
+  slug, source file name and upload name, lower-cased and stripped of
+  separators, brackets, extensions and resolution tags. An exact match always
+  wins; below that a token-overlap score with a floor of 0.68 decides. A near
+  miss is reported as *unmatched* rather than attached — a wrong thumbnail is
+  worse than a missing one.
+- A matched image is **copied** into the public `video-thumbnails` bucket and
+  the stored URL is Erobabe's own. Streamtape download links are ticketed and
+  expire, so they are never written to a video row.
+
+Admin surface (all admin-only, `/api/admin/videos/streamtape-thumbnails`):
+
+| Action | Request | Effect |
+| --- | --- | --- |
+| Check folder | `GET` | Dry run: reports the folder found, how many images it holds, and which video each one would match. Downloads and writes nothing. |
+| Import | `POST { ids?: string[]; overwrite?: boolean }` | Copies the matched images into storage and writes the public URLs. Without `ids`, fills every video still missing a thumbnail (25 per request). `overwrite: true` is required to replace an existing thumbnail. |
+
+In `/admin/videos` the **Streamtape thumbnails** panel runs the dry run with
+*Check folder* and the import with *Import missing thumbnails* (or
+*Import for selection* when rows are ticked). Each row without a thumbnail also
+has a *Streamtape thumb* action.
+
 ### Legacy videos
 
 Existing videos from Streamtape, UFOLOAD, Uqload, and embed-only records are

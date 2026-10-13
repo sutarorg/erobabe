@@ -14,6 +14,7 @@ import { normalizeRemoteEntries } from "@/lib/video/entries";
 import { classifyVideoSource, normalizePastedLink } from "@/lib/video/links";
 import { describeDuplicate, findDuplicateVideos, sourceKeyOf } from "@/lib/video/duplicates";
 import { generateFrameThumbnail } from "@/lib/video/frame-thumbnail";
+import { tryStreamtapeThumbnailFor } from "@/lib/video/streamtape-thumbnails";
 
 const MAX_URLS_PER_REQUEST = 20;
 
@@ -159,7 +160,7 @@ export async function POST(req: NextRequest) {
 
       try {
         let thumbnailUrl: string | null = null;
-        let thumbnailSource: "uploaded" | "frame" | "none" = "none";
+        let thumbnailSource: "uploaded" | "frame" | "streamtape" | "none" = "none";
         let thumbnailWarning: string | undefined;
 
         if (entry.thumbnailPath) {
@@ -199,6 +200,28 @@ export async function POST(req: NextRequest) {
           embedUrl: null,
           thumbnailUrl,
         });
+
+        // Frame capture is not always possible (an unreachable host, a host
+        // that refuses range requests). When it produced nothing, fall back to
+        // the matching image in the Streamtape thumbnails folder before the
+        // video ever reaches a public page without one.
+        if (!thumbnailUrl) {
+          const auto = await tryStreamtapeThumbnailFor(service, user.id, {
+            id: generated.video.id,
+            slug: video.slug,
+            title: video.title,
+            thumbnail_url: null,
+            playable_url: entry.url,
+            source_key: sourceKeyOf(entry.url),
+            extraNames: [name],
+          });
+          if (auto) {
+            await service.from("videos").update({ thumbnail_url: auto.thumbnailUrl }).eq("id", generated.video.id);
+            thumbnailUrl = auto.thumbnailUrl;
+            thumbnailSource = "streamtape";
+            thumbnailWarning = undefined;
+          }
+        }
 
         await service.from("audit_logs").insert({
           actor_id: user.id,

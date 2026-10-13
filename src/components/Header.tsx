@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { Menu, Search, User, X } from "lucide-react";
+import { LayoutDashboard, LogOut, Menu, Search, User, X } from "lucide-react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { LOGO_URL } from "../data/content";
 import { cn } from "../utils/cn";
@@ -21,8 +21,20 @@ const NAV_ITEMS: { key: NavKey; label: string }[] = [
   { key: "toprated", label: "Top Rated" },
 ];
 
+/** The signed-in account shown in the right-hand cluster. */
+export type HeaderUser = {
+  name: string;
+  /** `admin` gets the admin dashboard, anything else the advertiser portal. */
+  role?: string | null;
+};
+
 interface HeaderProps {
-  navActive: NavKey;
+  /**
+   * The active primary-navigation key, or `null` on a page that is not one of
+   * them (/about, /privacy, /terms, /video/…). `null` leaves every item
+   * un-highlighted instead of lighting up “Home” everywhere.
+   */
+  navActive: NavKey | null;
   onNavigate: (key: NavKey) => void;
   query: string;
   onQueryChange: (value: string) => void;
@@ -30,11 +42,18 @@ interface HeaderProps {
   onSearchOpenChange: (open: boolean) => void;
   menuOpen: boolean;
   onMenuOpenChange: (open: boolean) => void;
-  user: { name: string } | null;
+  user: HeaderUser | null;
+  /** Where “Dashboard” goes. Defaults by role: /admin or /advertiser. */
+  dashboardHref?: string;
   onSignInClick: () => void;
   onSignOut: () => void;
   /** Prefetching <Link> navigation for the Next.js site. */
   useLinks?: boolean;
+}
+
+/** Where a signed-in account's dashboard lives. */
+export function dashboardHrefFor(user: HeaderUser | null): string {
+  return user?.role === "admin" ? "/admin" : "/advertiser";
 }
 
 export default function Header({
@@ -47,10 +66,12 @@ export default function Header({
   menuOpen,
   onMenuOpenChange,
   user,
+  dashboardHref,
   onSignInClick,
   onSignOut,
   useLinks = false,
 }: HeaderProps) {
+  const dashboardTo = dashboardHref || dashboardHrefFor(user);
   const handleSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
       if (query) onQueryChange("");
@@ -176,19 +197,28 @@ export default function Header({
           )}
 
           {user ? (
-            <button
-              type="button"
-              onClick={onSignOut}
-              title={`Signed in as ${user.name} — click to sign out`}
-              className="flex h-8 items-center gap-2 rounded-md border border-accent/40 bg-accent/10 px-2 transition-colors hover:border-accent/70"
-            >
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-white">
-                {user.name.charAt(0).toUpperCase()}
-              </span>
-              <span className="hidden max-w-[72px] truncate text-[12px] font-medium text-ink @sm:inline">
-                {user.name}
-              </span>
-            </button>
+            <>
+              <Link
+                href={dashboardTo}
+                prefetch
+                className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[13px] font-semibold text-white transition-colors hover:bg-accent-soft @sm:px-3"
+              >
+                <LayoutDashboard className="h-3.5 w-3.5" aria-hidden />
+                Dashboard
+              </Link>
+              <button
+                type="button"
+                onClick={onSignOut}
+                title={`Signed in as ${user.name} — click to sign out`}
+                aria-label={`Sign out (${user.name})`}
+                className="flex h-8 items-center gap-2 rounded-md border border-line bg-card px-2 transition-colors hover:border-zinc-600"
+              >
+                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-white">
+                  {user.name.charAt(0).toUpperCase()}
+                </span>
+                <LogOut className="h-3.5 w-3.5 text-ink-3" aria-hidden />
+              </button>
+            </>
           ) : useLinks ? (
             <Link
               href="/auth/sign-in"

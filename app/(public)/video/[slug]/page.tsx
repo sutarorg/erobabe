@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
 import VideoActions from "@/src/components/VideoActions";
 import FourRowVideoGrid from "@/src/components/FourRowVideoGrid";
-import { LOGO_URL } from "@/src/data/content";
+import PublicVideoCard from "@/src/components/PublicVideoCard";
 import { Eye } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -78,9 +78,11 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
   // Fetch related videos same category
   const { data: related } = await supabase
     .from("videos")
-    .select("id, slug, title, thumbnail_url, duration_seconds, quality")
+    .select("id, slug, title, thumbnail_url, duration_seconds, quality, view_count, published_at")
     .eq("status", "published")
     .eq("visibility", "public")
+    .eq("rights_status", "cleared")
+    .eq("moderation_status", "approved")
     .neq("id", video.id)
     .limit(16);
 
@@ -191,17 +193,22 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
           <h2 className="text-[15px] font-semibold">More like this</h2>
           <FourRowVideoGrid className="video-grid mt-3.5">
             {related.map((v: any) => (
-              <Link key={v.id} href={`/video/${v.slug}`} className="group min-w-0">
-                <div className="relative aspect-video overflow-hidden rounded-lg border border-line bg-card">
-                  <img src={v.thumbnail_url || LOGO_URL} alt={v.title} className="h-full w-full object-cover group-hover:scale-105 transition-transform" loading="lazy" />
-                  {v.duration_seconds && (
-                    <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 py-0.5 text-[10px] text-white">
-                      {formatDuration(v.duration_seconds)}
-                    </span>
-                  )}
-                </div>
-                <p className="mt-1.5 line-clamp-2 text-[12px] font-medium leading-tight group-hover:text-accent">{v.title}</p>
-              </Link>
+              <PublicVideoCard
+                key={v.id}
+                video={{
+                  id: String(v.slug || v.id),
+                  slug: String(v.slug || v.id),
+                  title: String(v.title || "Untitled"),
+                  description: null,
+                  thumbnail_url: v.thumbnail_url || null,
+                  duration_seconds: v.duration_seconds ?? null,
+                  view_count: Number(v.view_count) || 0,
+                  published_at: v.published_at || null,
+                  quality: v.quality || null,
+                  category_label: null,
+                  category_slug: null,
+                }}
+              />
             ))}
           </FourRowVideoGrid>
         </section>

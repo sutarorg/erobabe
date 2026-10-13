@@ -11,7 +11,7 @@ import React from "react";
 vi.mock("@/src/utils/api", () => ({ postJson: vi.fn(), getJson: vi.fn() }));
 vi.mock("@/src/utils/uploadFile", () => ({ uploadWithProgress: vi.fn().mockResolvedValue(undefined) }));
 
-import VideoManager, { type AdminVideo } from "@/app/admin/videos/VideoManager";
+import VideoManager, { type AdminVideo } from "@/app/admin/(dashboard)/videos/VideoManager";
 import { postJson } from "@/src/utils/api";
 
 const mockPostJson = postJson as unknown as ReturnType<typeof vi.fn>;

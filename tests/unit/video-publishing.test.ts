@@ -101,8 +101,9 @@ describe("createGeneratedVideo metadata", () => {
     expect(aiState.calls).toBe(1);
     expect(metadata.source).toBe("fallback");
     expect(metadata.warning).toMatch(/AI metadata unavailable/);
-    // Even the fallback reads like a story title for the selected category.
-    expect(metadata.title).toBe("Evening In Velvet — A Story in Low Light and Soft Fabric");
+    // The fallback title is the file name alone: no invented subtitle, no dash.
+    expect(metadata.title).toBe("Evening In Velvet");
+    expect(metadata.title).not.toMatch(/[\u2010-\u2015\u2212]/);
     expect(isValidDescription(metadata.description)).toBe(true);
     expect(metadata.description).not.toContain("AI metadata");
     expect(metadata.tags).toContain("boudoir");

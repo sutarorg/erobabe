@@ -3,7 +3,10 @@ import { NextResponse, type NextRequest } from "next/server";
 
 function redirectToSignIn(request: NextRequest) {
   const url = request.nextUrl.clone();
-  url.pathname = "/auth/sign-in";
+  // Staff and advertisers sign in on different pages: an admin hitting a
+  // protected /admin path is sent to the admin page, everything else to the
+  // advertiser portal's front door.
+  url.pathname = request.nextUrl.pathname.startsWith("/admin") ? "/admin/signin" : "/auth/sign-in";
   url.searchParams.set("next", request.nextUrl.pathname);
   return NextResponse.redirect(url);
 }
