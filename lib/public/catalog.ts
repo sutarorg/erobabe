@@ -172,6 +172,29 @@ async function loadActiveAds(): Promise<PublicAd[]> {
     .filter((campaign: any) => campaign.creative?.status === "approved" && campaign.creative?.image_url && campaign.creative?.destination_url);
 }
 
+/**
+ * The videos the admin placed in the homepage carousel (slots 1–3), in slot
+ * order. Only live videos are returned, so a slot pointing at a draft or
+ * hidden video is simply not shown.
+ */
+async function loadCarouselVideos(): Promise<Array<PublicVideo & { carousel_position: number }>> {
+  const supabase = tryCreateServiceClient();
+  if (!supabase) return [];
+  const { data, error } = await publishedQuery(supabase)
+    .not("carousel_position", "is", null)
+    .order("carousel_position", { ascending: true })
+    .limit(3);
+  // Before migration 00000000000010 the column does not exist: show no slides
+  // (the hero falls back to its default artwork) instead of failing the page.
+  if (error) return [];
+  return (data || []).map((row: any) => ({ ...mapVideo(row), carousel_position: Number(row.carousel_position) }));
+}
+
+export const getCarouselVideos = unstable_cache(loadCarouselVideos, ["carousel-videos"], {
+  revalidate: 30,
+  tags: ["videos"],
+});
+
 export const getPublishedVideos = unstable_cache(async () => loadPublishedVideos(80), ["published-videos"], {
   revalidate: 30,
   tags: ["videos"],

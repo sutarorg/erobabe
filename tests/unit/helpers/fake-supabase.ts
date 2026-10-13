@@ -25,7 +25,9 @@ type Filter =
   | { kind: "is"; column: string; value: any }
   | { kind: "in"; column: string; value: any[] }
   | { kind: "lte"; column: string; value: any }
-  | { kind: "gte"; column: string; value: any };
+  | { kind: "gte"; column: string; value: any }
+  | { kind: "like"; column: string; value: string }
+  | { kind: "not_is"; column: string; value: any };
 
 function matchesFilters(row: Row, filters: Filter[], contains: Array<[string, any]>): boolean {
   for (const filter of filters) {
@@ -52,6 +54,15 @@ function matchesFilters(row: Row, filters: Filter[], contains: Array<[string, an
         break;
       case "gte":
         if (actual < filter.value) return false;
+        break;
+      case "like": {
+        // Supports the `%` wildcard only, which is all the app uses.
+        const pattern = new RegExp(`^${filter.value.split("%").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+        if (typeof actual !== "string" || !pattern.test(actual)) return false;
+        break;
+      }
+      case "not_is":
+        if (actual === null || actual === undefined) return false;
         break;
     }
   }
@@ -130,6 +141,16 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
 
   gte(column: string, value: any) {
     this.filters.push({ kind: "gte", column, value });
+    return this;
+  }
+
+  like(column: string, value: string) {
+    this.filters.push({ kind: "like", column, value });
+    return this;
+  }
+
+  not(column: string, operator: string, value: any) {
+    if (operator === "is") this.filters.push({ kind: "not_is", column, value });
     return this;
   }
 

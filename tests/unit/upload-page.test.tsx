@@ -354,7 +354,7 @@ describe("admin upload page — link formats and routing", () => {
         "/api/videos/embed",
         expect.objectContaining({
           categoryId: "cat-1",
-          entries: [{ source: "https://streamtape.com/e/m9XLJGmaJOcbPr2", thumbnailPath: null }],
+          entries: [{ source: "https://streamtape.com/e/m9XLJGmaJOcbPr2", thumbnailPath: null, allowDuplicate: false }],
         })
       );
     });
@@ -401,7 +401,7 @@ describe("admin upload page — link formats and routing", () => {
         "/api/videos/upload-url",
         expect.objectContaining({
           categoryId: "cat-1",
-          entries: [{ url: "https://cdn.example.com/video1.mp4", thumbnailPath: null }],
+          entries: [{ url: "https://cdn.example.com/video1.mp4", thumbnailPath: null, allowDuplicate: false }],
         })
       );
     });

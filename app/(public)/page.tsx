@@ -5,7 +5,8 @@ import Hero from "@/src/components/Hero";
 import VideoSection from "@/src/components/VideoSection";
 import InlineAd from "@/src/components/InlineAd";
 import PublicVideoCard from "@/src/components/PublicVideoCard";
-import { getPublicCategories, getPublishedVideos } from "@/lib/public/catalog";
+import { getCarouselVideos, getPublicCategories, getPublishedVideos } from "@/lib/public/catalog";
+import { LOGO_URL, type HeroSlide } from "@/src/data/content";
 import type { Metadata } from "next";
 
 export const revalidate = 30;
@@ -22,7 +23,20 @@ export default async function HomePage({
   searchParams: Promise<{ q?: string }>;
 }) {
   const { q } = await searchParams;
-  const [videos, categories] = await Promise.all([getPublishedVideos(), getPublicCategories()]);
+  const [videos, categories, carousel] = await Promise.all([
+    getPublishedVideos(),
+    getPublicCategories(),
+    getCarouselVideos(),
+  ]);
+  const heroSlides: HeroSlide[] = carousel.map((video) => ({
+    id: video.slug,
+    eyebrow: video.category_label || "Featured",
+    headline: video.title,
+    sub: video.description || "Watch the full scene now.",
+    image: video.thumbnail_url || LOGO_URL,
+    alt: video.title,
+    href: `/video/${video.slug}`,
+  }));
   const query = q?.trim() || "";
   const mappedVideos = query
     ? videos.filter((video) => video.title.toLowerCase().includes(query.toLowerCase()))
@@ -71,7 +85,7 @@ export default async function HomePage({
   if (mappedVideos.length === 0) {
     return (
       <div className="pt-4">
-        <Hero />
+        <Hero slides={heroSlides} />
         <section className="mt-7">
           <Categories activeCategory={null} categories={categoryCards} />
         </section>
@@ -85,7 +99,7 @@ export default async function HomePage({
 
   return (
     <div className="pt-4">
-      <Hero />
+      <Hero slides={heroSlides} />
 
       <section className="mt-7">
         <Categories activeCategory={null} categories={categoryCards} />

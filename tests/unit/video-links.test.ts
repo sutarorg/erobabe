@@ -131,21 +131,21 @@ describe("entries normalisation", () => {
 
   it("normalises Markdown sources sent straight to the embed route", () => {
     expect(normalizeEmbedEntries({ entries: [{ source: STREAMTAPE_MARKDOWN }] })).toEqual([
-      { source: "https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4", thumbnailPath: null },
+      { source: "https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4", thumbnailPath: null, allowDuplicate: false },
     ]);
   });
 
   it("normalises Markdown sources sent straight to the direct-URL route", () => {
     expect(normalizeRemoteEntries({ urls: `${STREAMTAPE_MARKDOWN}\nhttps://cdn.example.com/a.mp4` })).toEqual([
-      { url: "https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4", thumbnailPath: null },
-      { url: "https://cdn.example.com/a.mp4", thumbnailPath: null },
+      { url: "https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4", thumbnailPath: null, allowDuplicate: false },
+      { url: "https://cdn.example.com/a.mp4", thumbnailPath: null, allowDuplicate: false },
     ]);
   });
 
   it("accepts entry.url and entry.source in the same payload", () => {
     expect(normalizeEmbedEntries({ entries: [{ url: "https://host.example/e/1" }, { source: "https://host.example/e/2" }] })).toEqual([
-      { source: "https://host.example/e/1", thumbnailPath: null },
-      { source: "https://host.example/e/2", thumbnailPath: null },
+      { source: "https://host.example/e/1", thumbnailPath: null, allowDuplicate: false },
+      { source: "https://host.example/e/2", thumbnailPath: null, allowDuplicate: false },
     ]);
   });
 });

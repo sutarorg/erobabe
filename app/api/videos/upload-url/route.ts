@@ -12,8 +12,16 @@ import {
 import { resolveThumbnailUrl } from "@/lib/video/storage";
 import { normalizeRemoteEntries } from "@/lib/video/entries";
 import { classifyVideoSource, normalizePastedLink } from "@/lib/video/links";
+import { describeDuplicate, findDuplicateVideos, sourceKeyOf } from "@/lib/video/duplicates";
+import { generateFrameThumbnail } from "@/lib/video/frame-thumbnail";
 
 const MAX_URLS_PER_REQUEST = 20;
+
+/**
+ * Frame capture downloads part of the video, so one publish request may take a
+ * while on a large batch. Raised for serverless hosts that enforce a limit.
+ */
+export const maxDuration = 60;
 
 /**
  * Validates that the URL path ends with a video extension (case-insensitive).
@@ -94,7 +102,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Validate and deduplicate URLs before processing.
-    const validEntries: Array<{ url: string; thumbnailPath: string | null }> = [];
+    const validEntries: Array<{ url: string; thumbnailPath: string | null; allowDuplicate: boolean }> = [];
     const validationErrors: Array<{ url: string; error: string }> = [];
 
     const seen = new Set<string>();
@@ -107,7 +115,7 @@ export async function POST(req: NextRequest) {
           continue;
         }
         seen.add(normalized);
-        validEntries.push({ url: validatedUrl, thumbnailPath: entry.thumbnailPath });
+        validEntries.push({ url: validatedUrl, thumbnailPath: entry.thumbnailPath, allowDuplicate: entry.allowDuplicate });
       } catch (error) {
         validationErrors.push({
           url: entry.url.slice(0, 200),
@@ -123,19 +131,49 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Duplicate detector: an exact link or the same file name already published.
+    const duplicates = await findDuplicateVideos(
+      service,
+      validEntries.map((entry) => entry.url)
+    );
+
     // Resolve each distinct thumbnail once, then reuse.
     const thumbnailByPath = new Map<string, string | null>();
     const results: Array<Record<string, unknown>> = [];
 
     for (const entry of validEntries) {
       let videoId: string | null = null;
+
+      const duplicate = duplicates.get(entry.url);
+      if (duplicate && !entry.allowDuplicate) {
+        results.push({
+          url: entry.url,
+          status: "skipped",
+          error: describeDuplicate(duplicate),
+          duplicate: { videoId: duplicate.videoId, slug: duplicate.slug, title: duplicate.title, reason: duplicate.reason },
+        });
+        continue;
+      }
+
       try {
         let thumbnailUrl: string | null = null;
+        let thumbnailSource: "uploaded" | "frame" | "none" = "none";
+        let thumbnailWarning: string | undefined;
+
         if (entry.thumbnailPath) {
           if (!thumbnailByPath.has(entry.thumbnailPath)) {
             thumbnailByPath.set(entry.thumbnailPath, resolveThumbnailUrl(service, user.id, entry.thumbnailPath));
           }
           thumbnailUrl = thumbnailByPath.get(entry.thumbnailPath) || null;
+          if (thumbnailUrl) thumbnailSource = "uploaded";
+        } else {
+          // No thumbnail chosen: capture a vibrant frame from the video itself.
+          try {
+            thumbnailUrl = await generateFrameThumbnail(service, user.id, entry.url);
+            thumbnailSource = "frame";
+          } catch (frameError) {
+            thumbnailWarning = `Automatic thumbnail failed (${errorMessageFrom(frameError, "unknown error")}). Add one manually from the video list.`;
+          }
         }
 
         const name = sourceNameFromUrl(entry.url);
@@ -146,6 +184,7 @@ export async function POST(req: NextRequest) {
           categoryId,
           provider: "direct_url",
           thumbnailUrl,
+          sourceKey: sourceKeyOf(entry.url),
         });
         videoId = generated.video.id;
 
@@ -167,7 +206,9 @@ export async function POST(req: NextRequest) {
           metadata: {
             provider: "direct_url",
             host: new URL(entry.url).hostname,
-            has_custom_thumbnail: Boolean(thumbnailUrl),
+            has_custom_thumbnail: thumbnailSource === "uploaded",
+            thumbnail_source: thumbnailSource,
+            duplicate_override: Boolean(duplicate),
           },
         });
 
@@ -179,6 +220,9 @@ export async function POST(req: NextRequest) {
           status: "published",
           metadataSource: generated.metadata.source,
           ...(generated.metadata.warning ? { metadataWarning: generated.metadata.warning } : {}),
+          thumbnailUrl,
+          thumbnailSource,
+          ...(thumbnailWarning ? { thumbnailWarning } : {}),
         });
       } catch (publishError: unknown) {
         if (videoId) {
@@ -203,9 +247,10 @@ export async function POST(req: NextRequest) {
 
     const succeeded = results.filter((r) => r.status === "published").length;
     const failed = results.length - succeeded;
+    const skipped = results.filter((r) => r.status === "skipped").length;
 
     return NextResponse.json(
-      { results, succeeded, failed },
+      { results, succeeded, failed, skipped },
       { status: succeeded ? (failed ? 207 : 200) : 422 }
     );
   } catch (error: unknown) {

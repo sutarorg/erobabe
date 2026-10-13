@@ -172,7 +172,7 @@ async function generateMetadata(
     return {
       ...cleaned,
       source: "fallback",
-      warning: `AI metadata unavailable (${reason.slice(0, 200)}). File-name metadata was used instead — review the title and description before publishing.`,
+      warning: `AI metadata unavailable (${reason.slice(0, 400)}). File-name metadata was used instead — review the title and description before publishing.`,
       raw,
     };
   }
@@ -224,6 +224,7 @@ export async function createGeneratedVideo({
   provider,
   thumbnailUrl,
   prepared,
+  sourceKey,
 }: {
   service: ServiceClient;
   userId: string;
@@ -231,6 +232,8 @@ export async function createGeneratedVideo({
   categoryId: string;
   provider: VideoProviderValue;
   thumbnailUrl?: string | null;
+  /** Normalised source link, stored for duplicate detection. */
+  sourceKey?: string | null;
   /** Already generated while the bytes were in flight — skips a second Gemini call. */
   prepared?: GeneratedMetadata | null;
 }): Promise<{ video: GeneratedVideo; metadata: GeneratedMetadata }> {
@@ -252,6 +255,7 @@ export async function createGeneratedVideo({
       description: metadata.description,
       category_id: category.id,
       thumbnail_url: thumbnailUrl || null,
+      source_key: sourceKey || null,
       provider,
       status: "processing",
       rights_status: "cleared",

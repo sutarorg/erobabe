@@ -1,8 +1,9 @@
 "use client";
 import { ChevronLeft, ChevronRight, LayoutGrid, Play } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { HERO_SLIDES } from "../data/content";
+import { HERO_SLIDES, type HeroSlide } from "../data/content";
 import { cn } from "../utils/cn";
 
 /**
@@ -14,13 +15,19 @@ import { cn } from "../utils/cn";
 interface HeroProps {
   onExplore?: () => void;
   onBrowseCategories?: () => void;
+  /**
+   * Admin-chosen video slides (from /admin/videos). When empty, the default
+   * promotional slides are shown so the homepage never renders a blank card.
+   */
+  slides?: HeroSlide[];
 }
 
-export default function Hero({ onExplore, onBrowseCategories }: HeroProps = {}) {
+export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProps = {}) {
   const router = useRouter();
+  const HERO_ITEMS: HeroSlide[] = slides && slides.length ? slides : HERO_SLIDES;
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
-  const total = HERO_SLIDES.length;
+  const total = HERO_ITEMS.length;
 
   const handleExplore = useCallback(() => {
     if (onExplore) onExplore();
@@ -51,7 +58,7 @@ export default function Hero({ onExplore, onBrowseCategories }: HeroProps = {}) 
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
     >
-      {HERO_SLIDES.map((slide, i) => {
+      {HERO_ITEMS.map((slide, i) => {
         const active = i === index;
         return (
           <div
@@ -84,15 +91,26 @@ export default function Hero({ onExplore, onBrowseCategories }: HeroProps = {}) 
                   {slide.sub}
                 </p>
                 <div className="mt-4 flex flex-wrap items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={handleExplore}
-                    tabIndex={active ? 0 : -1}
-                    className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white shadow-[0_4px_18px_rgba(245,22,85,0.28)] transition-colors hover:bg-accent-soft"
-                  >
-                    <Play className="h-3.5 w-3.5 fill-current" aria-hidden />
-                    Explore Videos
-                  </button>
+                  {slide.href ? (
+                    <Link
+                      href={slide.href}
+                      tabIndex={active ? 0 : -1}
+                      className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white shadow-[0_4px_18px_rgba(245,22,85,0.28)] transition-colors hover:bg-accent-soft"
+                    >
+                      <Play className="h-3.5 w-3.5 fill-current" aria-hidden />
+                      Watch now
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleExplore}
+                      tabIndex={active ? 0 : -1}
+                      className="flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[13px] font-semibold text-white shadow-[0_4px_18px_rgba(245,22,85,0.28)] transition-colors hover:bg-accent-soft"
+                    >
+                      <Play className="h-3.5 w-3.5 fill-current" aria-hidden />
+                      Explore Videos
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={handleBrowseCategories}
@@ -111,7 +129,7 @@ export default function Hero({ onExplore, onBrowseCategories }: HeroProps = {}) 
 
       {/* Pagination dots */}
       <div className="absolute bottom-3.5 left-5 flex items-center gap-1.5 @2xl:left-7">
-        {HERO_SLIDES.map((slide, i) => (
+        {HERO_ITEMS.map((slide, i) => (
           <button
             key={slide.id}
             type="button"

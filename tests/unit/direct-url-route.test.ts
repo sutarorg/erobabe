@@ -44,6 +44,16 @@ const harnessState = vi.hoisted(() => ({
   auth: null as any,
 }));
 
+/** Frame capture is stubbed: tests never spawn ffmpeg or fetch a video. */
+const frameState = vi.hoisted(() => ({ generate: null as null | ((url: string) => Promise<string>), calls: [] as string[] }));
+vi.mock("@/lib/video/frame-thumbnail", () => ({
+  generateFrameThumbnail: async (_service: unknown, _userId: string, url: string) => {
+    frameState.calls.push(url);
+    if (!frameState.generate) throw new Error("frame capture not stubbed");
+    return frameState.generate(url);
+  },
+}));
+
 import { POST } from "@/app/api/videos/upload-url/route";
 
 function aiSuggestion() {
@@ -359,5 +369,76 @@ describe("POST /api/videos/upload-url — publishing", () => {
 
     // No upload jobs should have been created — direct_url publishing is synchronous.
     expect(harness.db.upload_jobs).toHaveLength(0);
+  });
+});
+describe("POST /api/videos/upload-url — duplicate detector and automatic thumbnail", () => {
+  const EXISTING = {
+    id: "existing-1",
+    slug: "evening-in-velvet-old",
+    title: "Evening in Velvet (old)",
+    source_key: "cdn.example.com/clip.mp4",
+    thumbnail_url: null,
+  };
+
+  it("skips a link that is already published, and creates nothing for it", async () => {
+    geminiState.suggest = async () => aiSuggestion();
+    frameState.generate = async () => "https://cdn.example.com/video-thumbnails/auto.jpg";
+    const harness = setupHarness({ videos: [EXISTING] });
+    const res = await POST(jsonRequest("/api/videos/upload-url", {
+      categoryId: CATEGORY_ID,
+      entries: [{ url: "https://cdn.example.com/clip.mp4?token=1" }],
+    }));
+    const body = await res.json();
+    expect(body.skipped).toBe(1);
+    expect(body.results[0].status).toBe("skipped");
+    expect(body.results[0].duplicate).toMatchObject({ videoId: "existing-1", reason: "same_link" });
+    expect(harness.db.videos).toHaveLength(1);
+  });
+
+  it("publishes a duplicate when the admin ticks 'publish anyway'", async () => {
+    geminiState.suggest = async () => aiSuggestion();
+    frameState.generate = async () => "https://cdn.example.com/video-thumbnails/auto.jpg";
+    const harness = setupHarness({ videos: [EXISTING] });
+    const res = await POST(jsonRequest("/api/videos/upload-url", {
+      categoryId: CATEGORY_ID,
+      entries: [{ url: "https://cdn.example.com/clip.mp4", allowDuplicate: true }],
+    }));
+    const body = await res.json();
+    expect(body.succeeded).toBe(1);
+    expect(harness.db.videos).toHaveLength(2);
+    expect(harness.db.videos[1].source_key).toBe("cdn.example.com/clip.mp4");
+  });
+
+  it("captures a frame thumbnail when the admin supplies none", async () => {
+    geminiState.suggest = async () => aiSuggestion();
+    frameState.calls = [];
+    frameState.generate = async () => "https://cdn.example.com/video-thumbnails/auto.jpg";
+    const harness = setupHarness();
+    const res = await POST(jsonRequest("/api/videos/upload-url", {
+      categoryId: CATEGORY_ID,
+      entries: [{ url: "https://cdn.example.com/new-scene.mp4" }],
+    }));
+    const body = await res.json();
+    expect(body.results[0].thumbnailSource).toBe("frame");
+    expect(body.results[0].thumbnailUrl).toBe("https://cdn.example.com/video-thumbnails/auto.jpg");
+    expect(frameState.calls).toEqual(["https://cdn.example.com/new-scene.mp4"]);
+    expect(harness.db.videos[0].thumbnail_url).toBe("https://cdn.example.com/video-thumbnails/auto.jpg");
+  });
+
+  it("still publishes, with a warning, when frame capture fails", async () => {
+    geminiState.suggest = async () => aiSuggestion();
+    frameState.generate = async () => {
+      throw new Error("No usable frame was found in the video");
+    };
+    const harness = setupHarness();
+    const res = await POST(jsonRequest("/api/videos/upload-url", {
+      categoryId: CATEGORY_ID,
+      entries: [{ url: "https://cdn.example.com/no-frames.mp4" }],
+    }));
+    const body = await res.json();
+    expect(body.results[0].status).toBe("published");
+    expect(body.results[0].thumbnailSource).toBe("none");
+    expect(body.results[0].thumbnailWarning).toMatch(/No usable frame/);
+    expect(harness.db.videos[0].thumbnail_url).toBeNull();
   });
 });

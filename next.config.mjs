@@ -3,6 +3,13 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
+  // Frame thumbnails run a bundled ffmpeg binary. Keep the package out of the
+  // webpack bundle and ship the linux-x64 binary with the routes that use it.
+  serverExternalPackages: ['@ffmpeg-installer/ffmpeg', '@ffmpeg-installer/linux-x64'],
+  outputFileTracingIncludes: {
+    '/api/videos/upload-url': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
+    '/api/admin/videos/thumbnails': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
+  },
   experimental: {
     staleTimes: {
       dynamic: 30,

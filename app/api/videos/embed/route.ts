@@ -10,6 +10,7 @@ import {
 } from "@/lib/video/publishing";
 import { resolveThumbnailUrl } from "@/lib/video/storage";
 import { normalizeEmbedEntries } from "@/lib/video/entries";
+import { describeDuplicate, findDuplicateVideos, sourceKeyOf } from "@/lib/video/duplicates";
 
 export async function POST(req: NextRequest) {
   try {
@@ -25,8 +26,30 @@ export async function POST(req: NextRequest) {
 
     const results: Array<Record<string, unknown>> = [];
 
+    // Duplicate detector: the same player link, or the same file name, already published.
+    // Checked on the resolved iframe address (e.g. a Streamtape /v/ page becomes its /e/ embed).
+    const resolvedSources = new Map<string, string>();
+    for (const entry of entries) {
+      try {
+        resolvedSources.set(entry.source, extractIframeSource(entry.source));
+      } catch {
+        // Invalid entries are reported by the per-entry validation below.
+      }
+    }
+    const duplicates = await findDuplicateVideos(service, Array.from(resolvedSources.values()));
+
     for (const entry of entries) {
       let videoId: string | null = null;
+      const duplicate = duplicates.get(resolvedSources.get(entry.source) || "");
+      if (duplicate && !entry.allowDuplicate) {
+        results.push({
+          source: entry.source.slice(0, 200),
+          status: "skipped",
+          error: describeDuplicate(duplicate),
+          duplicate: { videoId: duplicate.videoId, slug: duplicate.slug, title: duplicate.title, reason: duplicate.reason },
+        });
+        continue;
+      }
       try {
         const embedUrl = extractIframeSource(entry.source);
         const thumbnailUrl = resolveThumbnailUrl(service, user.id, entry.thumbnailPath);
@@ -37,6 +60,7 @@ export async function POST(req: NextRequest) {
           categoryId,
           provider: "embed",
           thumbnailUrl,
+          sourceKey: sourceKeyOf(embedUrl),
         });
         videoId = generated.video.id;
 
@@ -54,7 +78,12 @@ export async function POST(req: NextRequest) {
           target_type: "video",
           target_id: generated.video.id,
           level: "info",
-          metadata: { provider: "embed", host: new URL(embedUrl).hostname, has_custom_thumbnail: Boolean(thumbnailUrl) },
+          metadata: {
+            provider: "embed",
+            host: new URL(embedUrl).hostname,
+            has_custom_thumbnail: Boolean(thumbnailUrl),
+            duplicate_override: Boolean(duplicate),
+          },
         });
 
         results.push({
@@ -79,8 +108,9 @@ export async function POST(req: NextRequest) {
     }
 
     const succeeded = results.filter((result) => result.status === "published").length;
+    const skipped = results.filter((result) => result.status === "skipped").length;
     return NextResponse.json(
-      { results, succeeded, failed: results.length - succeeded },
+      { results, succeeded, failed: results.length - succeeded, skipped },
       { status: succeeded ? (succeeded === results.length ? 200 : 207) : 422 }
     );
   } catch (error: any) {

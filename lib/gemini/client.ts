@@ -58,12 +58,28 @@ export function suggestionOutputTokens(): number {
  */
 export type GeminiBackend = "gemini" | "vertex";
 
+/**
+ * Cleans a key copied into a hosting dashboard: surrounding whitespace, wrapping
+ * quotes, and a pasted `GEMINI_API_KEY=` prefix are removed. Anything left that
+ * still contains whitespace is not a key and is treated as missing.
+ */
+export function normalizeGeminiKey(raw: unknown): string {
+  let value = String(raw ?? "").trim();
+  value = value.replace(/^(?:GEMINI_API_KEY|GOOGLE_API_KEY|GOOGLE_GENAI_API_KEY)\s*=\s*/i, "").trim();
+  value = value.replace(/^(["'`])([\s\S]*)\1$/, "$2").trim();
+  return /\s/.test(value) ? "" : value;
+}
+
 /** Reads the API key from any of the env names Google tooling uses. */
 export function geminiApiKey(): string {
-  return String(
+  return normalizeGeminiKey(
     process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY || ""
-  ).trim();
+  );
 }
+
+/** Shown to the admin whenever the server cannot see a key. */
+export const GEMINI_NOT_CONFIGURED_MESSAGE =
+  "Gemini is not configured — set the GEMINI_API_KEY server variable. It must be defined in the hosting project's environment variables (for Vercel: Project → Settings → Environment Variables, Production scope), then redeploy. Keys stored only as Supabase secrets are not visible to this app.";
 
 /**
  * Backend preference:
@@ -914,7 +930,7 @@ async function generateWithBackends(prompt: string, config: Record<string, unkno
 
   for (const backend of backends) {
     const client = getGeminiClient(backend);
-    if (!client) throw new Error("Gemini is not configured — set the GEMINI_API_KEY server variable");
+    if (!client) throw new GeminiError(GEMINI_NOT_CONFIGURED_MESSAGE, 503, "not_configured");
 
     let backendError: unknown = null;
     for (const model of models) {
@@ -1003,7 +1019,7 @@ function buildPrompt(params: SuggestMetadataParams): string {
 
 export async function suggestVideoMetadata(params: SuggestMetadataParams): Promise<SuggestedMetadata> {
   if (!geminiApiKey()) {
-    throw new GeminiError("Gemini is not configured — set the GEMINI_API_KEY server variable", 503, "not_configured");
+    throw new GeminiError(GEMINI_NOT_CONFIGURED_MESSAGE, 503, "not_configured");
   }
 
   const prompt = buildPrompt(params);

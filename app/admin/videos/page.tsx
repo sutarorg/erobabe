@@ -1,16 +1,19 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import Link from "next/link";
-import VideoManager, { type AdminVideo } from "./VideoManager";
+import VideoManager, { type AdminCategory, type AdminVideo } from "./VideoManager";
 
 export default async function AdminVideosPage() {
   const supabase = createServiceClient();
-  const { data: videos } = await supabase
-    .from("videos")
-    .select(
-      "id, slug, title, status, visibility, provider, thumbnail_url, playable_url, embed_url, view_count, created_at, category:categories(label)"
-    )
-    .order("created_at", { ascending: false })
-    .limit(100);
+  const [{ data: videos }, { data: categories }] = await Promise.all([
+    supabase
+      .from("videos")
+      .select(
+        "id, slug, title, status, visibility, provider, thumbnail_url, playable_url, embed_url, view_count, created_at, carousel_position, category_id, category:categories(label)"
+      )
+      .order("created_at", { ascending: false })
+      .limit(1000),
+    supabase.from("categories").select("id, label").order("label"),
+  ]);
 
   const rows: AdminVideo[] = (videos || []).map((video: any) => {
     const category = Array.isArray(video.category) ? video.category[0] : video.category;
@@ -26,9 +29,16 @@ export default async function AdminVideosPage() {
       embed_url: video.embed_url || null,
       view_count: Number(video.view_count) || 0,
       created_at: String(video.created_at || new Date().toISOString()),
+      category_id: video.category_id ? String(video.category_id) : null,
       category_label: category?.label ? String(category.label) : null,
+      carousel_position: video.carousel_position ? Number(video.carousel_position) : null,
     };
   });
+
+  const categoryOptions: AdminCategory[] = (categories || []).map((category: any) => ({
+    id: String(category.id),
+    label: String(category.label),
+  }));
 
   const withThumbnails = rows.filter((video) => video.thumbnail_url).length;
 
@@ -38,7 +48,8 @@ export default async function AdminVideosPage() {
         <div>
           <h1 className="text-[20px] font-semibold">Videos</h1>
           <p className="mt-1 text-[12px] text-ink-3">
-            Manage the published library: change or remove a thumbnail, or delete a video.{" "}
+            Manage the published library: filter by category, select videos for bulk actions, change or generate a
+            thumbnail, set the homepage carousel, or delete a video.{" "}
             {rows.length > 0 && (
               <span className="tabular-nums">
                 {rows.length} videos · {withThumbnails} with a thumbnail
@@ -60,7 +71,7 @@ export default async function AdminVideosPage() {
           </Link>
         </div>
       ) : (
-        <VideoManager initialVideos={rows} />
+        <VideoManager initialVideos={rows} categories={categoryOptions} />
       )}
     </div>
   );

@@ -604,6 +604,32 @@ history and contacts no retired API. Posters under `ufoload.com` remain allowed 
 
 ---
 
+## D2. Video admin tools (migration 00000000000010)
+
+Apply `supabase/migrations/00000000000010_admin_video_tools.sql` before deploying
+this release. It adds:
+
+- `videos.carousel_position` (1–3): the three homepage hero cards, managed from
+  **/admin/videos → Homepage carousel**. If no slot is filled, the homepage shows
+  the default artwork.
+- `videos.source_key` and an index: used by the duplicate-upload detector.
+
+**Automatic frame thumbnails.** When a direct-link video is published without a
+thumbnail, the server captures a frame with a bundled ffmpeg
+(`@ffmpeg-installer/ffmpeg`, linux-x64 binary, ~68 MB) and stores a 1280×720
+JPEG in the `video-thumbnails` bucket. The binary is included in the
+`/api/videos/upload-url` and `/api/admin/videos/thumbnails` functions via
+`outputFileTracingIncludes` in `next.config.mjs`. Set `FFMPEG_PATH` to use another
+binary. Embed (player-page) links cannot be framed; add those thumbnails by hand.
+Existing videos can be filled in from /admin/videos (“Generate thumb” or bulk
+“Generate thumbnails”).
+
+**Duplicate uploads.** Publishing skips a link that matches an existing video
+(same host and path, ignoring query strings), or one with the same file name on
+another host. The upload page shows the match; tick “Publish anyway” to add it.
+
+---
+
 ## E. Gemini API Setup
 
 Docs: https://ai.google.dev/gemini-api/docs/generate-content —
@@ -623,7 +649,12 @@ route: `/api/gemini/suggest`.
    Vertex AI express mode; `auto`/unset retries the same key against the other
    Google endpoint when one rejects it as "not an API key".
 4. In Vercel → Project → **Settings** → **Environment Variables**, set both
-   for Production (and Preview if you test there), then redeploy.
+   for Production (and Preview if you test there), then redeploy. **Important:**
+   this app runs on Vercel, so `GEMINI_API_KEY` must be in the Vercel project's
+   environment variables. Supabase *Edge Function* secrets are a different
+   store that this Next.js app never reads — a key stored only there produces
+   the error “Gemini is not configured — set the GEMINI_API_KEY server variable”
+   and every upload falls back to file-name metadata.
 5. Test: open **Admin → System Health** and press **Test Gemini**. It sends
    one tiny real request and reports the endpoint that answered (Gemini API or
    Vertex express mode), the model, the latency, and — on failure — exactly why
@@ -653,7 +684,9 @@ route: `/api/gemini/suggest`.
    working title, selected category, and existing tags are sent for metadata
    generation. AI output is not proof of rights, age, consent, or factual
    attributes, and suggestions require human review.
-9. Diagnose: `GEMINI_API_KEY` missing → 503 "not configured"; wrong key →
+9. Diagnose: `GEMINI_API_KEY` missing → 503 "not configured" (the upload page
+   also shows an amber banner before you publish when the server cannot see the
+   key); wrong key →
    503 (the message names both endpoints that were tried); quota/rate limit →
    429; unknown model → the next Flash model in `gemini-flash-latest,
    gemini-2.5-flash` is tried; malformed model output → 502. The key never
