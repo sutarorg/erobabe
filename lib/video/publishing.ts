@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { fallbackSuggestion, redactKeyMaterial, suggestVideoMetadata, type SuggestedMetadata } from "@/lib/gemini/client";
+import { suggestVideoMetadata } from "@/lib/metadata/openrouter";
+import { fallbackSuggestion, redactKeyMaterial, type SuggestedMetadata } from "@/lib/metadata/suggestion";
 import { normalizeEmbedSource, normalizePastedLink } from "@/lib/video/links";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
@@ -105,7 +106,7 @@ export type GeneratedMetadata = {
   title: string;
   description: string;
   tags: string[];
-  /** `fallback` when Gemini could not be used — the admin must review it. */
+  /** `fallback` when the AI provider could not be used — the admin must review it. */
   source: MetadataSource;
   /** Human-readable reason the AI suggestion was unavailable. */
   warning?: string;
@@ -140,9 +141,9 @@ function cleanMetadata(raw: SuggestedMetadata): { title: string; description: st
 }
 
 /**
- * Asks Gemini for a title, description, and tags.
+ * Asks the AI provider for a title, description, and tags.
  *
- * Gemini is an enhancement, not a gate: when it is unavailable, misconfigured,
+ * The AI provider is an enhancement, not a gate: when it is unavailable, misconfigured,
  * or returns output that cannot be parsed, the upload continues with
  * deterministic metadata built from the file name and category, and the reason
  * is reported back so the admin can review and edit before publishing.
@@ -157,10 +158,10 @@ async function generateMetadata(
     if (cleaned.title && cleaned.description && cleaned.tags.length) {
       return { ...cleaned, source: "ai", raw };
     }
-    throw new Error("Gemini returned an incomplete title, description, or tag list");
+    throw new Error("The AI provider returned an incomplete title, description, or tag list");
   } catch (error: unknown) {
     // Redacted: the reason is shown in the admin UI and written to logs.
-    const reason = redactKeyMaterial(error instanceof Error ? error.message : "Gemini metadata generation failed");
+    const reason = redactKeyMaterial(error instanceof Error ? error.message : "AI metadata generation failed");
     console.warn(`[video-publishing] AI metadata unavailable for "${sourceName}": ${reason}`);
 
     const raw = fallbackSuggestion(sourceName, categoryLabel);
@@ -214,7 +215,7 @@ async function attachTags(service: ServiceClient, videoId: string, tags: string[
  *
  * `prepared` is metadata the admin page already fetched (via the existing
  * suggest route) while the file bytes were in flight. Using it skips a second
- * Gemini call after the file code is known.
+ * AI call after the file code is known.
  */
 export async function createGeneratedVideo({
   service,
@@ -234,12 +235,12 @@ export async function createGeneratedVideo({
   thumbnailUrl?: string | null;
   /** Normalised source link, stored for duplicate detection. */
   sourceKey?: string | null;
-  /** Already generated while the bytes were in flight — skips a second Gemini call. */
+  /** Already generated while the bytes were in flight — skips a second AI call. */
   prepared?: GeneratedMetadata | null;
 }): Promise<{ video: GeneratedVideo; metadata: GeneratedMetadata }> {
   const category = await getCategory(service, categoryId);
   const preparedMetadata = prepared && isPreparedMetadata(prepared) ? sanitizePreparedMetadata(prepared) : null;
-  // Sanitizing can strip every tag. Fall back to Gemini rather than publishing an untagged row.
+  // Sanitizing can strip every tag. Fall back to the AI provider rather than publishing an untagged row.
   const metadata =
     preparedMetadata && preparedMetadata.title.length >= 3 && preparedMetadata.description && preparedMetadata.tags.length
       ? preparedMetadata
@@ -615,7 +616,7 @@ export function assertPublicHttpUrl(value: string, label = "URL"): string {
 
 export function sourceNameFromUrl(value: string): string {
   // Markdown wrappers and trailing punctuation are stripped first so the file
-  // name Gemini is given never contains them.
+  // name the AI provider is given never contains them.
   const url = new URL(normalizePastedLink(value));
   const name = decodeURIComponent(url.pathname.split("/").pop() || "remote-video");
   return name.slice(0, 240) || "remote-video";

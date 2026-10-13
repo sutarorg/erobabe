@@ -49,7 +49,7 @@ type Item = {
   thumbnailWarning?: string;
 };
 
-type GeminiHealth = { configured: boolean; keyKind?: string; model?: string };
+type MetadataHealth = { configured: boolean; keyKind?: string; model?: string };
 
 const THUMBNAIL_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024;
@@ -78,15 +78,15 @@ export default function UploadPage() {
   itemsRef.current = items;
   const abortRef = useRef<AbortController | null>(null);
   const fallbackRef = useRef(0);
-  const [gemini, setGemini] = useState<GeminiHealth | null>(null);
+  const [metadataHealth, setMetadataHealth] = useState<MetadataHealth | null>(null);
 
-  // Tell the admin up front when the server cannot see GEMINI_API_KEY, instead
+  // Tell the admin up front when the server cannot see OPENROUTER_API_KEY, instead
   // of discovering it through a file-name title after publishing.
   useEffect(() => {
-    fetch("/api/admin/gemini/health", { cache: "no-store" })
+    fetch("/api/admin/metadata/health", { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : null))
-      .then((payload) => setGemini(payload || null))
-      .catch(() => setGemini(null));
+      .then((payload) => setMetadataHealth(payload || null))
+      .catch(() => setMetadataHealth(null));
   }, []);
 
   useEffect(() => {
@@ -423,15 +423,15 @@ export default function UploadPage() {
         <p className="mt-1 text-[12px] text-ink-3">
           Paste direct video URLs or player-page links below. Erobabe saves the link and plays the video straight from the
           original host — it does not download, upload, or re-encode the file. You control the category and each
-          video&apos;s optional thumbnail; Gemini generates the title, description, and tags.
+          video&apos;s optional thumbnail; AI (DeepSeek V3.2 via OpenRouter) generates the title, description, and tags.
         </p>
       </div>
 
-      {gemini && !gemini.configured && (
+      {metadataHealth && !metadataHealth.configured && (
         <div role="status" className="mt-6 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-[12px] leading-relaxed text-amber-200">
-          <p className="font-semibold">AI metadata is off — GEMINI_API_KEY is not visible to this server.</p>
+          <p className="font-semibold">AI metadata is off — OPENROUTER_API_KEY is not visible to this server.</p>
           <p className="mt-1 text-[11.5px]">
-            Titles and descriptions will be built from file names until it is set. Add GEMINI_API_KEY to the hosting
+            Titles and descriptions will be built from file names until it is set. Add OPENROUTER_API_KEY to the hosting
             project&apos;s environment variables (Production), redeploy, then check Admin → System Health.
           </p>
         </div>

@@ -5,24 +5,24 @@ import type { FakeDb } from "./helpers/fake-supabase";
 /**
  * Tests for the direct-URL publishing route (/api/videos/upload-url).
  *
- * The route validates URLs, generates metadata via Gemini, creates video
+ * The route validates URLs, generates metadata via OpenRouter, creates video
  * records with `provider = 'direct_url'`, stores the URL in `playable_url`,
  * and publishes immediately. No hosting-provider API or relay is used.
  */
 
-const geminiState = vi.hoisted(() => ({
+const aiState = vi.hoisted(() => ({
   suggest: null as null | ((params: { fileName?: string; category?: string }) => Promise<any>),
   calls: 0,
 }));
 
-vi.mock("@/lib/gemini/client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/gemini/client")>();
+vi.mock("@/lib/metadata/openrouter", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/metadata/openrouter")>();
   return {
     ...actual,
     suggestVideoMetadata: async (params: { fileName?: string; category?: string }) => {
-      geminiState.calls += 1;
-      if (!geminiState.suggest) throw new Error("suggestVideoMetadata not stubbed");
-      return geminiState.suggest(params);
+      aiState.calls += 1;
+      if (!aiState.suggest) throw new Error("suggestVideoMetadata not stubbed");
+      return aiState.suggest(params);
     },
   };
 });
@@ -74,8 +74,8 @@ function setupHarness(overrides: Partial<FakeDb> = {}) {
 }
 
 beforeEach(() => {
-  geminiState.suggest = null;
-  geminiState.calls = 0;
+  aiState.suggest = null;
+  aiState.calls = 0;
   setupHarness();
 });
 
@@ -154,7 +154,7 @@ describe("POST /api/videos/upload-url — URL validation", () => {
   });
 
   it("accepts URLs with query strings on valid MP4 paths", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [{ url: "https://cdn.example.com/video.mp4?token=abc123" }],
@@ -167,7 +167,7 @@ describe("POST /api/videos/upload-url — URL validation", () => {
   });
 
   it("accepts uppercase MP4 extension", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [{ url: "https://cdn.example.com/video.MP4" }],
@@ -212,7 +212,7 @@ describe("POST /api/videos/upload-url — URL validation", () => {
   });
 
   it("deduplicates URLs in a batch", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [
@@ -248,7 +248,7 @@ describe("POST /api/videos/upload-url — URL validation", () => {
 
 describe("POST /api/videos/upload-url — publishing", () => {
   it("publishes a valid direct URL as direct_url provider", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [{ url: "https://cdn.example.com/clip.mp4" }],
@@ -273,7 +273,7 @@ describe("POST /api/videos/upload-url — publishing", () => {
   });
 
   it("stores the direct URL in playable_url and embed_url as null", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     const harness = setupHarness();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
@@ -295,9 +295,9 @@ describe("POST /api/videos/upload-url — publishing", () => {
     expect(video.visibility).toBe("public");
   });
 
-  it("falls back to file-name metadata when Gemini fails", async () => {
-    geminiState.suggest = async () => {
-      throw new Error("Gemini quota exceeded");
+  it("falls back to file-name metadata when the AI provider fails", async () => {
+    aiState.suggest = async () => {
+      throw new Error("AI quota exceeded");
     };
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
@@ -313,7 +313,7 @@ describe("POST /api/videos/upload-url — publishing", () => {
   });
 
   it("reports partial failures in a batch", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [
@@ -331,7 +331,7 @@ describe("POST /api/videos/upload-url — publishing", () => {
   });
 
   it("never returns secrets in the response", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
       entries: [{ url: "https://cdn.example.com/clip.mp4" }],
@@ -339,11 +339,11 @@ describe("POST /api/videos/upload-url — publishing", () => {
     const res = await POST(req);
     const body = await res.json();
     const bodyStr = JSON.stringify(body);
-    expect(bodyStr).not.toMatch(/SUPABASE|SECRET|GEMINI|API_KEY/i);
+    expect(bodyStr).not.toMatch(/SUPABASE|SECRET|GEMINI|OPENROUTER|API_KEY/i);
   });
 
   it("logs the publishing action to audit_logs", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     const harness = setupHarness();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
@@ -359,7 +359,7 @@ describe("POST /api/videos/upload-url — publishing", () => {
   });
 
   it("does not invoke any Streamtape API, relay, or remote-import operation", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     const harness = setupHarness();
     const req = jsonRequest("/api/videos/upload-url", {
       categoryId: CATEGORY_ID,
@@ -381,7 +381,7 @@ describe("POST /api/videos/upload-url — duplicate detector and automatic thumb
   };
 
   it("skips a link that is already published, and creates nothing for it", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     frameState.generate = async () => "https://cdn.example.com/video-thumbnails/auto.jpg";
     const harness = setupHarness({ videos: [EXISTING] });
     const res = await POST(jsonRequest("/api/videos/upload-url", {
@@ -396,7 +396,7 @@ describe("POST /api/videos/upload-url — duplicate detector and automatic thumb
   });
 
   it("publishes a duplicate when the admin ticks 'publish anyway'", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     frameState.generate = async () => "https://cdn.example.com/video-thumbnails/auto.jpg";
     const harness = setupHarness({ videos: [EXISTING] });
     const res = await POST(jsonRequest("/api/videos/upload-url", {
@@ -410,7 +410,7 @@ describe("POST /api/videos/upload-url — duplicate detector and automatic thumb
   });
 
   it("captures a frame thumbnail when the admin supplies none", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     frameState.calls = [];
     frameState.generate = async () => "https://cdn.example.com/video-thumbnails/auto.jpg";
     const harness = setupHarness();
@@ -426,7 +426,7 @@ describe("POST /api/videos/upload-url — duplicate detector and automatic thumb
   });
 
   it("still publishes, with a warning, when frame capture fails", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+    aiState.suggest = async () => aiSuggestion();
     frameState.generate = async () => {
       throw new Error("No usable frame was found in the video");
     };

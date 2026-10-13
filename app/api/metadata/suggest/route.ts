@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { GeminiError, suggestVideoMetadata } from "@/lib/gemini/client";
+import { MetadataError, suggestVideoMetadata } from "@/lib/metadata/openrouter";
 import { z } from "zod";
 
 /**
- * Admin-only AI metadata suggestions (Gemini). Generates a title,
+ * Admin-only AI metadata suggestions (OpenRouter, DeepSeek V3.2 by default). Generates a title,
  * description, tags, and category for human review — nothing is published
  * automatically.
  */
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
         note: "AI-generated, requires human review. Not proof of rights or factual attributes.",
       });
     } catch (error: unknown) {
-      if (error instanceof GeminiError) {
+      if (error instanceof MetadataError) {
         return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
       }
       throw error;
