@@ -120,7 +120,7 @@ describe("publish entry parsing", () => {
 
   it("still accepts the legacy single embed field", () => {
     expect(normalizeEmbedEntries({ embed: "https://a.example/1" })).toEqual([
-      { source: "https://a.example/1", thumbnailPath: null },
+      { source: "https://a.example/1", thumbnailPath: null, allowDuplicate: false },
     ]);
   });
 

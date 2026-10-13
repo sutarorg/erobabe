@@ -168,7 +168,7 @@ const PLAYER_PATH_PATTERN = /^\/(?:embed|embed-|player|player-|e|v|watch)\b/i;
  * - a player/embed page → `embed` (stored in `embed_url`, iframe)
  *
  * Throws an actionable error when the value is neither, so the admin sees the
- * reason inline instead of a silent failure after the Gemini round-trip.
+ * reason inline instead of a silent failure after the AI round-trip.
  */
 export function classifyVideoSource(raw: unknown): ClassifiedVideoSource {
   const input = String(raw ?? "").trim();

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 /**
- * Public-surface tests for the NOWPayments and Gemini routes.
+ * Public-surface tests for the NOWPayments and AI metadata routes.
  *
  * These assert reachability and access control only — no real payment, no AI
  * request, no credentials required:
@@ -48,16 +48,16 @@ test.describe("NOWPayments public surface", () => {
   });
 });
 
-test.describe("Gemini suggestion surface", () => {
+test.describe("AI metadata suggestion surface", () => {
   test("suggestions require authentication", async ({ request }) => {
-    const res = await request.post("/api/gemini/suggest", {
+    const res = await request.post("/api/metadata/suggest", {
       data: { fileName: "clip.mp4" },
     });
     expect(res.status()).toBe(401);
   });
 
   test("suggestions reject GET", async ({ request }) => {
-    const res = await request.get("/api/gemini/suggest");
+    const res = await request.get("/api/metadata/suggest");
     expect(res.status()).toBe(405);
   });
 });

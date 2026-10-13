@@ -59,6 +59,8 @@ export interface HeroSlide {
   sub: string;
   image: string;
   alt: string;
+  /** Set for admin-chosen video slides: the watch page the slide links to. */
+  href?: string;
 }
 
 /* ------------------------------------------------------------------ */

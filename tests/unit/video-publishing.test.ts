@@ -1,27 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { SuggestedMetadata } from "@/lib/gemini/client";
+import type { SuggestedMetadata } from "@/lib/metadata/suggestion";
 import { createFakeSupabase } from "./helpers/fake-supabase";
 
 /**
- * The upload pipeline must not be blocked by Gemini. When the AI suggestion
+ * The upload pipeline must not be blocked by the AI provider. When the AI suggestion
  * fails (malformed output, quota, missing key) the video is still created with
  * deterministic file-name metadata, and the reason is reported back so the
  * admin knows it needs reviewing.
  */
 
-const geminiState = vi.hoisted(() => ({
+const aiState = vi.hoisted(() => ({
   suggest: null as null | ((params: { fileName?: string; category?: string }) => Promise<SuggestedMetadata>),
   calls: 0,
 }));
 
-vi.mock("@/lib/gemini/client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/gemini/client")>();
+vi.mock("@/lib/metadata/openrouter", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/metadata/openrouter")>();
   return {
     ...actual,
     suggestVideoMetadata: async (params: { fileName?: string; category?: string }) => {
-      geminiState.calls += 1;
-      if (!geminiState.suggest) throw new Error("suggestVideoMetadata not stubbed");
-      return geminiState.suggest(params);
+      aiState.calls += 1;
+      if (!aiState.suggest) throw new Error("suggestVideoMetadata not stubbed");
+      return aiState.suggest(params);
     },
   };
 });
@@ -63,14 +63,14 @@ function aiSuggestion(overrides: Partial<SuggestedMetadata> = {}): SuggestedMeta
 }
 
 beforeEach(() => {
-  geminiState.suggest = null;
-  geminiState.calls = 0;
+  aiState.suggest = null;
+  aiState.calls = 0;
   seedDb();
 });
 
 describe("createGeneratedVideo metadata", () => {
-  it("uses the AI suggestion when Gemini answers", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+  it("uses the AI suggestion when the provider answers", async () => {
+    aiState.suggest = async () => aiSuggestion();
     const { video, metadata } = await createGeneratedVideo({
       service: dbState.client as never,
       userId: "admin-1",
@@ -85,9 +85,9 @@ describe("createGeneratedVideo metadata", () => {
     expect(video.title).toBe("Evening in Velvet");
   });
 
-  it("keeps publishing with file-name metadata when Gemini fails", async () => {
-    geminiState.suggest = async () => {
-      throw new Error("Gemini returned malformed JSON — its response could not be parsed as JSON");
+  it("keeps publishing with file-name metadata when the provider fails", async () => {
+    aiState.suggest = async () => {
+      throw new Error("The model's reply could not be parsed as JSON");
     };
 
     const { video, metadata } = await createGeneratedVideo({
@@ -98,7 +98,7 @@ describe("createGeneratedVideo metadata", () => {
       provider: "embed",
     });
 
-    expect(geminiState.calls).toBe(1);
+    expect(aiState.calls).toBe(1);
     expect(metadata.source).toBe("fallback");
     expect(metadata.warning).toMatch(/AI metadata unavailable/);
     expect(metadata.title).toBe("Evening In Velvet");
@@ -108,9 +108,9 @@ describe("createGeneratedVideo metadata", () => {
   });
 
   it("redacts key material from the warning an admin sees", async () => {
-    geminiState.suggest = async () => {
+    aiState.suggest = async () => {
       throw new Error(
-        "Request failed: https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=AQ.FakeSecretKeyMaterial1234567890abcdef"
+        "Request failed: https://openrouter.ai/api/v1/chat/completions authorization=sk-or-v1-FakeSecretKeyMaterial1234567890abcdef"
       );
     };
 
@@ -124,13 +124,13 @@ describe("createGeneratedVideo metadata", () => {
 
     expect(metadata.source).toBe("fallback");
     expect(metadata.warning).toMatch(/AI metadata unavailable/);
-    expect(metadata.warning).not.toContain("AQ.FakeSecretKeyMaterial");
+    expect(metadata.warning).not.toContain("FakeSecretKeyMaterial");
   });
 
   it("attaches the fallback tags so the video is not left untagged", async () => {
     const fake = seedDb();
-    geminiState.suggest = async () => {
-      throw new Error("Gemini quota or rate limit exceeded");
+    aiState.suggest = async () => {
+      throw new Error("AI quota or rate limit exceeded");
     };
 
     const { video } = await createGeneratedVideo({
@@ -146,8 +146,8 @@ describe("createGeneratedVideo metadata", () => {
     expect(fake.db.tags.length).toBeGreaterThan(0);
   });
 
-  it("skips a second Gemini call when metadata was prepared while the file was uploading", async () => {
-    geminiState.suggest = async () => {
+  it("skips a second AI call when metadata was prepared while the file was uploading", async () => {
+    aiState.suggest = async () => {
       throw new Error("suggestVideoMetadata should not run");
     };
 
@@ -166,14 +166,14 @@ describe("createGeneratedVideo metadata", () => {
       prepared,
     });
 
-    expect(geminiState.calls).toBe(0);
+    expect(aiState.calls).toBe(0);
     expect(metadata.source).toBe("ai");
     expect(metadata.title).toBe("Already Written");
     expect(video.title).toBe("Already Written");
   });
 
-  it("ignores prepared metadata that is not usable and asks Gemini instead", async () => {
-    geminiState.suggest = async () => aiSuggestion();
+  it("ignores prepared metadata that is not usable and asks the AI provider instead", async () => {
+    aiState.suggest = async () => aiSuggestion();
     const { metadata } = await createGeneratedVideo({
       service: dbState.client as never,
       userId: "admin-1",
@@ -183,12 +183,12 @@ describe("createGeneratedVideo metadata", () => {
       prepared: { title: "x", description: "", tags: [], source: "ai" },
     });
 
-    expect(geminiState.calls).toBe(1);
+    expect(aiState.calls).toBe(1);
     expect(metadata.title).toBe("Evening in Velvet");
   });
 
-  it("falls back when Gemini returns an unusable field, such as a blank title", async () => {
-    geminiState.suggest = async () => aiSuggestion({ title: "   " });
+  it("falls back when the AI provider returns an unusable field, such as a blank title", async () => {
+    aiState.suggest = async () => aiSuggestion({ title: "   " });
     const { metadata } = await createGeneratedVideo({
       service: dbState.client as never,
       userId: "admin-1",

@@ -40,7 +40,16 @@ type Item = {
   title?: string;
   slug?: string;
   videoId?: string;
+  /** An existing video this link duplicates (from the duplicate detector). */
+  duplicate?: { videoId: string; slug: string; title: string; reason: string };
+  /** Admin ticked “publish anyway” for a duplicate. */
+  allowDuplicate?: boolean;
+  /** Auto-captured frame thumbnail URL, when the server generated one. */
+  autoThumbnail?: string;
+  thumbnailWarning?: string;
 };
+
+type MetadataHealth = { configured: boolean; keyKind?: string; model?: string };
 
 const THUMBNAIL_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024;
@@ -69,6 +78,16 @@ export default function UploadPage() {
   itemsRef.current = items;
   const abortRef = useRef<AbortController | null>(null);
   const fallbackRef = useRef(0);
+  const [metadataHealth, setMetadataHealth] = useState<MetadataHealth | null>(null);
+
+  // Tell the admin up front when the server cannot see OPENROUTER_API_KEY, instead
+  // of discovering it through a file-name title after publishing.
+  useEffect(() => {
+    fetch("/api/admin/metadata/health", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload) => setMetadataHealth(payload || null))
+      .catch(() => setMetadataHealth(null));
+  }, []);
 
   useEffect(() => {
     const supabase = createClient();
@@ -97,6 +116,32 @@ export default function UploadPage() {
   const patchItem = useCallback((id: string, patch: Partial<Item>) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }, []);
+
+  /** Asks the server which of these links already exist. Keyed by the exact link sent. */
+  async function checkDuplicates(urls: string[]): Promise<Record<string, Item["duplicate"]>> {
+    if (!urls.length) return {};
+    try {
+      const payload = await postJson<{ matches: Record<string, NonNullable<Item["duplicate"]>> }>(
+        "/api/admin/videos/duplicates",
+        { urls }
+      );
+      return payload.matches || {};
+    } catch {
+      // The publish route checks again on the server, so a failed pre-check is not fatal.
+      return {};
+    }
+  }
+
+  async function markDuplicates(urls: string[]) {
+    const matches = await checkDuplicates(urls);
+    if (!Object.keys(matches).length) return;
+    setItems((current) =>
+      current.map((item) => {
+        const match = matches[item.source];
+        return match ? { ...item, duplicate: match } : item;
+      })
+    );
+  }
 
   function applyPaste() {
     const entries = splitUrlEntries(pasteBuffer);
@@ -140,6 +185,7 @@ export default function UploadPage() {
 
     if (valid.length) {
       setItems((current) => [...current, ...valid]);
+      void markDuplicates(valid.map((item) => item.source));
     }
     setPasteBuffer("");
 
@@ -242,15 +288,15 @@ export default function UploadPage() {
     const json = isEmbed
       ? await postJson<any>("/api/videos/embed", {
           categoryId,
-          entries: [{ source: item.source, thumbnailPath: thumbnailPath || null }],
+          entries: [{ source: item.source, thumbnailPath: thumbnailPath || null, allowDuplicate: item.allowDuplicate === true }],
         })
       : await postJson<any>("/api/videos/upload-url", {
           categoryId,
-          entries: [{ url: item.source, thumbnailPath: thumbnailPath || null }],
+          entries: [{ url: item.source, thumbnailPath: thumbnailPath || null, allowDuplicate: item.allowDuplicate === true }],
         });
 
     const result = json.results?.[0];
-    if (!result || result.status === "failed") {
+    if (!result || result.status !== "published") {
       throw new Error(result?.error || json.error || "Unable to publish");
     }
 
@@ -269,6 +315,8 @@ export default function UploadPage() {
       slug: result.slug,
       videoId: result.videoId,
       metadataWarning: result.metadataWarning || undefined,
+      autoThumbnail: result.thumbnailSource === "frame" ? result.thumbnailUrl : undefined,
+      thumbnailWarning: result.thumbnailWarning || undefined,
     });
   }
 
@@ -292,9 +340,24 @@ export default function UploadPage() {
     abortRef.current = controller;
     fallbackRef.current = 0;
 
+    // Fresh duplicate check — the library may have changed since the links were added.
+    const matches = await checkDuplicates(pending.map((item) => item.source));
+    const blocked = new Set<string>();
+    for (const item of pending) {
+      const match = matches[item.source];
+      if (match && !item.allowDuplicate) blocked.add(item.id);
+      patchItem(item.id, { duplicate: match || undefined });
+    }
+
     // Reset anything that failed on a previous attempt.
     for (const item of pending) {
-      patchItem(item.id, { phase: "idle", detail: "Queued", error: undefined });
+      patchItem(item.id, {
+        phase: blocked.has(item.id) ? "failed" : "idle",
+        detail: blocked.has(item.id) ? "Skipped — duplicate" : "Queued",
+        error: blocked.has(item.id)
+          ? "Duplicate: this link or file is already published. Tick “publish anyway” to add it again."
+          : undefined,
+      });
     }
 
     let failures = 0;
@@ -303,6 +366,11 @@ export default function UploadPage() {
     // Process items sequentially — there is no file transfer to parallelise.
     for (const item of pending) {
       if (controller.signal.aborted) break;
+      if (blocked.has(item.id)) {
+        failures += 1;
+        settled.add(item.id);
+        continue;
+      }
       try {
         await publishItem(item, controller);
       } catch (publishError: any) {
@@ -355,9 +423,19 @@ export default function UploadPage() {
         <p className="mt-1 text-[12px] text-ink-3">
           Paste direct video URLs or player-page links below. Erobabe saves the link and plays the video straight from the
           original host — it does not download, upload, or re-encode the file. You control the category and each
-          video&apos;s optional thumbnail; Gemini generates the title, description, and tags.
+          video&apos;s optional thumbnail; AI (DeepSeek V3.2 via OpenRouter) generates the title, description, and tags.
         </p>
       </div>
+
+      {metadataHealth && !metadataHealth.configured && (
+        <div role="status" className="mt-6 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-[12px] leading-relaxed text-amber-200">
+          <p className="font-semibold">AI metadata is off — OPENROUTER_API_KEY is not visible to this server.</p>
+          <p className="mt-1 text-[11.5px]">
+            Titles and descriptions will be built from file names until it is set. Add OPENROUTER_API_KEY to the hosting
+            project&apos;s environment variables (Production), redeploy, then check Admin → System Health.
+          </p>
+        </div>
+      )}
 
       <form onSubmit={publishAll} className="mt-6 rounded-lg border border-line bg-pcard p-5">
         <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line pb-5">
@@ -531,6 +609,28 @@ export default function UploadPage() {
                       ))}
                     </div>
 
+                    {item.duplicate && (
+                      <div className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-[10.5px] leading-relaxed text-amber-200">
+                        <p>
+                          Duplicate — already published as{" "}
+                          <Link href={`/video/${item.duplicate.slug}`} target="_blank" className="underline">
+                            {item.duplicate.title}
+                          </Link>{" "}
+                          ({item.duplicate.reason === "same_link" ? "same link" : "same file name"}).
+                        </p>
+                        <label className="mt-1 inline-flex items-center gap-1.5">
+                          <input
+                            type="checkbox"
+                            checked={item.allowDuplicate === true}
+                            onChange={(event) => patchItem(item.id, { allowDuplicate: event.target.checked })}
+                            disabled={running || item.phase === "published"}
+                            className="h-3 w-3 accent-accent"
+                          />
+                          Publish anyway
+                        </label>
+                      </div>
+                    )}
+
                     {item.title && <p className="mt-1 text-[11px] text-ink-2">Title: {item.title}</p>}
                     {item.metadataWarning && (
                       <p role="status" aria-live="polite" className="mt-1.5 text-[10.5px] leading-relaxed text-amber-300">
@@ -538,7 +638,12 @@ export default function UploadPage() {
                       </p>
                     )}
 
-                    {item.phase === "idle" && <p className="mt-1.5 text-[10.5px] text-ink-3">{item.detail}</p>}
+                    {item.phase === "idle" && (
+                      <p className="mt-1.5 text-[10.5px] text-ink-3">
+                        {item.detail}
+                        {!item.thumbnailPreview && item.kind === "direct" && " · No thumbnail chosen? A frame is captured from the video automatically."}
+                      </p>
+                    )}
                     {(item.phase === "uploading" || item.phase === "processing") && (
                       <p className="mt-1.5 flex items-center gap-1.5 text-[10.5px] text-accent">
                         <LoaderCircle aria-hidden="true" className="h-3 w-3 animate-spin" />
@@ -555,6 +660,15 @@ export default function UploadPage() {
                           </Link>
                         )}
                       </p>
+                    )}
+                    {item.phase === "published" && item.autoThumbnail && (
+                      <div className="mt-2 flex items-center gap-2 text-[10.5px] text-ink-3">
+                        <img src={item.autoThumbnail} alt="Automatic thumbnail from a video frame" className="aspect-video w-[120px] rounded border border-line object-cover" />
+                        <span>Automatic thumbnail captured from the video frame. Replace it from /admin/videos if you prefer your own.</span>
+                      </div>
+                    )}
+                    {item.phase === "published" && item.thumbnailWarning && (
+                      <p className="mt-1 text-[10.5px] text-amber-300">{item.thumbnailWarning}</p>
                     )}
                     {item.phase === "failed" && (
                       <p className="mt-1.5 text-[10.5px] text-red-300">{item.error}</p>

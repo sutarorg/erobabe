@@ -176,3 +176,67 @@ describe("DELETE /api/admin/videos — delete a video", () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe("PATCH /api/admin/videos — homepage carousel slots", () => {
+  const OTHER_ID = "33333333-3333-4333-8333-333333333333";
+
+  it("places a video in slot 2 and moves the previous holder out", async () => {
+    const harness = setup({
+      videos: [
+        videoRow({ carousel_position: 2 }),
+        videoRow({ id: OTHER_ID, slug: "solo-night", title: "Solo Night", carousel_position: null }),
+      ],
+    });
+    const res = await PATCH(jsonRequest("/api/admin/videos", { id: OTHER_ID, carousel_position: 2 }, "PATCH"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).video.carousel_position).toBe(2);
+    const byId = Object.fromEntries(harness.db.videos.map((row: any) => [row.id, row.carousel_position]));
+    expect(byId[OTHER_ID]).toBe(2);
+    expect(byId[VIDEO_ID]).toBeNull();
+    expect(harness.db.audit_logs.at(-1)?.action).toBe("video_carousel_assigned");
+  });
+
+  it("clears a video's slot with null", async () => {
+    const harness = setup({ videos: [videoRow({ carousel_position: 1 })] });
+    const res = await PATCH(jsonRequest("/api/admin/videos", { id: VIDEO_ID, carousel_position: null }, "PATCH"));
+    expect(res.status).toBe(200);
+    expect(harness.db.videos[0].carousel_position).toBeNull();
+    expect(harness.db.audit_logs.at(-1)?.action).toBe("video_carousel_cleared");
+  });
+
+  it("rejects slots outside 1–3", async () => {
+    setup();
+    for (const bad of [4, 0.5, "two", -1]) {
+      const res = await PATCH(jsonRequest("/api/admin/videos", { id: VIDEO_ID, carousel_position: bad }, "PATCH"));
+      expect(res.status).toBe(400);
+    }
+  });
+});
+
+describe("DELETE /api/admin/videos — bulk delete", () => {
+  it("deletes the selected videos, their thumbnails, and reports missing ids", async () => {
+    const otherId = "44444444-4444-4444-8444-444444444444";
+    const harness = setup({
+      videos: [
+        videoRow(),
+        videoRow({ id: otherId, slug: "b", title: "B", thumbnail_url: `https://cdn.example.com/video-thumbnails/${ADMIN_ID}/b.jpg` }),
+      ],
+    });
+    const missingId = "55555555-5555-4555-8555-555555555555";
+    const res = await DELETE(jsonRequest("/api/admin/videos", { ids: [VIDEO_ID, otherId, missingId] }, "DELETE"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.deleted.sort()).toEqual([VIDEO_ID, otherId].sort());
+    expect(body.missing).toEqual([missingId]);
+    expect(harness.db.videos).toHaveLength(0);
+    expect(harnessState.removed).toContain(`video-thumbnails/${THUMB_PATH}`);
+    expect(harness.db.audit_logs.filter((row: any) => row.action === "video_deleted")).toHaveLength(2);
+  });
+
+  it("refuses an empty or oversized bulk request", async () => {
+    setup();
+    expect((await DELETE(jsonRequest("/api/admin/videos", { ids: [] }, "DELETE"))).status).toBe(400);
+    const many = Array.from({ length: 201 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
+    expect((await DELETE(jsonRequest("/api/admin/videos", { ids: many }, "DELETE"))).status).toBe(400);
+  });
+});

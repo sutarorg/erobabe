@@ -10,8 +10,13 @@ import { iframeSourceFrom, looksLikeIframeMarkup, normalizePastedLink } from "./
 
 export const MAX_ENTRIES_PER_REQUEST = 20;
 
-export type PublishEntry = { source: string; thumbnailPath: string | null };
-export type RemoteEntry = { url: string; thumbnailPath: string | null };
+export type PublishEntry = { source: string; thumbnailPath: string | null; allowDuplicate: boolean };
+export type RemoteEntry = { url: string; thumbnailPath: string | null; allowDuplicate: boolean };
+
+/** The admin ticked “publish anyway” for this entry (or for the whole request). */
+function toAllowDuplicate(value: unknown, requestWide = false): boolean {
+  return value === true || value === "true" || requestWide === true;
+}
 
 /** Turns one pasted blob into a single normalised source string. */
 function normalizeEntry(raw: unknown): string {
@@ -73,6 +78,7 @@ export function normalizeEmbedEntries(body: any): PublishEntry[] {
     .map((entry) => ({
       source: normalizeEntry(entry?.source ?? entry?.url ?? entry?.embed),
       thumbnailPath: toThumbnailPath(entry?.thumbnailPath),
+      allowDuplicate: toAllowDuplicate(entry?.allowDuplicate, body?.allowDuplicate === true),
     }))
     .filter((entry) => entry.source)
     .slice(0, MAX_ENTRIES_PER_REQUEST);
@@ -89,6 +95,7 @@ export function normalizeRemoteEntries(body: any): RemoteEntry[] {
       .map((entry: any) => ({
         url: normalizeEntry(entry?.url ?? entry?.source),
         thumbnailPath: toThumbnailPath(entry?.thumbnailPath),
+        allowDuplicate: toAllowDuplicate(entry?.allowDuplicate, body?.allowDuplicate === true),
       }))
       .filter((entry: RemoteEntry) => entry.url)
       .slice(0, MAX_ENTRIES_PER_REQUEST);
@@ -97,5 +104,5 @@ export function normalizeRemoteEntries(body: any): RemoteEntry[] {
   const sharedThumbnail = toThumbnailPath(body?.thumbnailPath);
   return splitUrlEntries(body?.urls || "")
     .slice(0, MAX_ENTRIES_PER_REQUEST)
-    .map((url) => ({ url, thumbnailPath: sharedThumbnail }));
+    .map((url) => ({ url, thumbnailPath: sharedThumbnail, allowDuplicate: body?.allowDuplicate === true }));
 }

@@ -142,3 +142,83 @@ describe("VideoManager", () => {
     expect(screen.getByText("1 of 2 shown")).toBeTruthy();
   });
 });
+
+describe("VideoManager — categories, select all, carousel, bulk actions", () => {
+  const CATS = [
+    { id: "cat-boudoir", label: "Boudoir" },
+    { id: "cat-solo", label: "Solo" },
+  ];
+  const SOLO = { ...VIDEO, id: "33333333-3333-4333-8333-333333333333", slug: "solo-night", title: "Solo Night", category_id: "cat-solo", category_label: "Solo" };
+  const BOUDOIR = { ...VIDEO, category_id: "cat-boudoir" };
+
+  it("filters the table by category", () => {
+    render(<VideoManager initialVideos={[BOUDOIR, SOLO]} categories={CATS} />);
+    fireEvent.change(screen.getByLabelText("Filter by category"), { target: { value: "cat-solo" } });
+    expect(screen.getByText("Solo Night")).toBeTruthy();
+    expect(screen.queryByText("Evening in Velvet")).toBeNull();
+    expect(screen.getByText("1 of 2 shown")).toBeTruthy();
+  });
+
+  it("selects every shown video with one checkbox and clears it again", () => {
+    render(<VideoManager initialVideos={[BOUDOIR, SOLO]} categories={CATS} />);
+    fireEvent.click(screen.getByLabelText("Select all shown videos"));
+    expect(screen.getByText("2 selected")).toBeTruthy();
+    expect((screen.getByLabelText("Select Solo Night") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByLabelText("Select all shown videos"));
+    expect(screen.getByText("0 selected")).toBeTruthy();
+  });
+
+  it("select all respects the active filter", () => {
+    render(<VideoManager initialVideos={[BOUDOIR, SOLO]} categories={CATS} />);
+    fireEvent.change(screen.getByLabelText("Filter by category"), { target: { value: "cat-solo" } });
+    fireEvent.click(screen.getByLabelText("Select all shown videos"));
+    expect(screen.getByText("1 selected")).toBeTruthy();
+  });
+
+  it("bulk-deletes the selection after confirmation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ deleted: [VIDEO.id, SOLO.id], missing: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+
+    render(<VideoManager initialVideos={[VIDEO, SOLO]} categories={CATS} />);
+    fireEvent.click(screen.getByLabelText("Select all shown videos"));
+    fireEvent.click(screen.getByText("Delete selected"));
+
+    await waitFor(() => expect(screen.queryByText("Solo Night")).toBeNull());
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/admin/videos");
+    expect(init.method).toBe("DELETE");
+    expect(JSON.parse(String(init.body))).toEqual({ ids: [VIDEO.id, SOLO.id] });
+  });
+
+  it("places a video in a carousel slot through PATCH", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ video: { id: VIDEO.id, carousel_position: 2 } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<VideoManager initialVideos={[VIDEO]} categories={CATS} />);
+    fireEvent.change(screen.getByLabelText(`Homepage carousel slot for ${VIDEO.title}`), { target: { value: "2" } });
+
+    await waitFor(() => expect(screen.getByText("Placed in homepage carousel slot 2.")).toBeTruthy());
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(String(init.body))).toEqual({ id: VIDEO.id, carousel_position: 2 });
+  });
+
+  it("shows the carousel slot holders from the initial data", () => {
+    render(<VideoManager initialVideos={[{ ...VIDEO, carousel_position: 1 }]} categories={CATS} />);
+    expect(screen.getByText("1 of 3 slots filled.", { exact: false })).toBeTruthy();
+    expect(screen.getByLabelText(`Homepage carousel slot for ${VIDEO.title}`)).toHaveProperty("value", "1");
+  });
+
+  it("generates a frame thumbnail for a selected direct-link video without one", async () => {
+    const bare = { ...VIDEO, id: "44444444-4444-4444-8444-444444444444", thumbnail_url: null, title: "Bare Clip" };
+    mockPostJson.mockResolvedValue({
+      results: [{ id: bare.id, status: "generated", thumbnailUrl: "https://cdn.example.com/video-thumbnails/auto.jpg" }],
+      generated: 1,
+    });
+    render(<VideoManager initialVideos={[bare]} categories={CATS} />);
+    fireEvent.click(screen.getByText("Generate thumb"));
+    await waitFor(() => expect(screen.getByText("Thumbnail generated from a video frame.")).toBeTruthy());
+    expect(mockPostJson).toHaveBeenCalledWith("/api/admin/videos/thumbnails", { ids: [bare.id] });
+  });
+});
