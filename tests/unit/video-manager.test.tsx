@@ -58,6 +58,58 @@ describe("VideoManager", () => {
     expect(document.querySelector('img[src="https://cdn.example.com/video-thumbnails/admin-1/thumb.jpg"]')).toBeTruthy();
   });
 
+  it("shows Bunny uploads as Encoding and checks status outside the upload worker", async () => {
+    const encoding: AdminVideo = {
+      ...VIDEO,
+      id: "33333333-3333-4333-8333-333333333333",
+      slug: "clip-33333333",
+      title: "Encoding clip",
+      status: "processing",
+      provider: "bunny",
+      provider_progress: 24,
+      playable_url: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ processing: true, progress: 30, providerStatus: "Transcoding" }, true, 202),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<VideoManager initialVideos={[encoding]} />);
+
+    expect(screen.getByText("Encoding", { selector: "span" })).toBeTruthy();
+    expect(screen.getByText("Available after encoding")).toBeTruthy();
+    expect(screen.getByLabelText(`Select ${encoding.title}`)).toBeDisabled();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/videos/bunny/confirm");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toEqual({
+      sessionId: encoding.id,
+    });
+  });
+
+  it("changes an Encoding row to published after Bunny reports Finished", async () => {
+    const encoding: AdminVideo = {
+      ...VIDEO,
+      id: "44444444-4444-4444-8444-444444444444",
+      slug: "clip-44444444",
+      title: "Just finished",
+      status: "processing",
+      provider: "bunny",
+      playable_url: null,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({ slug: "just-finished", videoId: encoding.id }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<VideoManager initialVideos={[encoding]} />);
+
+    await waitFor(() => expect(screen.getByText("published", { selector: "span" })).toBeTruthy());
+    expect(screen.getByRole("link", { name: "View" })).toHaveAttribute(
+      "href",
+      "/video/just-finished",
+    );
+  });
+
   it("uploads a replacement thumbnail and saves its public URL", async () => {
     const fetchMock = vi
       .fn()

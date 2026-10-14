@@ -35,9 +35,13 @@ Open http://localhost:3000
 
 `/admin/videos/upload` accepts multiple local videos through drag-and-drop or
 **Choose videos**. Bytes go directly to Bunny Stream's TUS endpoint, never through
-Next.js, Vercel functions or Supabase Storage. Per-file progress is measured;
-concurrency is bounded to two. Cancellation pauses transfer; reselecting the same
-source recovers its server session and resumable upload identity.
+Next.js, Vercel functions or Supabase Storage. There is no application-level video
+size cap, and four files upload in parallel with per-file progress. Bunny encoding
+runs asynchronously: each accepted upload appears immediately in `/admin/videos`
+with status **Encoding**, while upload workers continue to the next files. The
+library page reconciles encoding in the background and publishes only after Bunny
+reports Finished. Cancellation pauses transfer; reselecting the same source
+recovers its server session and resumable upload identity.
 
 Ten actual frames throughout each clip are scored for detail, contrast, colour,
 exposure and composition. The best frame becomes a restrained, sharpened 1280×720
@@ -51,8 +55,9 @@ stored library ID/GUID at `iframe.mediadelivery.net`. Existing direct-media play
 and administrative tools remain; retired hosted records are unpublished and marked
 **requiring re-upload**, with metadata preserved. No media migration is claimed.
 
-Apply the new forward migration `00000000000012_bunny_stream_uploads.sql` after all
-existing migrations; do not edit applied history. See [deployment section D](DEPLOYMENT.md#d-bunny-stream-device-uploads)
+Apply the forward migrations `00000000000012_bunny_stream_uploads.sql` and
+`00000000000013_bunny_background_encoding.sql` after existing migrations; do not
+edit applied history. See [deployment section D](DEPLOYMENT.md#d-bunny-stream-device-uploads)
 for credentials, content policy, recovery and a genuine staging upload test.
 **Automated mocks/build are not live Bunny acceptance evidence.**
 

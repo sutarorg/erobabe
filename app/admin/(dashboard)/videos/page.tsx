@@ -8,7 +8,7 @@ export default async function AdminVideosPage() {
     supabase
       .from("videos")
       .select(
-        "id, slug, title, status, visibility, provider, requires_reupload, thumbnail_url, playable_url, embed_url, view_count, created_at, carousel_position, category_id, category:categories(label)"
+        "id, slug, title, status, visibility, provider, requires_reupload, thumbnail_url, playable_url, embed_url, view_count, created_at, carousel_position, category_id, provider_progress, provider_error, category:categories(label)"
       )
       .order("created_at", { ascending: false })
       .limit(1000),
@@ -33,6 +33,8 @@ export default async function AdminVideosPage() {
       category_id: video.category_id ? String(video.category_id) : null,
       category_label: category?.label ? String(category.label) : null,
       carousel_position: video.carousel_position ? Number(video.carousel_position) : null,
+      provider_progress: video.provider_progress == null ? null : Number(video.provider_progress),
+      provider_error: video.provider_error ? String(video.provider_error) : null,
     };
   });
 
@@ -49,8 +51,7 @@ export default async function AdminVideosPage() {
         <div>
           <h1 className="text-[20px] font-semibold">Videos</h1>
           <p className="mt-1 text-[12px] text-ink-3">
-            Manage the published library: filter by category, select videos for bulk actions, change or generate a
-            thumbnail, set the homepage carousel, or delete a video.{" "}
+            Manage the video library: encoding uploads appear here immediately, then publish automatically when Bunny finishes. Filter by category, manage thumbnails, set the homepage carousel, or delete videos.{" "}
             {rows.length > 0 && (
               <span className="tabular-nums">
                 {rows.length} videos · {withThumbnails} with a thumbnail

@@ -25,31 +25,41 @@ export async function POST(req: NextRequest) {
     const parsed = inputSchema.safeParse(await req.json().catch(() => null));
     if (!parsed.success)
       throw new BunnyError("Invalid confirmation request.", 400);
+    // Any active admin can reconcile an encoding row from the shared catalog.
+    // The original creator remains the owner recorded on all persisted rows.
     const { data: session, error } = await service
       .from("bunny_uploads")
       .select("*")
       .eq("id", parsed.data.sessionId)
-      .eq("created_by", user.id)
       .single();
     if (error || !session)
       throw new BunnyError("Upload session not found.", 404);
     if (session.state === "completed")
-      return NextResponse.json({
-        videoId: session.video_id,
-        slug: session.video_slug,
-      });
+      return NextResponse.json(
+        { videoId: session.video_id, slug: session.video_slug },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    if (session.state === "cancelled")
+      throw new BunnyError("This upload session was cancelled.", 409);
     if (!session.provider_id)
       throw new BunnyError(
         "Creation unknown. Reconcile the session marker in Bunny before another upload.",
         409,
       );
+
     const thumbnailPath = parsed.data.thumbnailPath ?? session.thumbnail_path;
     let thumbnailUrl: string | null;
     try {
-      thumbnailUrl = resolveThumbnailUrl(service, user.id, thumbnailPath);
+      // Session thumbnails belong to the administrator who uploaded the video,
+      // even when another active administrator performs the background check.
+      thumbnailUrl = resolveThumbnailUrl(
+        service,
+        session.created_by,
+        thumbnailPath,
+      );
     } catch {
       throw new BunnyError(
-        "Thumbnail path does not belong to this administrator.",
+        "Thumbnail path does not belong to this upload session.",
         400,
       );
     }
@@ -57,12 +67,15 @@ export async function POST(req: NextRequest) {
       // Verify the signed upload really wrote an object; a URL alone proves nothing.
       const { data: objects, error: storageError } = await service.storage
         .from(THUMBNAIL_BUCKET)
-        .list(user.id, { search: thumbnailPath.split("/")[1], limit: 100 });
+        .list(session.created_by, {
+          search: thumbnailPath!.split("/")[1],
+          limit: 100,
+        });
       if (
         storageError ||
         !objects?.some(
           (o: { name: string; metadata?: { size?: number } }) =>
-            o.name === thumbnailPath.split("/")[1] &&
+            o.name === thumbnailPath!.split("/")[1] &&
             Number(o.metadata?.size) > 0,
         )
       )
@@ -84,47 +97,103 @@ export async function POST(req: NextRequest) {
       String(remote.videoLibraryId) !== session.library_id
     )
       throw new BunnyError("Bunny returned mismatched video identity.");
-    const failed = remote.status === 5 || remote.status === 6;
-    const { error: saveError } = await service
-      .from("bunny_uploads")
-      .update({
-        thumbnail_path: thumbnailPath,
-        provider_status: remote.status,
-        state: failed ? "failed" : remote.status === 4 ? "ready" : "processing",
-        last_error: failed ? `Bunny ${BUNNY_STATUS[remote.status]}` : null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", session.id)
-      .neq("state", "completed");
-    if (saveError) throw saveError;
-    if (failed)
-      throw new BunnyError(
-        `Bunny ${BUNNY_STATUS[remote.status]}: inspect the library dashboard. The video has not been published.`,
-        409,
+
+    const providerStatus = BUNNY_STATUS[remote.status];
+    const embed = bunnyEmbedUrl(session.library_id, session.provider_id);
+    if (remote.status === 5 || remote.status === 6) {
+      const { data: failureResult, error: failError } = await service.rpc("fail_bunny_upload", {
+        p_session: session.id,
+        p_admin: user.id,
+        p_provider_status: remote.status,
+      });
+      if (failError) throw failError;
+      if (failureResult?.state === "completed") {
+        revalidatePublicTag("videos");
+        return NextResponse.json(failureResult, {
+          headers: { "Cache-Control": "no-store" },
+        });
+      }
+      return NextResponse.json(
+        {
+          failed: true,
+          providerStatus,
+          error: `Bunny ${providerStatus}: inspect the library dashboard. The video has not been published.`,
+        },
+        {
+          status: 409,
+          headers: { "Cache-Control": "no-store" },
+        },
       );
-    if (remote.status !== 4)
+    }
+
+    if (remote.status !== 4) {
+      if (!thumbnailUrl || !thumbnailPath)
+        throw new BunnyError(
+          "Thumbnail generation required. Select the same source file to retry; video bytes need not upload again.",
+          409,
+        );
+      const { data, error: stageError } = await service.rpc(
+        "stage_bunny_upload",
+        {
+          p_session: session.id,
+          p_admin: user.id,
+          p_embed: embed,
+          p_thumbnail_path: thumbnailPath,
+          p_thumbnail: thumbnailUrl,
+          p_provider_status: remote.status,
+          p_progress: Math.floor(remote.encodeProgress),
+        },
+      );
+      if (stageError || !data)
+        throw new BunnyError(
+          "Bunny accepted the upload, but the encoding row could not be saved. Retry status confirmation; video bytes will not upload again.",
+        );
+      if (data.state === "completed") {
+        revalidatePublicTag("videos");
+        return NextResponse.json(data, {
+          headers: { "Cache-Control": "no-store" },
+        });
+      }
       return NextResponse.json(
         {
           processing: true,
-          providerStatus: BUNNY_STATUS[remote.status],
-          progress: remote.encodeProgress,
+          videoId: data.videoId || session.id,
+          slug: data.slug,
+          providerStatus,
+          progress: Math.min(99, Math.floor(remote.encodeProgress)),
         },
         {
           status: 202,
-          headers: { "Cache-Control": "no-store", "Retry-After": "5" },
+          headers: {
+            "Cache-Control": "no-store",
+            "Retry-After": "15",
+          },
         },
       );
-    if (!thumbnailUrl)
+    }
+
+    if (!thumbnailUrl || !thumbnailPath)
       throw new BunnyError(
-        "Thumbnail generation required. Select the same source file to retry thumbnail generation; video bytes need not upload again.",
+        "Thumbnail generation required. Select the same source file to retry; video bytes need not upload again.",
         409,
       );
+    const { error: readyError } = await service
+      .from("bunny_uploads")
+      .update({
+        thumbnail_path: thumbnailPath,
+        provider_status: 4,
+        state: "ready",
+        last_error: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", session.id);
+    if (readyError) throw readyError;
     const { data, error: persistError } = await service.rpc(
       "finish_bunny_upload",
       {
         p_session: session.id,
         p_admin: user.id,
-        p_embed: bunnyEmbedUrl(session.library_id, session.provider_id),
+        p_embed: embed,
         p_thumbnail: thumbnailUrl,
         p_duration: remote.length,
       },

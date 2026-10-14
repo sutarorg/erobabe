@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ImagePlus,
@@ -31,6 +31,8 @@ export type AdminVideo = {
   category_label: string | null;
   /** Homepage carousel slot (1–3), or null when the video is not in the carousel. */
   carousel_position?: number | null;
+  provider_progress?: number | null;
+  provider_error?: string | null;
 };
 
 export type AdminCategory = { id: string; label: string };
@@ -69,6 +71,97 @@ export default function VideoManager({
   const [bulkBusy, setBulkBusy] = useState<"" | "delete" | "generate">("");
   const [bulkNotice, setBulkNotice] = useState("");
   const [bulkError, setBulkError] = useState("");
+  const encodingIds = videos
+    .filter((video) => video.provider === "bunny" && video.status === "processing")
+    .map((video) => video.id)
+    .sort()
+    .join(",");
+
+  // Reconcile staged rows independently of the upload queue. Bunny encodes on
+  // its side; this lightweight background poll only publishes a row once the
+  // provider reports Finished (4), and never holds an upload worker open.
+  useEffect(() => {
+    if (!encodingIds) return;
+    const ids = encodingIds.split(",");
+    let stopped = false;
+    let active = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let controller = new AbortController();
+    const sync = async () => {
+      if (stopped || active) return;
+      active = true;
+      controller = new AbortController();
+      let cursor = 0;
+      const worker = async () => {
+        while (!stopped && !controller.signal.aborted && cursor < ids.length) {
+          const id = ids[cursor++];
+          try {
+            const response = await fetch("/api/videos/bunny/confirm", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ sessionId: id }),
+              cache: "no-store",
+              signal: controller.signal,
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (response.status === 409 && payload.failed) {
+              setVideos((current) =>
+                current.map((video) =>
+                  video.id === id
+                    ? {
+                        ...video,
+                        status: "unpublished",
+                        provider_progress: 0,
+                        provider_error: payload.error || "Bunny encoding failed.",
+                      }
+                    : video,
+                ),
+              );
+            } else if (response.ok && payload.processing) {
+              setVideos((current) =>
+                current.map((video) =>
+                  video.id === id
+                    ? {
+                        ...video,
+                        provider_progress: Math.floor(payload.progress || 0),
+                      }
+                    : video,
+                ),
+              );
+            } else if (response.ok && payload.slug) {
+              setVideos((current) =>
+                current.map((video) =>
+                  video.id === id
+                    ? {
+                        ...video,
+                        slug: payload.slug,
+                        status: "published",
+                        visibility: "public",
+                        provider_progress: 100,
+                        provider_error: null,
+                      }
+                    : video,
+                ),
+              );
+            }
+          } catch {
+            // Transient network/provider errors are retried on the next pass.
+          }
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(4, ids.length) }, worker),
+      );
+      active = false;
+      if (!stopped) timer = setTimeout(() => void sync(), 15000);
+    };
+    void sync();
+    return () => {
+      stopped = true;
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [encodingIds]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -79,10 +172,14 @@ export default function VideoManager({
     });
   }, [videos, query, categoryFilter]);
 
-  const shownIds = filtered.map((video) => video.id);
+  const shownIds = filtered
+    .filter((video) => video.status !== "processing")
+    .map((video) => video.id);
   const selectedShown = shownIds.filter((id) => selected.has(id));
   const allShownSelected = shownIds.length > 0 && selectedShown.length === shownIds.length;
-  const selectedVideos = videos.filter((video) => selected.has(video.id));
+  const selectedVideos = videos.filter(
+    (video) => selected.has(video.id) && video.status !== "processing",
+  );
   const generatable = selectedVideos.filter((video) => !video.thumbnail_url && video.playable_url);
 
   const slotHolders = useMemo(() => {
@@ -511,6 +608,8 @@ export default function VideoManager({
               {filtered.map((video) => {
                 const state = rows[video.id] || {};
                 const busy = Boolean(state.busy) || Boolean(bulkBusy);
+                const encoding = video.provider === "bunny" && video.status === "processing";
+                const unavailable = busy || encoding;
                 const isSelected = selected.has(video.id);
                 const slot = video.carousel_position || null;
                 return (
@@ -521,7 +620,7 @@ export default function VideoManager({
                         aria-label={`Select ${video.title}`}
                         checked={isSelected}
                         onChange={() => toggleOne(video.id)}
-                        disabled={busy}
+                        disabled={unavailable}
                         className="h-3.5 w-3.5 accent-accent"
                       />
                     </td>
@@ -543,7 +642,7 @@ export default function VideoManager({
                         </div>
                         <label
                           className={`mt-1 inline-flex h-7 w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-line text-[10.5px] hover:bg-white/5 ${
-                            busy ? "pointer-events-none opacity-50" : ""
+                            unavailable ? "pointer-events-none opacity-50" : ""
                           }`}
                         >
                           <ImagePlus aria-hidden="true" className="h-3 w-3" />
@@ -552,7 +651,7 @@ export default function VideoManager({
                             type="file"
                             accept="image/jpeg,image/png,image/gif,image/webp"
                             onChange={(event) => changeThumbnail(video, event)}
-                            disabled={busy}
+                            disabled={unavailable}
                             className="sr-only"
                           />
                         </label>
@@ -570,7 +669,15 @@ export default function VideoManager({
                       </p>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="rounded-full bg-white/5 px-2 py-1 text-[10px] uppercase">{video.status}</span>
+                      <span className={`rounded-full px-2 py-1 text-[10px] uppercase ${encoding ? "bg-amber-500/15 text-amber-300" : "bg-white/5"}`}>
+                        {encoding ? "Encoding" : video.provider_error && video.status === "unpublished" ? "Encoding failed" : video.status}
+                      </span>
+                      {encoding && video.provider_progress != null && (
+                        <p className="mt-1 text-[10px] text-ink-3">{Math.floor(video.provider_progress)}%</p>
+                      )}
+                      {video.provider_error && video.status === "unpublished" && (
+                        <p className="mt-1 max-w-[180px] text-[10px] text-red-300">{video.provider_error}</p>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <label className="block">
@@ -582,7 +689,7 @@ export default function VideoManager({
                             const next = event.target.value ? Number(event.target.value) : null;
                             setCarouselSlot(video, next);
                           }}
-                          disabled={busy}
+                          disabled={unavailable}
                           className="h-7 rounded-md border border-line bg-void px-2 text-[11px] disabled:opacity-50"
                         >
                           <option value="">Not in carousel</option>
@@ -600,14 +707,18 @@ export default function VideoManager({
                     <td className="px-4 py-3 text-[11px] text-ink-3">{new Date(video.created_at).toLocaleDateString()}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Link href={`/video/${video.slug}`} target="_blank" className="text-[11px] text-accent hover:underline">
-                          View
-                        </Link>
+                        {encoding ? (
+                          <span className="text-[11px] text-ink-3">Available after encoding</span>
+                        ) : (
+                          <Link href={`/video/${video.slug}`} target="_blank" className="text-[11px] text-accent hover:underline">
+                            View
+                          </Link>
+                        )}
                         {!video.thumbnail_url && video.playable_url && (
                           <button
                             type="button"
                             onClick={() => generateOne(video)}
-                            disabled={busy}
+                            disabled={unavailable}
                             className="inline-flex h-7 items-center gap-1 rounded-md border border-line px-2 text-[10.5px] text-ink-2 hover:bg-white/5 hover:text-ink disabled:opacity-40"
                           >
                             {state.busy === "generate" ? (
@@ -621,7 +732,7 @@ export default function VideoManager({
                         <button
                           type="button"
                           onClick={() => removeThumbnail(video)}
-                          disabled={busy || !video.thumbnail_url}
+                          disabled={unavailable || !video.thumbnail_url}
                           className="inline-flex h-7 items-center gap-1 rounded-md border border-line px-2 text-[10.5px] text-ink-2 hover:bg-white/5 hover:text-ink disabled:opacity-40"
                         >
                           {state.busy === "remove" ? (
@@ -634,7 +745,7 @@ export default function VideoManager({
                         <button
                           type="button"
                           onClick={() => deleteVideo(video)}
-                          disabled={busy}
+                          disabled={unavailable}
                           className="inline-flex h-7 items-center gap-1 rounded-md border border-red-500/30 px-2 text-[10.5px] text-red-300 hover:bg-red-500/10 disabled:opacity-40"
                         >
                           {state.busy === "delete" ? (

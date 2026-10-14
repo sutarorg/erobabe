@@ -33,12 +33,14 @@ import { uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
 const transfer = vi.mocked(uploadBunnyVideo);
 let fetchMock: ReturnType<typeof vi.fn>;
 let saveFails: boolean;
+let encodingPending: boolean;
 beforeEach(() => {
   localStorage.clear();
   URL.createObjectURL = vi.fn(() => "blob:preview");
   URL.revokeObjectURL = vi.fn();
   vi.mocked(uploadWithProgress).mockResolvedValue();
   saveFails = false;
+  encodingPending = false;
   transfer.mockImplementation(async (_url, _file, options) => {
     options?.onProgress?.({
       percent: 62,
@@ -52,13 +54,22 @@ beforeEach(() => {
       return Response.json({
         policy: {
           mimeTypes: ["video/mp4"],
-          maxBytes: 10000,
-          concurrency: 2,
+          concurrency: 4,
           headers: {},
         },
         sessions: [],
       });
-    if (url.endsWith("confirm"))
+    if (url.endsWith("confirm")) {
+      if (encodingPending)
+        return Response.json(
+          {
+            processing: true,
+            slug: "saved-video",
+            providerStatus: "Transcoding",
+            progress: 20,
+          },
+          { status: 202 },
+        );
       return saveFails
         ? Response.json(
             {
@@ -67,6 +78,7 @@ beforeEach(() => {
             { status: 502 },
           )
         : Response.json({ slug: "saved-video" });
+    }
     return Response.json({
       uploadUrl: "https://storage.example.com/signed",
       headers: {},
@@ -107,6 +119,7 @@ describe("device-only upload queue", () => {
     expect(screen.getByLabelText("Choose video files")).toHaveAttribute(
       "multiple",
     );
+    expect(screen.getByText(/no application-level video size limit/i)).toBeInTheDocument();
   });
   it("rejects invalid files clearly before creating sessions", async () => {
     render(<UploadPage />);
@@ -209,7 +222,8 @@ describe("device-only upload queue", () => {
       expect(screen.getByText("Completed")).toBeInTheDocument(),
     );
   });
-  it("bounds simultaneous transfers independently per file", async () => {
+  it("runs four simultaneous transfers and continues the queue without waiting for encoding", async () => {
+    encodingPending = true;
     const resolvers: (() => void)[] = [];
     transfer.mockImplementation(
       () =>
@@ -218,20 +232,21 @@ describe("device-only upload queue", () => {
         }),
     );
     await select(
-      ["one", "two", "three"].map(
+      ["one", "two", "three", "four", "five"].map(
         (name) => new File([name], `${name}.mp4`, { type: "video/mp4" }),
       ),
     );
     fireEvent.click(screen.getByText("Start uploads"));
-    await waitFor(() => expect(transfer).toHaveBeenCalledTimes(2));
-    expect(resolvers).toHaveLength(2);
+    await waitFor(() => expect(transfer).toHaveBeenCalledTimes(4));
+    expect(resolvers).toHaveLength(4);
     resolvers[0]();
-    await waitFor(() => expect(transfer).toHaveBeenCalledTimes(3));
-    resolvers[1]();
-    resolvers[2]();
+    await waitFor(() => expect(transfer).toHaveBeenCalledTimes(5));
+    resolvers.slice(1).forEach((resolve) => resolve());
     await waitFor(() =>
-      expect(screen.getAllByText("Completed")).toHaveLength(3),
+      expect(screen.getAllByText("Encoding")).toHaveLength(5),
     );
+    expect(screen.queryByText("Uploading…")).toBeNull();
+    expect(screen.getByText(/Uploads continue while Bunny encodes/)).toBeInTheDocument();
   });
 
   it("retries thumbnail storage without transferring video again", async () => {
