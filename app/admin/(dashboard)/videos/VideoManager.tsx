@@ -902,7 +902,7 @@ export default function VideoManager({
                           <span className="text-[11px] text-ink-3">
                             Available after encoding
                           </span>
-                        ) : (
+                        ) : video.status === "published" ? (
                           <Link
                             href={`/video/${video.slug}`}
                             target="_blank"
@@ -910,6 +910,10 @@ export default function VideoManager({
                           >
                             View
                           </Link>
+                        ) : (
+                          <span className="text-[11px] text-ink-3">
+                            Private — review required
+                          </span>
                         )}
                         {video.provider === "bunny" &&
                           !encoding &&

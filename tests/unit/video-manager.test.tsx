@@ -136,10 +136,10 @@ describe("VideoManager", () => {
         screen.getByText("pending_review", { selector: "span" }),
       ).toBeTruthy(),
     );
-    expect(screen.getByRole("link", { name: "View" })).toHaveAttribute(
-      "href",
-      "/video/just-finished",
-    );
+    expect(screen.queryByRole("link", { name: "View" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Review & publish" }),
+    ).toBeTruthy();
   });
 
   it("uploads a replacement thumbnail and saves its public URL", async () => {

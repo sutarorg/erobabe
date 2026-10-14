@@ -4,7 +4,7 @@
 
 Code changes and local automated verification are delivered; required staging, policy, legal and operational acceptance are incomplete. No production deployment, live charge, production migration or remote media deletion was performed. A successful build is not release approval. See `AUDIT_REPORT.md` for remaining code/policy follow-ups and `GO_LIVE_CHECKLIST.md` for every gate.
 
-Baseline fetched before modification: `fe46b33460d83a86cf9af44a251284067ce86b05`. Branch: `arena/0a9f0b83-erobabe`.
+Baseline fetched before modification: `fe46b33460d83a86cf9af44a251284067ce86b05`. Branch: `arena/0a9f0b83-erobabe`. Review PR: https://github.com/sutarorg/erobabe/pull/44 (**draft, not merged**). GitHub automatically started a Vercel preview check; that is not production/provider acceptance.
 
 ## Automated evidence
 
