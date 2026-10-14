@@ -35,7 +35,7 @@ const fetchMock = vi.fn();
 function modelOutput(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
     title: "Evening in Velvet",
-    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings.",
+    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings with similar settings and thoughtfully composed visual presentations.",
     tags: ["mature", "boudoir", "4k"],
     category: "Boudoir",
     ...overrides,
@@ -170,7 +170,7 @@ describe("suggestVideoMetadata", () => {
     expect(messages[0].content).toContain('The admin has already chosen the category "Boudoir"');
     expect(messages[0].content).toMatch(/ONE clause/i);
     expect(messages[0].content).toMatch(/Never use a hyphen, en dash, em dash/i);
-    expect(messages[0].content).toMatch(/low light, soft fabric/i);
+    expect(messages[0].content).toMatch(/softly lit portrait/i);
   });
 
   it("keeps the admin's category when the model answers with a different one", async () => {
@@ -206,23 +206,23 @@ describe("suggestVideoMetadata", () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ description: "A short catalog description." })))
       .mockResolvedValueOnce(chatReply(modelOutput()));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
-    expect(suggestion.description.split(/\s+/)).toHaveLength(26);
+    expect(suggestion.description.split(/\s+/)).toHaveLength(34);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const messages = sentBody(1).messages as Array<{ content: string }>;
     expect(messages[0].content).toContain("previous suggestion failed validation");
-    expect(messages[0].content).toContain("description must contain 25-30 words");
+    expect(messages[0].content).toContain("description must contain 30-40 words");
   });
 
   it("repairs a repeatedly overlong description instead of discarding the suggestion", async () => {
-    fetchMock.mockImplementation(async () => chatReply(modelOutput({ description: Array(31).fill("word").join(" ") })));
+    fetchMock.mockImplementation(async () => chatReply(modelOutput({ description: Array(41).fill("word").join(" ") })));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
     // The model was still asked to fix it once; when it did not, the count was
     // repaired locally rather than losing the title, tags, and description.
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(suggestion.title).toBe("Evening in Velvet");
-    expect(suggestion.description.split(/\s+/)).toHaveLength(30);
+    expect(suggestion.description.split(/\s+/)).toHaveLength(40);
     expect(suggestion.category).toBe("Boudoir");
-    expect(suggestion.reasoning).toMatch(/trimmed from 31 words/);
+    expect(suggestion.reasoning).toMatch(/trimmed from 41 words/);
   });
 
   it("keeps the AI suggestion when the retry fails but the first reply was parseable", async () => {
@@ -231,8 +231,8 @@ describe("suggestVideoMetadata", () => {
       .mockRejectedValueOnce(new Error("socket hang up"));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
     expect(suggestion.title).toBe("Evening in Velvet");
-    expect(suggestion.description.split(/\s+/).length).toBeGreaterThanOrEqual(25);
-    expect(suggestion.description.split(/\s+/).length).toBeLessThanOrEqual(30);
+    expect(suggestion.description.split(/\s+/).length).toBeGreaterThanOrEqual(30);
+    expect(suggestion.description.split(/\s+/).length).toBeLessThanOrEqual(40);
   });
 
   it("still fails when the model returns nothing a repair can rescue", async () => {
@@ -240,7 +240,7 @@ describe("suggestVideoMetadata", () => {
     const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
     expect(error).toBeInstanceOf(MetadataError);
     expect(error.code).toBe("bad_output");
-    expect(error.message).toContain("25-30 words");
+    expect(error.message).toContain("30-40 words");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 

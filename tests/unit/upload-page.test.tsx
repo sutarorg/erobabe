@@ -397,7 +397,7 @@ describe("admin upload page — link formats and routing", () => {
 
     await waitFor(() => expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy());
     expect(screen.getByText(/Direct video file on cdn\.example\.com/)).toBeTruthy();
-    expect(screen.getByText(/25–30-word description/)).toBeTruthy();
+    expect(screen.getByText(/30–40-word description/)).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByText(/Generate AI metadata & publish/));

@@ -66,11 +66,15 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+      const { data: recentVideos, error: recentError } = await supabase.from("videos")
+        .select("title").order("created_at", { ascending: false }).limit(50);
+      if (recentError) throw recentError;
       const suggestion = await suggestVideoMetadata({
         title: parsed.data.title,
         fileName: parsed.data.fileName,
         category: parsed.data.category,
         existingTags: parsed.data.tags,
+        existingTitles: (recentVideos || []).map((video: { title: unknown }) => String(video.title)),
       });
       return NextResponse.json({
         suggestion,

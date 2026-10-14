@@ -1,8 +1,6 @@
 import Link from "next/link";
-import { ArrowUpRight } from "lucide-react";
 import { SITE_URL } from "@/lib/site";
 import { getPublicCategories } from "@/lib/public/catalog";
-import CategoryIcon from "@/src/components/CategoryIcon";
 import type { Metadata } from "next";
 
 export const revalidate = 60;
@@ -29,14 +27,13 @@ export default async function CategoriesPage() {
       {/* Four cards across in the center panel, with fewer columns on small screens. */}
       <div className="mt-6 grid grid-cols-2 auto-rows-fr gap-3 @md:grid-cols-3 @lg:grid-cols-4">
         {categories.map((cat) => {
-          const videoCount = cat.video_count || 0;
           return (
             <Link
               key={cat.id}
               href={`/category/${cat.slug}`}
               prefetch
-              aria-label={`Browse ${cat.label}, ${videoCount} ${videoCount === 1 ? "video" : "videos"}`}
-              className="group relative flex min-h-[132px] min-w-0 flex-col items-start overflow-hidden rounded-xl border border-line bg-card p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/45 hover:bg-card-hover"
+              aria-label={`Browse ${cat.label}`}
+              className="group relative flex min-h-[132px] min-w-0 flex-col items-start justify-end overflow-hidden rounded-xl border border-line bg-card p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/45 hover:bg-card-hover"
             >
               {/* Admin-uploaded card thumbnail, when one is set. */}
               {cat.image_url ? (
@@ -44,24 +41,11 @@ export default async function CategoriesPage() {
                   src={cat.image_url}
                   alt=""
                   loading="lazy"
-                  className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-40 transition-opacity duration-200 group-hover:opacity-55"
+                  className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-50 transition-opacity duration-200 group-hover:opacity-65"
                 />
               ) : null}
-              <div className="relative flex w-full items-start justify-between gap-2">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 backdrop-blur-sm transition-colors group-hover:border-accent/45 group-hover:bg-accent/15">
-                  <CategoryIcon
-                    icon={cat.icon}
-                    fallbackKey={cat.slug || cat.label}
-                    className="h-[18px] w-[18px] text-accent transition-transform duration-200 group-hover:scale-110"
-                  />
-                </span>
-                <ArrowUpRight className="h-4 w-4 shrink-0 text-ink-3 opacity-0 transition-all duration-200 group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-accent group-hover:opacity-100" aria-hidden />
-              </div>
               <span className="relative mt-3 block w-full break-words text-[13px] font-semibold leading-snug text-ink transition-colors group-hover:text-accent">
                 {cat.label}
-              </span>
-              <span className="relative mt-1.5 text-[11px] font-medium text-ink-3">
-                {videoCount} {videoCount === 1 ? "video" : "videos"}
               </span>
             </Link>
           );

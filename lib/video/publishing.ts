@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { suggestVideoMetadata } from "@/lib/metadata/openrouter";
-import { fallbackSuggestion, isValidDescription, normalizeDescription, redactKeyMaterial, sanitizeTitle, type SuggestedMetadata } from "@/lib/metadata/suggestion";
+import { fallbackSuggestion, isValidDescription, normalizeDescription, redactKeyMaterial, sanitizeGeneratedTitle, sanitizeTitle, type SuggestedMetadata } from "@/lib/metadata/suggestion";
 import { normalizeEmbedSource, normalizePastedLink } from "@/lib/video/links";
 
 export type ServiceClient = ReturnType<typeof createServiceClient>;
@@ -122,9 +122,9 @@ export function isPreparedMetadata(value: unknown): value is GeneratedMetadata {
   return (meta.source === "ai" || meta.source === "fallback") && title.length >= 3 && isValidDescription(description) && tags.length > 0;
 }
 
-function sanitizePreparedMetadata(meta: GeneratedMetadata): GeneratedMetadata {
+function sanitizePreparedMetadata(meta: GeneratedMetadata, categoryLabel: string): GeneratedMetadata {
   return {
-    title: sanitizeTitle(meta.title),
+    title: sanitizeGeneratedTitle(meta.title, categoryLabel),
     description: meta.description.replace(/\s+/g, " ").trim(),
     tags: normalizeTags(meta.tags),
     source: meta.source,
@@ -140,7 +140,7 @@ function cleanMetadata(raw: SuggestedMetadata, categoryLabel?: string): { title:
   const description = String(raw.description ?? "").replace(/\s+/g, " ").trim();
   const repaired = normalizeDescription(description, categoryLabel);
   return {
-    title: sanitizeTitle(raw.title ?? ""),
+    title: sanitizeGeneratedTitle(raw.title ?? "", categoryLabel),
     description: repaired ? repaired.description : description,
     tags: normalizeTags(Array.isArray(raw.tags) ? raw.tags : []),
   };
@@ -154,16 +154,17 @@ function cleanMetadata(raw: SuggestedMetadata, categoryLabel?: string): { title:
  * deterministic metadata built from the file name and category, and the reason
  * is reported back so the admin can review and edit before publishing.
  *
- * A description outside the 25-30 word range is repaired rather than treated as
+ * A description outside the 30-40 word range is repaired rather than treated as
  * a failure — losing the AI title and story blurb over a word count is what
  * used to push uploads onto file-name metadata.
  */
 async function generateMetadata(
   sourceName: string,
-  categoryLabel: string
+  categoryLabel: string,
+  existingTitles: string[] = []
 ): Promise<GeneratedMetadata & { raw: SuggestedMetadata }> {
   try {
-    const raw = await suggestVideoMetadata({ fileName: sourceName, category: categoryLabel });
+    const raw = await suggestVideoMetadata({ fileName: sourceName, category: categoryLabel, existingTitles });
     const cleaned = cleanMetadata(raw, categoryLabel);
     if (cleaned.title && isValidDescription(cleaned.description) && cleaned.tags.length) {
       return { ...cleaned, source: "ai", raw: { ...raw, description: cleaned.description } };
@@ -249,12 +250,38 @@ export async function createGeneratedVideo({
   prepared?: GeneratedMetadata | null;
 }): Promise<{ video: GeneratedVideo; metadata: GeneratedMetadata }> {
   const category = await getCategory(service, categoryId);
-  const preparedMetadata = prepared && isPreparedMetadata(prepared) ? sanitizePreparedMetadata(prepared) : null;
+  const { data: recentVideos, error: recentError } = await service.from("videos")
+    .select("title").eq("category_id", category.id).order("created_at", { ascending: false }).limit(50);
+  if (recentError) throw recentError;
+  const existingTitles = (recentVideos || []).map((video: { title: unknown }) => String(video.title));
+  const preparedMetadata = prepared && isPreparedMetadata(prepared) ? sanitizePreparedMetadata(prepared, category.label) : null;
   // Sanitizing can strip every tag. Fall back to the AI provider rather than publishing an untagged row.
-  const metadata =
+  let metadata =
     preparedMetadata && preparedMetadata.title.length >= 3 && isValidDescription(preparedMetadata.description) && preparedMetadata.tags.length
       ? preparedMetadata
-      : await generateMetadata(sourceName, category.label);
+      : await generateMetadata(sourceName, category.label, existingTitles);
+  // Check all categories: a taxonomy label must not become a reusable title template.
+  const titleExists = async (title: string) => {
+    const escaped = title.replace(/[\\%_]/g, "\\$&");
+    const { data, error } = await service.from("videos").select("title").ilike("title", escaped).limit(1);
+    if (error) throw error;
+    return Boolean(data?.length);
+  };
+  const repeatedTitles: string[] = [];
+  for (let attempt = 0; attempt < 2 && await titleExists(metadata.title); attempt += 1) {
+    repeatedTitles.push(metadata.title);
+    metadata = await generateMetadata(sourceName, category.label, [...existingTitles, ...repeatedTitles]);
+  }
+  if (await titleExists(metadata.title)) {
+    // Provider outages or repetitive replies should not block an upload.
+    // Preserve the reviewable title and disambiguate it, without a category prefix.
+    const suffix = randomUUID().replace(/-/g, "");
+    metadata = {
+      ...metadata,
+      title: `${sanitizeTitle(metadata.title).slice(0, 120).replace(/\s+\S*$/, "")} ${suffix}`,
+      warning: "A repeated title was disambiguated — review it before publishing.",
+    };
+  }
   const slugBase = slugify(metadata.title) || "video";
   const slug = `${slugBase}-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 

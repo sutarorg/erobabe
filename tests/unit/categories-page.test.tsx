@@ -45,21 +45,24 @@ describe("/categories page", () => {
     expect(html.split('href="/category/').length - 1).toBe(12);
   });
 
-  it("shows the requested eyebrow, introduction, and per-category video counts", async () => {
+  it("shows the requested eyebrow, introduction, without per-category icons or video counts", async () => {
     const html = await render();
     expect(html).toContain(">Browse</p>");
     expect(html).not.toContain(">Browser</p>");
     expect(html).toContain("Explore the library by what you love — every category is hand-curated and updated daily.");
-    expect(html).toContain(">5 videos</span>");
-    expect(html).toContain("Browse Mature, 5 videos");
+    expect(html).not.toContain("videos</span>");
+    expect(html).toContain('aria-label="Browse Mature"');
+    expect(html).not.toContain("<svg");
   });
 
   it("renders the admin-uploaded thumbnail on the card that has one", async () => {
     const html = await render();
     // The Mature card carries an uploaded image…
     expect(html).toContain('src="https://cdn.example.com/categories/mature.jpg"');
-    // …and every other card still falls back to its icon (an inline svg).
-    expect(html).toContain("<svg");
+    // No icons, including on cards without thumbnails.
+    expect(html).not.toContain("<svg");
+    expect(html).toContain("opacity-50");
+    expect(html).toContain("group-hover:opacity-65");
     // Cards without an image render no <img> for that category.
     expect(html.split("<img").length - 1).toBe(1);
   });

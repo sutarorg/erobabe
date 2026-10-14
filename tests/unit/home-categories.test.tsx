@@ -45,7 +45,7 @@ describe("homepage categories", () => {
     expect(links[7].getAttribute("href")).toBe("/categories");
   });
 
-  it("swaps the icon for the admin-uploaded thumbnail on cards that have one", () => {
+  it("keeps icons and hides admin-uploaded thumbnails", () => {
     const withImage = DATABASE_CATEGORIES.map((category) =>
       category.slug === "mature" ? { ...category, image: "https://cdn.example.com/categories/mature.jpg" } : category
     );
@@ -53,12 +53,8 @@ describe("homepage categories", () => {
     const grid = container.querySelector(".category-grid") as HTMLElement;
 
     const images = grid.querySelectorAll("img");
-    expect(images).toHaveLength(1);
-    expect(images[0].getAttribute("src")).toBe("https://cdn.example.com/categories/mature.jpg");
-    // The remaining cards keep their Lucide icons.
-    expect(grid.querySelectorAll("svg").length).toBeGreaterThanOrEqual(7);
-    // Geometry is unchanged: the image occupies the icon's box.
-    expect(images[0].className).toMatch(/h-4 w-4|h-5 w-5/);
+    expect(images).toHaveLength(0);
+    expect(grid.querySelectorAll("svg")).toHaveLength(8);
   });
 
   it("lets each card shrink to its grid track instead of forcing overflow", () => {
