@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
 import VideoActions from "@/src/components/VideoActions";
+import VideoPlayer from "@/src/components/VideoPlayer";
 import FourRowVideoGrid from "@/src/components/FourRowVideoGrid";
 import PublicVideoCard from "@/src/components/PublicVideoCard";
 import { Eye } from "lucide-react";
@@ -118,42 +119,13 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
         ← Back to home
       </Link>
 
-      {/* Prefer direct media URLs when available. Third-party providers can still block embeds at their own discretion. */}
-      <div className="relative mt-3 aspect-video overflow-hidden rounded-xl border border-line bg-black">
-        {video.playable_url ? (
-          <video
-            controls
-            poster={video.thumbnail_url || undefined}
-            className="h-full w-full"
-            preload="metadata"
-            playsInline
-          >
-            <source src={video.playable_url} />
-            Your browser does not support the video tag.
-          </video>
-        ) : video.embed_url ? (
-          <iframe
-            src={video.embed_url}
-            title={video.title}
-            className="h-full w-full"
-            allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
-            allowFullScreen
-            loading="lazy"
-            referrerPolicy="strict-origin-when-cross-origin"
-          />
-        ) : (
-          <>
-            <img src={video.thumbnail_url || ""} alt={video.title} className="h-full w-full object-cover opacity-55" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="rounded-lg bg-black/70 px-4 py-2 text-[13px] text-white">
-                Video processing — check back soon
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-
+      <VideoPlayer
+        id={video.id}
+        title={video.title}
+        poster={video.thumbnail_url}
+        playableUrl={video.playable_url}
+        embedUrl={video.embed_url}
+      />
 
       <h1 className="mt-4 text-[19px] font-semibold tracking-tight text-ink">{video.title}</h1>
       <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-3">

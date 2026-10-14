@@ -1,10 +1,10 @@
 /**
  * Streamtape file-manager client — server-only.
  *
- * Used for one thing: reading the thumbnail images an admin keeps in a folder
- * in the Streamtape file manager (for example `home/thumbnails`) and pulling
- * the bytes into Erobabe's own storage, so a public page never has to depend
- * on a ticketed, expiring Streamtape download link.
+ * Reads thumbnail images from the file manager into Erobabe storage, and
+ * resolves fresh media download links for native playback of legacy videos.
+ * Video links are issued on demand, never persisted as playable_url; public
+ * playback never loads the Streamtape advertising iframe.
  *
  * Credentials are `STREAMTAPE_LOGIN` and `STREAMTAPE_API_KEY`. They are
  * server-only: they are added to the query string of a server-side fetch and
