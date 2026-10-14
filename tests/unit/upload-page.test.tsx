@@ -1,419 +1,214 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
-import React from "react";
-
-/**
- * Admin upload page tests.
- *
- * The page now supports only one publishing method: "Upload by link" —
- * the admin pastes direct MP4 URLs. File uploads and iframe embeds are
- * not available.
- */
-
-// Mock supabase client
-const mockCategories = [
-  { id: "cat-1", label: "Mature" },
-  { id: "cat-2", label: "Amateur" },
-];
-
+import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  cleanup,
+} from "@testing-library/react";
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     from: () => ({
       select: () => ({
-        order: () => Promise.resolve({ data: mockCategories, error: null }),
+        order: () =>
+          Promise.resolve({ data: [{ id: "cat", label: "Category one" }] }),
       }),
     }),
   }),
 }));
-
-vi.mock("@/src/utils/api", () => ({
-  postJson: vi.fn(),
-  getJson: vi.fn(),
+vi.mock("@/src/utils/localVideoThumbnail", () => ({
+  localVideoThumbnail: vi.fn(async () => ({
+    thumbnail: null,
+    duration: 10,
+    warning: "Thumbnail decoding unavailable",
+  })),
 }));
-
-vi.mock("@/src/utils/uploadFile", () => ({
-  uploadWithProgress: vi.fn().mockResolvedValue(undefined),
+vi.mock("@/src/utils/uploadFile", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/src/utils/uploadFile")>()),
+  uploadWithProgress: vi.fn(),
 }));
-
-// Import the component after mocks are set up.
 import UploadPage from "@/app/admin/(dashboard)/videos/upload/page";
-import { postJson } from "@/src/utils/api";
-
-const mockPostJson = postJson as unknown as ReturnType<typeof vi.fn>;
-
+import { uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
+const transfer = vi.mocked(uploadWithProgress);
+let fetchMock: ReturnType<typeof vi.fn>;
+let saveFails: boolean;
 beforeEach(() => {
+  saveFails = false;
+  transfer.mockImplementation(async (_url, _file, options) => {
+    options?.onProgress?.({
+      percent: 62,
+      loaded: 62,
+      total: 100,
+      bytesPerSecond: 20,
+    });
+  });
+  fetchMock = vi.fn(async (url: string, options?: RequestInit) => {
+    if (!options?.body)
+      return Response.json({
+        policy: {
+          mimeTypes: ["video/mp4"],
+          maxBytes: 10000,
+          concurrency: 2,
+          headers: {},
+        },
+        sessions: [],
+      });
+    if (url.endsWith("confirm"))
+      return saveFails
+        ? Response.json(
+            {
+              error: "FileKosh READY; persistence failed. Retry confirmation.",
+            },
+            { status: 502 },
+          )
+        : Response.json({ slug: "saved-video" });
+    return Response.json({
+      uploadUrl: "https://storage.example.com/signed",
+      headers: {},
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-function renderPage() {
-  return render(<UploadPage />);
+async function select(
+  files = [new File(["bytes"], "clip.mp4", { type: "video/mp4" })],
+) {
+  render(<UploadPage />);
+  await waitFor(() =>
+    expect(screen.getByText("Choose videos")).not.toBeDisabled(),
+  );
+  fireEvent.change(screen.getByLabelText("Choose video files"), {
+    target: { files },
+  });
+  await waitFor(() =>
+    expect(screen.getAllByText("Queued").length).toBe(files.length),
+  );
+  fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat" } });
 }
-
-describe("admin upload page — mode", () => {
-  it("renders only the 'Upload by link' publishing method", async () => {
-    renderPage();
-    expect(screen.getByText("Publish videos by link")).toBeTruthy();
-    expect(screen.queryByText("Upload videos")).toBeNull();
-    expect(screen.queryByText("Embed by iframe")).toBeNull();
+describe("device-only upload queue", () => {
+  it("has no URL ingestion and queues multiple actual files", async () => {
+    await select([
+      new File(["a"], "one.mp4", { type: "video/mp4" }),
+      new File(["b"], "two.mp4", { type: "video/mp4" }),
+    ]);
+    expect(screen.queryByText(/Upload by link/i)).toBeNull();
+    expect(document.querySelector('textarea, input[type="url"]')).toBeNull();
+    expect(screen.getByLabelText("Choose video files")).toHaveAttribute(
+      "multiple",
+    );
+  });
+  it("rejects invalid files clearly before creating sessions", async () => {
+    render(<UploadPage />);
+    await waitFor(() =>
+      expect(screen.getByText("Choose videos")).not.toBeDisabled(),
+    );
+    fireEvent.change(screen.getByLabelText("Choose video files"), {
+      target: { files: [new File(["bad"], "bad.txt", { type: "text/plain" })] },
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Unsupported video type",
+    );
+    expect(screen.getByText("No files selected yet.")).toBeInTheDocument();
+  });
+  it("sends bytes directly, then confirms before completion", async () => {
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    expect(transfer).toHaveBeenCalledWith(
+      "https://storage.example.com/signed",
+      expect.any(File),
+      expect.objectContaining({ contentType: "" }),
+    );
+    const postBodies = fetchMock.mock.calls
+      .filter(([, o]) => o?.body)
+      .map(([, o]) => o.body);
+    expect(postBodies.every((b: unknown) => typeof b === "string")).toBe(true);
+    expect(screen.getByText("View published video")).toHaveAttribute(
+      "href",
+      "/video/saved-video",
+    );
+  });
+  it("retries database failures without re-transferring bytes", async () => {
+    saveFails = true;
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Retry confirmation / save")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Completed")).toBeNull();
+    saveFails = false;
+    fireEvent.click(screen.getByText("Retry confirmation / save"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    expect(transfer).toHaveBeenCalledTimes(1);
+  });
+  it("cancels only the in-flight transfer and leaves it retryable", async () => {
+    transfer.mockImplementation(
+      (_u, _f, o) =>
+        new Promise((_resolve, reject) => {
+          o?.signal?.addEventListener(
+            "abort",
+            () => reject(new UploadAbortedError()),
+            { once: true },
+          );
+        }),
+    );
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Cancel transfer")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Cancel transfer"));
+    await waitFor(() =>
+      expect(screen.getByText("Cancelled")).toBeInTheDocument(),
+    );
+    expect(
+      fetchMock.mock.calls.filter(([u]) => String(u).endsWith("confirm")),
+    ).toHaveLength(0);
+  });
+  it("shows real progress and does not equate transfer completion with saving", async () => {
+    let finish: (() => void) | undefined;
+    transfer.mockImplementation(
+      (_u, _f, o) =>
+        new Promise((resolve) => {
+          o?.onProgress?.({
+            percent: 42,
+            loaded: 42,
+            total: 100,
+            bytesPerSecond: 1,
+          });
+          finish = resolve;
+        }),
+    );
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByRole("progressbar")).toHaveAttribute("value", "42"),
+    );
+    expect(screen.queryByText("Completed")).toBeNull();
+    finish?.();
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+  });
+  it("bounds simultaneous transfers independently per file", async () => {
+    const resolvers: (() => void)[] = [];
+    transfer.mockImplementation(() => new Promise(resolve => { resolvers.push(resolve); }));
+    await select(["one", "two", "three"].map(name => new File([name], `${name}.mp4`, { type: "video/mp4" })));
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() => expect(transfer).toHaveBeenCalledTimes(2));
+    expect(resolvers).toHaveLength(2);
+    resolvers[0]();
+    await waitFor(() => expect(transfer).toHaveBeenCalledTimes(3));
+    resolvers[1](); resolvers[2]();
+    await waitFor(() => expect(screen.getAllByText("Completed")).toHaveLength(3));
   });
 
-  it("does not show mode-selection cards", async () => {
-    renderPage();
-    // The old three-card selector should be gone.
-    expect(screen.queryByText("Upload videos")).toBeNull();
-    expect(screen.queryByText("Embed by iframe")).toBeNull();
-    // Only the URL link mode description should appear.
-    expect(screen.getByText(/How it works/)).toBeTruthy();
-  });
-
-  it("shows a URL text area", () => {
-    renderPage();
-    expect(screen.getByPlaceholderText(/https:\/\/video\.example\.com/)).toBeTruthy();
-  });
-
-  it("shows the category selector", async () => {
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByText("Mature")).toBeTruthy();
-    });
-  });
-});
-
-describe("admin upload page — URL input", () => {
-  it("validates URLs client-side and shows invalid entries", async () => {
-    renderPage();
-    const textarea = screen.getByPlaceholderText(/https:\/\/video\.example\.com/);
-
-    await act(async () => {
-      fireEvent.change(textarea, { target: { value: "https://example.com/page" } });
-      fireEvent.click(screen.getByText(/Add link/));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText(/invalid/)).toBeTruthy();
-    });
-  });
-
-  it("adds valid URLs to the queue", async () => {
-    renderPage();
-    const textarea = screen.getByPlaceholderText(/https:\/\/video\.example\.com/);
-
-    await act(async () => {
-      fireEvent.change(textarea, {
-        target: { value: "https://cdn.example.com/video1.mp4" },
-      });
-      fireEvent.click(screen.getByText(/Add link/));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy();
-    });
-  });
-
-  it("allows removing items from the queue", async () => {
-    renderPage();
-    const textarea = screen.getByPlaceholderText(/https:\/\/video\.example\.com/);
-
-    await act(async () => {
-      fireEvent.change(textarea, {
-        target: { value: "https://cdn.example.com/video1.mp4" },
-      });
-      fireEvent.click(screen.getByText(/Add link/));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy();
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByLabelText("Remove entry 1"));
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByDisplayValue("https://cdn.example.com/video1.mp4")).toBeNull();
-    });
-  });
-
-  it("deduplicates entries pasted in the same batch", async () => {
-    renderPage();
-    const textarea = screen.getByPlaceholderText(/https:\/\/video\.example\.com/);
-
-    // splitUrlEntries deduplicates at the parsing level, so identical URLs
-    // pasted on separate lines yield only one entry.
-    await act(async () => {
-      fireEvent.change(textarea, {
-        target: {
-          value: "https://cdn.example.com/video1.mp4\nhttps://cdn.example.com/video1.mp4",
-        },
-      });
-      fireEvent.click(screen.getByText(/Add link/));
-    });
-
-    // Only one entry should be added (deduplicated by the entries module).
-    await waitFor(() => {
-      const inputs = screen.getAllByDisplayValue("https://cdn.example.com/video1.mp4");
-      expect(inputs).toHaveLength(1);
-    });
-  });
-});
-
-describe("admin upload page — publishing", () => {
-  it("requires a category before publishing", async () => {
-    renderPage();
-    const textarea = screen.getByPlaceholderText(/https:\/\/video\.example\.com/);
-
-    await act(async () => {
-      fireEvent.change(textarea, {
-        target: { value: "https://cdn.example.com/video1.mp4" },
-      });
-      fireEvent.click(screen.getByText(/Add link/));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy();
-    });
-
-    // Click publish without selecting a category.
-    await act(async () => {
-      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText(/Choose a category/)).toBeTruthy();
-    });
-  });
-
-  it("shows success state after publishing", async () => {
-    mockPostJson.mockResolvedValue({
-      results: [
-        {
-          url: "https://cdn.example.com/video1.mp4",
-          videoId: "vid-1",
-          slug: "video-1",
-          title: "Test Video",
-          description: "Mature video available in the erobabe library. Explore this listing and discover related videos in the same category, with straightforward navigation and convenient playback controls.",
-          status: "published",
-          metadataSource: "ai",
-          thumbnailSource: "frame",
-          thumbnailUrl: "https://cdn.example.com/automatic-frame.jpg",
-        },
-      ],
-      succeeded: 1,
-      failed: 0,
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("Mature")).toBeTruthy();
-    });
-
-    await act(async () => {
-      fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat-1" } });
-    });
-
-    const textarea = screen.getByPlaceholderText(/https:\/\/video\.example\.com/);
-
-    await act(async () => {
-      fireEvent.change(textarea, {
-        target: { value: "https://cdn.example.com/video1.mp4" },
-      });
-      fireEvent.click(screen.getByText(/Add link/));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy();
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText(/Published/)).toBeTruthy();
-      expect(screen.getByText(/View/)).toBeTruthy();
-    });
-  });
-
-  it("shows error state when publishing fails", async () => {
-    mockPostJson.mockResolvedValue({
-      results: [
-        {
-          url: "https://cdn.example.com/video1.mp4",
-          status: "failed",
-          error: "Invalid category",
-        },
-      ],
-      succeeded: 0,
-      failed: 1,
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText("Mature")).toBeTruthy();
-    });
-
-    await act(async () => {
-      fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat-1" } });
-    });
-
-    const textarea = screen.getByPlaceholderText(/https:\/\/video\.example\.com/);
-
-    await act(async () => {
-      fireEvent.change(textarea, {
-        target: { value: "https://cdn.example.com/video1.mp4" },
-      });
-      fireEvent.click(screen.getByText(/Add link/));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy();
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
-    });
-
-    // The component renders the per-item error message and a batch summary.
-    await waitFor(() => {
-      expect(screen.getByText(/could not be published/)).toBeTruthy();
-    });
-  });
-});
-
-describe("admin upload page — no file upload or embed", () => {
-  it("does not render file input for video files", () => {
-    renderPage();
-    // There should be no file input accepting video/*.
-    const videoInputs = document.querySelectorAll('input[accept="video/*"]');
-    expect(videoInputs).toHaveLength(0);
-  });
-
-  it("does not have embed/iframe-related UI", () => {
-    renderPage();
-    expect(screen.queryByText("Embed by iframe")).toBeNull();
-    expect(screen.queryByText("iframe URL or embed code")).toBeNull();
-  });
-
-  it("does not show upload progress or provider-side conversion polling", () => {
-    renderPage();
-    // Streaming uploads, relay hops, and provider "converting" polling are gone —
-    // the only Streamtape mention left is the player-page link support.
-    expect(screen.queryByText(/relay/)).toBeNull();
-    expect(screen.queryByText(/converting/)).toBeNull();
-    expect(screen.queryByText(/Streamtape upload/i)).toBeNull();
-  });
-});
-
-describe("admin upload page — link formats and routing", () => {
-  it("unwraps a Markdown Streamtape player link and routes it to the embed publisher", async () => {
-    mockPostJson.mockResolvedValue({
-      results: [
-        {
-          source: "https://streamtape.com/e/m9XLJGmaJOcbPr2",
-          videoId: "vid-1",
-          slug: "hands-only-ab12cd34",
-          title: "Hands Only",
-          status: "published",
-          metadataSource: "ai",
-        },
-      ],
-      succeeded: 1,
-      failed: 0,
-    });
-
-    renderPage();
-    await waitFor(() => expect(screen.getByText("Mature")).toBeTruthy());
-    await act(async () => {
-      fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat-1" } });
-    });
-
-    const markdownLink =
-      "[https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4](https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4)";
-
-    await act(async () => {
-      fireEvent.change(screen.getByPlaceholderText(/https:\/\/video\.example\.com/), { target: { value: markdownLink } });
-      fireEvent.click(screen.getByText(/Add link/));
-    });
-
-    // The Markdown wrapper is stripped and the watch page is converted to the
-    // host's frameable player URL.
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("https://streamtape.com/e/m9XLJGmaJOcbPr2")).toBeTruthy();
-    });
-    expect(screen.getByText(/Player page detected on streamtape\.com/)).toBeTruthy();
-
-    await act(async () => {
-      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
-    });
-
-    await waitFor(() => {
-      expect(mockPostJson).toHaveBeenCalledWith(
-        "/api/videos/embed",
-        expect.objectContaining({
-          categoryId: "cat-1",
-          entries: [{ source: "https://streamtape.com/e/m9XLJGmaJOcbPr2", thumbnailPath: null, allowDuplicate: false }],
-        })
-      );
-    });
-  });
-
-  it("still publishes a direct video file through the direct-URL route", async () => {
-    mockPostJson.mockResolvedValue({
-      results: [
-        {
-          url: "https://cdn.example.com/video1.mp4",
-          videoId: "vid-1",
-          slug: "video-1",
-          title: "Test Video",
-          description: "Mature video available in the erobabe library. Explore this listing and discover related videos in the same category, with straightforward navigation and convenient playback controls.",
-          status: "published",
-          metadataSource: "ai",
-          thumbnailSource: "frame",
-          thumbnailUrl: "https://cdn.example.com/automatic-frame.jpg",
-        },
-      ],
-      succeeded: 1,
-      failed: 0,
-    });
-
-    renderPage();
-    await waitFor(() => expect(screen.getByText("Mature")).toBeTruthy());
-    await act(async () => {
-      fireEvent.change(screen.getByRole("combobox"), { target: { value: "cat-1" } });
-    });
-
-    await act(async () => {
-      fireEvent.change(screen.getByPlaceholderText(/https:\/\/video\.example\.com/), {
-        target: { value: "https://cdn.example.com/video1.mp4" },
-      });
-      fireEvent.click(screen.getByText(/Add link/));
-    });
-
-    await waitFor(() => expect(screen.getByDisplayValue("https://cdn.example.com/video1.mp4")).toBeTruthy());
-    expect(screen.getByText(/Direct video file on cdn\.example\.com/)).toBeTruthy();
-    expect(screen.getByText(/30–40-word description/)).toBeTruthy();
-
-    await act(async () => {
-      fireEvent.click(screen.getByText(/Generate AI metadata & publish/));
-    });
-
-    await waitFor(() => {
-      expect(mockPostJson).toHaveBeenCalledWith(
-        "/api/videos/upload-url",
-        expect.objectContaining({
-          categoryId: "cat-1",
-          entries: [{ url: "https://cdn.example.com/video1.mp4", thumbnailPath: null, allowDuplicate: false }],
-        })
-      );
-    });
-    expect(await screen.findByRole("img", { name: "Automatic thumbnail from a video frame" }))
-      .toHaveAttribute("src", "https://cdn.example.com/automatic-frame.jpg");
-    expect(screen.getByText(/Description: Mature video available/)).toBeTruthy();
-  });
 });

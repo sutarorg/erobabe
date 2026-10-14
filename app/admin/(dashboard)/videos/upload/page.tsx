@@ -1,754 +1,577 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  CheckCircle2,
-  ImagePlus,
-  Link2,
-  LoaderCircle,
-  Plus,
-  Trash2,
-  X,
-} from "lucide-react";
+import { UploadCloud, CheckCircle2, LoaderCircle, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { postJson } from "@/src/utils/api";
-import { splitUrlEntries } from "@/lib/video/entries";
-import { classifyVideoSource, type VideoSourceKind } from "@/lib/video/links";
-import { uploadWithProgress } from "@/src/utils/uploadFile";
+import {
+  validateVideo,
+  type UploadPolicy,
+} from "@/lib/video/filekosh-validation";
+import { localVideoThumbnail } from "@/src/utils/localVideoThumbnail";
+import { uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
 
-type Category = { id: string; label: string };
-type Phase = "idle" | "uploading" | "processing" | "published" | "failed";
-
+type Phase =
+  | "Queued"
+  | "Preparing"
+  | "Uploading"
+  | "Confirming"
+  | "Completed"
+  | "Failed"
+  | "Cancelled";
 type Item = {
   id: string;
-  source: string;
-  /** `direct` = media file (native player), `embed` = player page (iframe). */
-  kind: VideoSourceKind;
-  /** Lower-cased host, shown on the entry badge. */
-  host?: string;
-  /** Why the entry was classified this way. */
-  note?: string;
-  thumbnail: File | null;
-  thumbnailPreview: string | null;
-  thumbnailPath: string | null;
+  file: File;
+  title: string;
   phase: Phase;
-  detail: string;
-  waiting?: boolean;
+  percent: number;
+  thumbnail?: Blob | null;
+  preview?: string;
+  duration?: number;
+  warning?: string;
   error?: string;
-  metadataWarning?: string;
-  title?: string;
-  description?: string;
+  transferred?: boolean;
+  thumbnailPath?: string;
   slug?: string;
-  videoId?: string;
-  /** An existing video this link duplicates (from the duplicate detector). */
-  duplicate?: { videoId: string; slug: string; title: string; reason: string };
-  /** Admin ticked “publish anyway” for a duplicate. */
-  allowDuplicate?: boolean;
-  /** Auto-captured frame thumbnail URL, when the server generated one. */
-  autoThumbnail?: string;
-  thumbnailWarning?: string;
+  categoryId?: string;
 };
-
-type MetadataHealth = { configured: boolean; keyKind?: string; model?: string };
-
-const THUMBNAIL_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024;
-const MAX_URLS = 20;
-
-function newId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+type Recovery = {
+  id: string;
+  title: string;
+  original_name: string;
+  state: string;
+  provider_id?: string;
+  thumbnail_path?: string;
+};
+async function json<T>(url: string, body?: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: body === undefined ? "GET" : "POST",
+    headers: body === undefined ? {} : { "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    cache: "no-store",
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    const after = response.headers.get("retry-after");
+    throw new Error(
+      `${result.error || "Request failed."}${after ? ` Retry after ${after} seconds.` : ""}`,
+    );
+  }
+  return result;
 }
-
-/** Mode override for one entry — the admin can always outvote the detection. */
-function modeLabel(kind: VideoSourceKind) {
-  return kind === "embed" ? "Embed player" : "Direct file";
-}
-
 export default function UploadPage() {
-  const [categories, setCategories] = useState<Category[]>([]);
+  const [policy, setPolicy] = useState<UploadPolicy | null>(null);
+  const [categories, setCategories] = useState<{ id: string; label: string }[]>(
+    [],
+  );
   const [categoryId, setCategoryId] = useState("");
   const [items, setItems] = useState<Item[]>([]);
-  const [pasteBuffer, setPasteBuffer] = useState("");
-  const [running, setRunning] = useState(false);
+  const [recovery, setRecovery] = useState<Recovery[]>([]);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-
-  const itemsRef = useRef<Item[]>([]);
-  itemsRef.current = items;
-  const abortRef = useRef<AbortController | null>(null);
-  const fallbackRef = useRef(0);
-  const [metadataHealth, setMetadataHealth] = useState<MetadataHealth | null>(null);
-
-  // Tell the admin up front when the server cannot see OPENROUTER_API_KEY, instead
-  // of discovering it through a file-name title after publishing.
-  useEffect(() => {
-    fetch("/api/admin/metadata/health", { cache: "no-store" })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((payload) => setMetadataHealth(payload || null))
-      .catch(() => setMetadataHealth(null));
+  const [loading, setLoading] = useState(true);
+  const [dragging, setDragging] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [recovering, setRecovering] = useState("");
+  const input = useRef<HTMLInputElement>(null);
+  const current = useRef(items);
+  current.current = items;
+  const controllers = useRef(new Map<string, AbortController>());
+  const alive = useRef(true);
+  const busy = useRef(false);
+  const patch = (id: string, value: Partial<Item>) => {
+    current.current = current.current.map((i) =>
+      i.id === id ? { ...i, ...value } : i,
+    );
+    if (alive.current) setItems(current.current);
+  };
+  const load = useCallback(async () => {
+    try {
+      const result = await json<{
+        policy: UploadPolicy | null;
+        configurationError: string | null;
+        sessions: Recovery[];
+      }>("/api/videos/filekosh/sessions");
+      if (!alive.current) return;
+      setPolicy(result.policy);
+      setRecovery(result.sessions);
+      setError(result.configurationError || "");
+    } catch (e) {
+      if (alive.current) setError((e as Error).message);
+    } finally {
+      if (alive.current) setLoading(false);
+    }
   }, []);
-
   useEffect(() => {
-    const supabase = createClient();
-    supabase
+    alive.current = true;
+    void load();
+    createClient()
       .from("categories")
       .select("id, label")
       .order("label")
-      .then(({ data }) => setCategories((data || []) as Category[]));
-  }, []);
-
-  // Free object URLs when the component unmounts.
-  useEffect(
-    () => () => {
-      for (const item of itemsRef.current) {
-        if (item.thumbnailPreview) URL.revokeObjectURL(item.thumbnailPreview);
-      }
-    },
-    []
-  );
-
-  const categoryLabel = useMemo(
-    () => categories.find((c) => c.id === categoryId)?.label,
-    [categories, categoryId]
-  );
-
-  const patchItem = useCallback((id: string, patch: Partial<Item>) => {
-    setItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
-  }, []);
-
-  /** Asks the server which of these links already exist. Keyed by the exact link sent. */
-  async function checkDuplicates(urls: string[]): Promise<Record<string, Item["duplicate"]>> {
-    if (!urls.length) return {};
-    try {
-      const payload = await postJson<{ matches: Record<string, NonNullable<Item["duplicate"]>> }>(
-        "/api/admin/videos/duplicates",
-        { urls }
-      );
-      return payload.matches || {};
-    } catch {
-      // The publish route checks again on the server, so a failed pre-check is not fatal.
-      return {};
-    }
-  }
-
-  async function markDuplicates(urls: string[]) {
-    const matches = await checkDuplicates(urls);
-    if (!Object.keys(matches).length) return;
-    setItems((current) =>
-      current.map((item) => {
-        const match = matches[item.source];
-        return match ? { ...item, duplicate: match } : item;
-      })
-    );
-  }
-
-  function applyPaste() {
-    const entries = splitUrlEntries(pasteBuffer);
-    if (!entries.length) return;
-
-    // Validate and deduplicate client-side. Full validation happens
-    // server-side — this exists so the admin sees inline errors before
-    // submitting, and so each link is routed to the right publishing route.
-    const seen = new Set(items.map((item) => item.source.trim().toLowerCase()));
-    const valid: Item[] = [];
-    const invalid: string[] = [];
-
-    for (const entry of entries) {
-      let classified;
-      try {
-        classified = classifyVideoSource(entry);
-      } catch (classificationError: any) {
-        invalid.push(`${entry} (${classificationError.message || "not a usable video link"})`);
+      .then(({ data }) => {
+        if (alive.current) setCategories(data || []);
+      });
+    return () => {
+      alive.current = false;
+      controllers.current.forEach((c) => c.abort());
+      current.current.forEach((i) => {
+        if (i.preview) URL.revokeObjectURL(i.preview);
+      });
+    };
+  }, [load]);
+  useEffect(() => {
+    if (!running) return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [running]);
+  async function add(files: File[]) {
+    if (!policy) return;
+    const accepted: Item[] = [],
+      rejected: string[] = [];
+    for (const file of files) {
+      const invalid = validateVideo(file, policy);
+      if (invalid) {
+        rejected.push(`${file.name}: ${invalid}`);
         continue;
       }
-
-      const normalized = classified.url.trim().toLowerCase();
-      if (seen.has(normalized)) {
-        invalid.push(`${entry} (duplicate)`);
+      if (
+        [...current.current, ...accepted].some(
+          (i) =>
+            i.file.name === file.name &&
+            i.file.size === file.size &&
+            i.file.lastModified === file.lastModified,
+        )
+      )
         continue;
-      }
-      seen.add(normalized);
-      valid.push({
-        id: newId(),
-        source: classified.url,
-        kind: classified.kind,
-        host: classified.host,
-        note: classified.note,
-        thumbnail: null,
-        thumbnailPreview: null,
-        thumbnailPath: null,
-        phase: "idle",
-        detail: classified.kind === "embed" ? "Ready to publish as an embed" : "Ready to publish",
+      accepted.push({
+        id: crypto.randomUUID(),
+        file,
+        title:
+          file.name
+            .replace(/\.[^.]+$/, "")
+            .replace(/[_-]+/g, " ")
+            .slice(0, 240) || "Untitled",
+        phase: "Preparing",
+        percent: 0,
       });
     }
-
-    if (valid.length) {
-      setItems((current) => [...current, ...valid]);
-      void markDuplicates(valid.map((item) => item.source));
-    }
-    setPasteBuffer("");
-
-    if (invalid.length) {
-      setError(`Skipped ${invalid.length} invalid entr${invalid.length > 1 ? "ies" : "y"}: ${invalid.join("; ")}`);
-    } else {
-      setError("");
-    }
-    setNotice("");
-  }
-
-  function setThumbnail(id: string, file: File | null) {
-    setItems((current) =>
-      current.map((item) => {
-        if (item.id !== id) return item;
-        if (item.thumbnailPreview) URL.revokeObjectURL(item.thumbnailPreview);
-        if (!file) return { ...item, thumbnail: null, thumbnailPreview: null, thumbnailPath: null };
-        return {
-          ...item,
-          thumbnail: file,
-          thumbnailPreview: URL.createObjectURL(file),
-          thumbnailPath: null,
-        };
-      })
-    );
-  }
-
-  function handleThumbnailInput(id: string, event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] || null;
-    event.target.value = "";
-    if (!file) return;
-    if (!THUMBNAIL_TYPES.includes(file.type)) {
-      setError("Thumbnails must be JPG, PNG, GIF, or WebP.");
-      return;
-    }
-    if (file.size > MAX_THUMBNAIL_SIZE) {
-      setError("Thumbnails must be 10 MB or smaller.");
-      return;
-    }
-    setError("");
-    setThumbnail(id, file);
-  }
-
-  function removeItem(id: string) {
-    setItems((current) => {
-      const target = current.find((item) => item.id === id);
-      if (target?.thumbnailPreview) URL.revokeObjectURL(target.thumbnailPreview);
-      return current.filter((item) => item.id !== id);
-    });
-  }
-
-  function resetItems() {
-    setItems((current) => {
-      for (const item of current) if (item.thumbnailPreview) URL.revokeObjectURL(item.thumbnailPreview);
-      return [];
-    });
-    setError("");
-    setNotice("");
-  }
-
-  /** Uploads a thumbnail to Supabase Storage and returns its object path. */
-  async function uploadThumbnailFile(item: Item, controller: AbortController): Promise<string | null> {
-    if (!item.thumbnail) return item.thumbnailPath;
-    if (item.thumbnailPath) return item.thumbnailPath;
-
-    const target = await postJson<{ uploadUrl: string; storagePath: string }>("/api/videos/storage-token", {
-      kind: "thumbnail",
-      fileName: item.thumbnail.name,
-      fileSize: item.thumbnail.size,
-      mimeType: item.thumbnail.type,
-    });
-
-    await uploadWithProgress(target.uploadUrl, item.thumbnail, {
-      contentType: item.thumbnail.type,
-      signal: controller.signal,
-    });
-    return target.storagePath;
-  }
-
-  async function publishItem(item: Item, controller: AbortController) {
-    let thumbnailPath = item.thumbnailPath;
-
-    // Upload thumbnail if present.
-    if (item.thumbnail && !thumbnailPath) {
-      patchItem(item.id, { phase: "uploading", detail: "Uploading thumbnail…" });
-      thumbnailPath = await uploadThumbnailFile(item, controller);
-      patchItem(item.id, { thumbnailPath });
-    }
-
-    const isEmbed = item.kind === "embed";
-    patchItem(item.id, {
-      phase: "processing",
-      waiting: true,
-      detail: isEmbed
-        ? "Embedding the player & generating AI metadata…"
-        : thumbnailPath ? "Generating AI metadata…" : "Selecting a vibrant video frame & generating AI metadata…",
-    });
-
-    // Direct files go through the direct-URL route; player pages (Streamtape
-    // `/v/…`, iframe markup, …) go through the embed route. Both generate the
-    // metadata server-side and answer with the same per-entry shape.
-    const json = isEmbed
-      ? await postJson<any>("/api/videos/embed", {
-          categoryId,
-          entries: [{ source: item.source, thumbnailPath: thumbnailPath || null, allowDuplicate: item.allowDuplicate === true }],
-        })
-      : await postJson<any>("/api/videos/upload-url", {
-          categoryId,
-          entries: [{ url: item.source, thumbnailPath: thumbnailPath || null, allowDuplicate: item.allowDuplicate === true }],
-        });
-
-    const result = json.results?.[0];
-    if (!result || result.status !== "published") {
-      throw new Error(result?.error || json.error || "Unable to publish");
-    }
-
-    if (result.metadataSource === "fallback") fallbackRef.current += 1;
-
-    const savedAs = isEmbed ? "Published · player embedded" : "Published · video URL saved";
-
-    patchItem(item.id, {
-      phase: "published",
-      waiting: false,
-      detail:
-        result.metadataSource === "fallback"
-          ? `${savedAs} · AI metadata unavailable — file-name metadata used, please review`
-          : savedAs,
-      title: result.title,
-      description: result.description,
-      slug: result.slug,
-      videoId: result.videoId,
-      metadataWarning: result.metadataWarning || undefined,
-      autoThumbnail: result.thumbnailSource === "frame" ? result.thumbnailUrl : undefined,
-      thumbnailWarning: result.thumbnailWarning || undefined,
-    });
-  }
-
-  async function publishAll(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    setNotice("");
-
-    if (!categoryId) {
-      setError("Choose a category before publishing.");
-      return;
-    }
-    const pending = itemsRef.current.filter((item) => item.phase !== "published");
-    if (!pending.length) {
-      setError("Add at least one video URL first.");
-      return;
-    }
-
-    setRunning(true);
-    const controller = new AbortController();
-    abortRef.current = controller;
-    fallbackRef.current = 0;
-
-    // Fresh duplicate check — the library may have changed since the links were added.
-    const matches = await checkDuplicates(pending.map((item) => item.source));
-    const blocked = new Set<string>();
-    for (const item of pending) {
-      const match = matches[item.source];
-      if (match && !item.allowDuplicate) blocked.add(item.id);
-      patchItem(item.id, { duplicate: match || undefined });
-    }
-
-    // Reset anything that failed on a previous attempt.
-    for (const item of pending) {
-      patchItem(item.id, {
-        phase: blocked.has(item.id) ? "failed" : "idle",
-        detail: blocked.has(item.id) ? "Skipped — duplicate" : "Queued",
-        error: blocked.has(item.id)
-          ? "Duplicate: this link or file is already published. Tick “publish anyway” to add it again."
+    current.current = [...current.current, ...accepted];
+    setItems(current.current);
+    setError(rejected.join("\n"));
+    // Sequential decoding keeps browser memory bounded independently of upload concurrency.
+    for (const item of accepted) {
+      const result = await localVideoThumbnail(item.file);
+      if (!alive.current || !current.current.some((i) => i.id === item.id))
+        continue;
+      patch(item.id, {
+        ...result,
+        preview: result.thumbnail
+          ? URL.createObjectURL(result.thumbnail)
           : undefined,
+        phase: "Queued",
       });
     }
-
-    let failures = 0;
-    const settled = new Set<string>();
-
-    // Process items sequentially — there is no file transfer to parallelise.
-    for (const item of pending) {
-      if (controller.signal.aborted) break;
-      if (blocked.has(item.id)) {
-        failures += 1;
-        settled.add(item.id);
-        continue;
-      }
-      try {
-        await publishItem(item, controller);
-      } catch (publishError: any) {
-        failures += 1;
-        patchItem(item.id, {
-          phase: "failed",
-          waiting: false,
-          detail: "Failed",
-          error: publishError.message || "Publishing failed",
+  }
+  async function upload(item: Item) {
+    let latest = current.current.find((i) => i.id === item.id)!;
+    const controller = new AbortController();
+    controllers.current.set(item.id, controller);
+    try {
+      if (!latest.transferred) {
+        patch(item.id, {
+          phase: "Preparing",
+          error: undefined,
+          categoryId: latest.categoryId || categoryId,
         });
+        latest = current.current.find((i) => i.id === item.id)!;
+        const session = await json<{
+          uploadUrl: string;
+          headers: Record<string, string>;
+        }>("/api/videos/filekosh/sessions", {
+          sessionId: item.id,
+          title: item.title,
+          originalName: item.file.name,
+          mimeType: item.file.type,
+          sizeBytes: item.file.size,
+          categoryId: latest.categoryId,
+          ...(item.duration === undefined
+            ? {}
+            : { durationSeconds: Math.floor(item.duration) }),
+        });
+        if (controller.signal.aborted) throw new UploadAbortedError();
+        patch(item.id, { phase: "Uploading", percent: 0 });
+        await uploadWithProgress(session.uploadUrl, item.file, {
+          contentType: "",
+          headers: session.headers,
+          signal: controller.signal,
+          onProgress: (p) => patch(item.id, { percent: p.percent }),
+        });
+        patch(item.id, { transferred: true });
       }
-      settled.add(item.id);
-    }
-
-    setRunning(false);
-    abortRef.current = null;
-
-    if (controller.signal.aborted) {
-      for (const item of pending) {
-        if (settled.has(item.id)) continue;
-        patchItem(item.id, { phase: "idle", detail: "Cancelled — ready to publish" });
+      // Cancellation is disabled after transfer: persistence must not be abandoned accidentally.
+      patch(item.id, { phase: "Confirming", error: undefined });
+      latest = current.current.find((i) => i.id === item.id)!;
+      if (latest.thumbnail && !latest.thumbnailPath) {
+        try {
+          const target = await json<{ uploadUrl: string; storagePath: string }>(
+            "/api/videos/storage-token",
+            {
+              kind: "thumbnail",
+              fileName: "frame.jpg",
+              fileSize: latest.thumbnail.size,
+              mimeType: "image/jpeg",
+            },
+          );
+          await uploadWithProgress(target.uploadUrl, latest.thumbnail, {
+            contentType: "image/jpeg",
+            headers: { "x-upsert": "false" },
+          });
+          patch(item.id, { thumbnailPath: target.storagePath });
+        } catch {
+          throw new Error(
+            "Video transferred, but thumbnail storage failed. Retry to store the thumbnail and confirm without re-uploading the video.",
+          );
+        }
       }
-      setNotice("Publishing cancelled. Finished items were kept.");
-      return;
-    }
-
-    const fallbacks = fallbackRef.current;
-    const fallbackNote = fallbacks
-      ? ` ${fallbacks} used file-name metadata because the AI was unavailable — review those titles and descriptions.`
-      : "";
-    if (failures) {
-      setError(
-        `${failures} item${failures > 1 ? "s" : ""} could not be published. See the inline messages.${fallbackNote}`
+      latest = current.current.find((i) => i.id === item.id)!;
+      const done = await json<{ slug: string }>(
+        "/api/videos/filekosh/confirm",
+        { sessionId: item.id, thumbnailPath: latest.thumbnailPath || null },
       );
-    } else {
-      setNotice(`All videos were published.${fallbackNote}`);
+      patch(item.id, { phase: "Completed", percent: 100, slug: done.slug });
+    } catch (e) {
+      patch(item.id, {
+        phase: e instanceof UploadAbortedError ? "Cancelled" : "Failed",
+        error: (e as Error).message,
+      });
+    } finally {
+      controllers.current.delete(item.id);
     }
   }
-
-  function cancelPublish() {
-    abortRef.current?.abort();
+  async function start(ids?: string[]) {
+    if (!policy || !categoryId || busy.current) return;
+    const queue = current.current.filter(
+      (i) =>
+        (ids
+          ? ids.includes(i.id)
+          : ["Queued", "Failed", "Cancelled"].includes(i.phase)) &&
+        i.title.trim(),
+    );
+    busy.current = true;
+    setRunning(true);
+    let index = 0;
+    const worker = async () => {
+      while (index < queue.length && alive.current)
+        await upload(queue[index++]);
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(policy.concurrency, queue.length) },
+        worker,
+      ),
+    );
+    busy.current = false;
+    if (alive.current) {
+      setRunning(false);
+      void load();
+    }
   }
-
-  const publishedCount = items.filter((item) => item.phase === "published").length;
-
+  async function recover(session: Recovery) {
+    setRecovering(session.id);
+    setError("");
+    try {
+      await json("/api/videos/filekosh/confirm", {
+        sessionId: session.id,
+        thumbnailPath: session.thumbnail_path || null,
+      });
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRecovering("");
+    }
+  }
+  const completed = items.filter((i) => i.phase === "Completed").length;
+  const failed = items.filter((i) => i.phase === "Failed").length;
   return (
-    <div className="max-w-5xl">
-      <div>
-        <h1 className="text-[20px] font-semibold">Publish videos by link</h1>
-        <p className="mt-1 text-[12px] text-ink-3">
-          Paste direct video URLs or player-page links below. Erobabe saves the link and plays the video straight from the
-          original host — it does not copy or host the full video file. You control the category and each
-          video&apos;s optional thumbnail; AI (DeepSeek V3.2 via OpenRouter) generates a non-graphic title, a 30–40-word description, and tags.
-        </p>
+    <div className="mx-auto max-w-5xl pb-12">
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Upload videos</h1>
+          <p className="mt-2 text-sm text-ink-3">
+            Local files → FileKosh. Automatic frame thumbnails are stored in
+            Erobabe.
+          </p>
+        </div>
+        <Link href="/admin/videos" className="text-sm text-accent">
+          Video library
+        </Link>
       </div>
-
-      {metadataHealth && !metadataHealth.configured && (
-        <div role="status" className="mt-6 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-[12px] leading-relaxed text-amber-200">
-          <p className="font-semibold">AI metadata is off — OPENROUTER_API_KEY is not visible to this server.</p>
-          <p className="mt-1 text-[11.5px]">
-            Titles and descriptions will be built from file names until it is set. Add OPENROUTER_API_KEY to the hosting
-            project&apos;s environment variables (Production), redeploy, then check Admin → System Health.
-          </p>
-        </div>
+      {loading && (
+        <p role="status" className="mb-4 text-ink-3">
+          Loading upload configuration…
+        </p>
       )}
-
-      <form onSubmit={publishAll} className="mt-6 rounded-lg border border-line bg-pcard p-5">
-        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line pb-5">
-          <label className="block w-full max-w-sm">
-            <span className="mb-1 block text-[11px] font-medium">Category *</span>
-            <select
-              value={categoryId}
-              onChange={(event) => setCategoryId(event.target.value)}
-              required
-              className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]"
-            >
-              <option value="">Choose a category</option>
-              {categories.map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="text-[11px] text-ink-3">
-            Need a category?{" "}
-            <Link href="/admin/categories" className="text-accent hover:underline">
-              Manage categories
-            </Link>
-            .
+      {error && (
+        <p
+          role="alert"
+          className="mb-4 whitespace-pre-line rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm"
+        >
+          {error}
+        </p>
+      )}
+      <label className="mb-5 block text-sm">
+        Category
+        <select
+          value={categoryId}
+          disabled={running}
+          onChange={(e) => setCategoryId(e.target.value)}
+          className="mt-2 block w-full rounded-lg border border-line bg-pcard p-3"
+        >
+          <option value="">Choose a category</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          void add(Array.from(e.dataTransfer.files));
+        }}
+        className={`rounded-2xl border-2 border-dashed p-8 text-center transition-colors sm:p-12 ${dragging ? "border-accent bg-accent/10" : "border-line bg-pcard"}`}
+      >
+        <UploadCloud
+          className="mx-auto mb-4 h-12 w-12 text-accent"
+          aria-hidden
+        />
+        <h2 className="text-xl font-semibold">Upload videos</h2>
+        <p className="mt-2 text-sm text-ink-3">
+          Drop multiple video files here, or select them from your device.
+        </p>
+        <input
+          ref={input}
+          type="file"
+          multiple
+          accept={policy?.mimeTypes.join(",") || "video/*"}
+          aria-label="Choose video files"
+          className="hidden"
+          onChange={(e) => {
+            void add(Array.from(e.target.files || []));
+            e.target.value = "";
+          }}
+        />
+        <button
+          disabled={!policy}
+          onClick={() => input.current?.click()}
+          className="mt-5 rounded-lg bg-accent px-6 py-3 text-sm font-semibold text-white disabled:opacity-40"
+        >
+          Choose videos
+        </button>
+        {policy && (
+          <p className="mt-4 text-xs text-ink-3">
+            {policy.mimeTypes.join(", ")} · Site limit{" "}
+            {Math.round(policy.maxBytes / 1024 / 1024)} MB ·{" "}
+            {policy.concurrency} parallel uploads
           </p>
-        </div>
-
-        {/* ---- Notice about the direct-URL workflow ---- */}
-        <div className="mt-5 rounded-lg border border-accent/20 bg-accent/[0.04] p-4">
-          <div className="flex items-start gap-2">
-            <Link2 aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
-            <div>
-              <p className="text-[12px] font-medium text-accent">How it works</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-ink-3">
-                Erobabe saves the video URL you paste — it does not upload or host the video file. The original video host
-                remains responsible for serving the media. Paste one link per line (up to {MAX_URLS} at a time); each line
-                becomes its own entry with its own optional thumbnail. Direct video files (ending in .mp4, .webm, .ts, …)
-                play in Erobabe&apos;s own player; player pages such as Streamtape{" "}
-                <code className="font-mono">/v/&lt;id&gt;/Name.mp4.ts.mp4</code> are embedded as an iframe automatically.
-                Markdown links, angle-bracket links, and pasted <code className="font-mono">&lt;iframe&gt;</code> code are
-                accepted too — for example{" "}
-                <code className="font-mono">[https://streamtape.com/v/abc/Hands_Only.mp4.ts.mp4](https://streamtape.com/v/abc/Hands_Only.mp4.ts.mp4)</code>.
-              </p>
-              <p className="mt-2 text-[11px] leading-relaxed text-ink-3">
-                No thumbnail uploaded? Direct video files automatically get a sharp, vibrant 1280×720 thumbnail selected
-                from actual video frames. Your uploaded image always takes priority. Embedded player pages do not expose
-                frames; supply an image or a direct file link instead.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* ---- Add URLs ---- */}
-        <div className="mt-5 rounded-lg border border-dashed border-line bg-void p-4">
-          <label className="block">
-            <span className="mb-1 block text-[11px] font-medium">Video URLs or player links</span>
-            <textarea
-              value={pasteBuffer}
-              onChange={(event) => setPasteBuffer(event.target.value)}
-              rows={5}
-              className="w-full rounded-md border border-line bg-card px-3 py-2 font-mono text-[12px]"
-              placeholder={
-                "https://video.example.com/video7/717/70.mp4\n[https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4](https://streamtape.com/v/m9XLJGmaJOcbPr2/Hands_Only.mp4.ts.mp4)\n<iframe src=\"https://host.example/embed/abc123\" allowfullscreen></iframe>"
-              }
-            />
-            <span className="mt-1 block text-[10.5px] text-ink-3">
-              One link per line (up to {MAX_URLS}). Direct file links, Markdown links, player pages (Streamtape, Uqload,
-              DoodStream, …) and iframe embed code are all accepted and routed automatically.
-            </span>
-          </label>
+        )}
+      </div>
+      <section aria-label="Upload queue" className="mt-6 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="font-semibold">Upload queue ({items.length})</h2>
           <button
-            type="button"
-            onClick={applyPaste}
-            disabled={!pasteBuffer.trim()}
-            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md border border-line bg-card px-3 text-[12px] font-semibold hover:bg-card-hover disabled:opacity-50"
+            disabled={
+              running ||
+              !categoryId ||
+              !policy ||
+              !items.some(
+                (i) =>
+                  ["Queued", "Failed", "Cancelled"].includes(i.phase) &&
+                  i.title.trim(),
+              )
+            }
+            onClick={() => void start()}
+            className="rounded-lg bg-accent px-5 py-2.5 text-sm text-white disabled:opacity-40"
           >
-            <Plus aria-hidden="true" className="h-3.5 w-3.5" />
-            Add link{pasteBuffer.includes("\n") ? "s" : ""}
+            {running
+              ? "Uploading…"
+              : failed
+                ? "Upload queued / retry failed"
+                : "Start uploads"}
           </button>
         </div>
-
-        {/* ---- Per-video rows ---- */}
-        {items.length > 0 && (
-          <div className="mt-4 space-y-3">
-            {items.map((item, index) => (
-              <div key={item.id} className="rounded-md border border-line bg-void p-3">
-                <div className="flex flex-wrap items-start gap-3">
-                  {/* Thumbnail control — one per video */}
-                  <div className="w-[104px] shrink-0">
-                    {item.thumbnailPreview ? (
-                      <div className="relative overflow-hidden rounded-md border border-line">
-                        <img src={item.thumbnailPreview} alt="" className="aspect-video w-full object-cover" />
-                        <button
-                          type="button"
-                          onClick={() => setThumbnail(item.id, null)}
-                          aria-label="Remove thumbnail"
-                          className="absolute right-1 top-1 rounded bg-black/70 p-0.5 text-ink hover:text-red-300"
-                        >
-                          <X aria-hidden="true" className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ) : (
-                      <label className="flex aspect-video w-full cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed border-line bg-card text-ink-3 hover:border-accent/50 hover:text-accent">
-                        <ImagePlus aria-hidden="true" className="h-4 w-4" />
-                        <span className="text-[9.5px] font-medium">Thumbnail</span>
-                      </label>
-                    )}
-                    <label className="mt-1 block cursor-pointer text-center text-[9.5px] text-accent hover:underline">
-                      {item.thumbnailPreview ? "Replace" : "Add image"}
-                      <input
-                        type="file"
-                        accept="image/jpeg,image/png,image/gif,image/webp"
-                        onChange={(event) => handleThumbnailInput(item.id, event)}
-                        className="sr-only"
-                      />
-                    </label>
-                  </div>
-
-                  {/* Source URL + status */}
-                  <div className="min-w-[220px] flex-1">
-                    {(item.note || item.host) && (
-                      <p className="mb-1 flex flex-wrap items-center gap-1.5 text-[10px] text-ink-3">
-                        <span
-                          className={`rounded-full px-1.5 py-0.5 font-medium ${
-                            item.kind === "embed" ? "bg-accent/15 text-accent" : "bg-white/5 text-ink-2"
-                          }`}
-                        >
-                          {modeLabel(item.kind)}
-                        </span>
-                        {item.note}
-                      </p>
-                    )}
-                    <label className="block">
-                      <span className="mb-1 block text-[10.5px] font-medium text-ink-3">Video URL</span>
-                      <input
-                        value={item.source}
-                        onChange={(event) => {
-                          const next = event.target.value;
-                          let patch: Partial<Item> = { source: next };
-                          try {
-                            const detected = classifyVideoSource(next);
-                            patch = {
-                              source: detected.url,
-                              kind: detected.kind,
-                              host: detected.host,
-                              note: detected.note,
-                            };
-                          } catch {
-                            // Leave the text as typed; publishing reports the real problem.
-                          }
-                          patchItem(item.id, patch);
-                        }}
-                        disabled={running || item.phase === "published"}
-                        className="w-full rounded-md border border-line bg-card px-2.5 py-1.5 font-mono text-[11px] disabled:opacity-60"
-                      />
-                    </label>
-
-                    {/* Manual override — the admin always outvotes detection. */}
-                    <div className="mt-1 flex items-center gap-1">
-                      {(["direct", "embed"] as VideoSourceKind[]).map((kind) => (
-                        <button
-                          key={kind}
-                          type="button"
-                          onClick={() => patchItem(item.id, { kind, note: `Manually set to ${modeLabel(kind)}` })}
-                          disabled={running || item.phase === "published"}
-                          aria-pressed={item.kind === kind}
-                          className={`h-6 rounded px-2 text-[10px] font-medium disabled:opacity-50 ${
-                            item.kind === kind
-                              ? "bg-accent/20 text-accent"
-                              : "border border-line text-ink-3 hover:bg-white/5 hover:text-ink"
-                          }`}
-                        >
-                          {modeLabel(kind)}
-                        </button>
-                      ))}
-                    </div>
-
-                    {item.duplicate && (
-                      <div className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-[10.5px] leading-relaxed text-amber-200">
-                        <p>
-                          Duplicate — already published as{" "}
-                          <Link href={`/video/${item.duplicate.slug}`} target="_blank" className="underline">
-                            {item.duplicate.title}
-                          </Link>{" "}
-                          ({item.duplicate.reason === "same_link" ? "same link" : "same file name"}).
-                        </p>
-                        <label className="mt-1 inline-flex items-center gap-1.5">
-                          <input
-                            type="checkbox"
-                            checked={item.allowDuplicate === true}
-                            onChange={(event) => patchItem(item.id, { allowDuplicate: event.target.checked })}
-                            disabled={running || item.phase === "published"}
-                            className="h-3 w-3 accent-accent"
-                          />
-                          Publish anyway
-                        </label>
-                      </div>
-                    )}
-
-                    {item.title && <p className="mt-1 text-[11px] text-ink-2">Title: {item.title}</p>}
-                    {item.description && <p className="mt-1 text-[11px] leading-relaxed text-ink-3">Description: {item.description}</p>}
-                    {item.metadataWarning && (
-                      <p role="status" aria-live="polite" className="mt-1.5 text-[10.5px] leading-relaxed text-amber-300">
-                        {item.metadataWarning}
-                      </p>
-                    )}
-
-                    {item.phase === "idle" && (
-                      <p className="mt-1.5 text-[10.5px] text-ink-3">
-                        {item.detail}
-                        {!item.thumbnailPreview && (item.kind === "direct"
-                          ? " · No thumbnail chosen? A vibrant frame is selected from the video automatically."
-                          : " · Add a thumbnail or use a direct video-file URL for automatic frame capture.")}
-                      </p>
-                    )}
-                    {(item.phase === "uploading" || item.phase === "processing") && (
-                      <p className="mt-1.5 flex items-center gap-1.5 text-[10.5px] text-accent">
-                        <LoaderCircle aria-hidden="true" className="h-3 w-3 animate-spin" />
-                        {item.detail}
-                      </p>
-                    )}
-                    {item.phase === "published" && (
-                      <p className="mt-1.5 flex items-center gap-1.5 text-[10.5px] text-emerald-300">
-                        <CheckCircle2 aria-hidden="true" className="h-3 w-3" />
-                        {item.detail}
-                        {item.slug && (
-                          <Link href={`/video/${item.slug}`} target="_blank" className="underline">
-                            View
-                          </Link>
-                        )}
-                      </p>
-                    )}
-                    {item.phase === "published" && item.autoThumbnail && (
-                      <div className="mt-2 flex items-center gap-2 text-[10.5px] text-ink-3">
-                        <img src={item.autoThumbnail} alt="Automatic thumbnail from a video frame" className="aspect-video w-[120px] rounded border border-line object-cover" />
-                        <span>Automatic thumbnail captured from the video frame. Replace it from /admin/videos if you prefer your own.</span>
-                      </div>
-                    )}
-                    {item.phase === "published" && item.thumbnailWarning && (
-                      <p className="mt-1 text-[10.5px] text-amber-300">{item.thumbnailWarning}</p>
-                    )}
-                    {item.phase === "failed" && (
-                      <p className="mt-1.5 text-[10.5px] text-red-300">{item.error}</p>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => removeItem(item.id)}
-                    disabled={running}
-                    aria-label={`Remove entry ${index + 1}`}
-                    className="rounded-md p-2 text-ink-3 hover:bg-white/5 hover:text-red-300 disabled:opacity-40"
-                  >
-                    <Trash2 aria-hidden="true" className="h-4 w-4" />
-                  </button>
+        <p role="status" className="text-xs text-ink-3">
+          {completed} completed · {failed} failed. Completion includes provider
+          confirmation and database persistence.
+        </p>
+        {!items.length && (
+          <p className="rounded-xl border border-line p-6 text-center text-sm text-ink-3">
+            No files selected yet.
+          </p>
+        )}
+        {items.map((item) => (
+          <article
+            key={item.id}
+            className={`rounded-xl border p-4 ${item.phase === "Completed" ? "border-green-500/30" : item.phase === "Failed" ? "border-red-500/30" : "border-line"} bg-pcard`}
+          >
+            <div className="flex flex-col gap-4 sm:flex-row">
+              <div className="flex aspect-video w-full shrink-0 items-center justify-center overflow-hidden rounded-lg bg-void sm:w-40">
+                {item.preview ? (
+                  <img
+                    src={item.preview}
+                    alt={`Frame from ${item.file.name}`}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <p className="p-3 text-center text-xs text-ink-3">
+                    {item.phase === "Preparing"
+                      ? "Reading local video…"
+                      : "No decodable thumbnail"}
+                  </p>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <input
+                  aria-label={`Title for ${item.file.name}`}
+                  value={item.title}
+                  maxLength={240}
+                  disabled={
+                    running || !!item.categoryId || item.phase === "Completed"
+                  }
+                  onChange={(e) => patch(item.id, { title: e.target.value })}
+                  className="w-full rounded-lg border border-line bg-void px-3 py-2 text-sm"
+                />
+                <p className="mt-2 break-all text-xs text-ink-3">
+                  {item.file.name} · {(item.file.size / 1024 / 1024).toFixed(1)}{" "}
+                  MB
+                  {item.duration
+                    ? ` · ${Math.round(item.duration)} seconds`
+                    : " · Duration unavailable"}
+                </p>
+                <p
+                  role="status"
+                  className="mt-2 flex items-center gap-2 text-sm"
+                >
+                  {item.phase === "Completed" ? (
+                    <CheckCircle2 className="h-4 w-4 text-green-400" />
+                  ) : ["Preparing", "Uploading", "Confirming"].includes(
+                      item.phase,
+                    ) ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  {item.phase}
+                  {item.phase === "Uploading"
+                    ? ` · ${Math.floor(item.percent)}%`
+                    : ""}
+                </p>
+                {item.phase === "Uploading" && (
+                  <progress
+                    aria-label={`Upload progress for ${item.file.name}`}
+                    value={item.percent}
+                    max={100}
+                    className="mt-2 w-full accent-accent"
+                  />
+                )}
+                {item.warning && (
+                  <p className="mt-2 text-xs text-amber-400">{item.warning}</p>
+                )}
+                {item.error && (
+                  <p role="alert" className="mt-2 text-xs text-red-400">
+                    {item.error}
+                  </p>
+                )}
+                <div className="mt-3 flex gap-4 text-xs">
+                  {item.slug && (
+                    <Link href={`/video/${item.slug}`} className="text-accent">
+                      View published video
+                    </Link>
+                  )}
+                  {["Failed", "Cancelled"].includes(item.phase) && (
+                    <button
+                      disabled={running || !categoryId}
+                      onClick={() => void start([item.id])}
+                      className="text-accent disabled:opacity-40"
+                    >
+                      {item.transferred
+                        ? "Retry confirmation / save"
+                        : "Retry transfer"}
+                    </button>
+                  )}
+                  {item.phase === "Uploading" && (
+                    <button
+                      onClick={() => controllers.current.get(item.id)?.abort()}
+                      className="text-red-400"
+                    >
+                      Cancel transfer
+                    </button>
+                  )}
+                  {["Queued", "Preparing"].includes(item.phase) && !running && (
+                    <button
+                      onClick={() => {
+                        if (item.preview) URL.revokeObjectURL(item.preview);
+                        current.current = current.current.filter(
+                          (i) => i.id !== item.id,
+                        );
+                        setItems(current.current);
+                      }}
+                      className="inline-flex items-center gap-1 text-ink-3"
+                    >
+                      <X className="h-3 w-3" />
+                      Remove
+                    </button>
+                  )}
                 </div>
               </div>
+            </div>
+          </article>
+        ))}
+      </section>
+      {recovery.filter((s) => !items.some((i) => i.id === s.id)).length > 0 && (
+        <section className="mt-8 rounded-xl border border-line bg-pcard p-5">
+          <h2 className="font-semibold">Recover interrupted sessions</h2>
+          <p className="mt-2 text-xs text-ink-3">
+            Check confirmation before uploading again. Partial or expired
+            transfers and uncertain creation outcomes require provider
+            reconciliation; this never creates another video.
+          </p>
+          {recovery
+            .filter((s) => !items.some((i) => i.id === s.id))
+            .map((s) => (
+              <div
+                key={s.id}
+                className="mt-4 flex flex-wrap justify-between gap-2 text-sm"
+              >
+                <span>
+                  {s.title} · {s.state}
+                  <small className="block text-ink-3">Session {s.id}</small>
+                </span>
+                <button
+                  disabled={!!recovering || running || !s.provider_id}
+                  onClick={() => void recover(s)}
+                  className="text-accent disabled:opacity-40"
+                >
+                  {recovering === s.id
+                    ? "Checking…"
+                    : s.provider_id
+                      ? "Check and finish"
+                      : "Creation unknown — contact support"}
+                </button>
+              </div>
             ))}
-          </div>
-        )}
-
-        {/* ---- Actions ---- */}
-        <div className="mt-5 flex flex-wrap items-center gap-3">
-          <button
-            type="submit"
-            disabled={running || !items.length}
-            className="inline-flex h-9 items-center gap-2 rounded-md bg-accent px-5 text-[13px] font-semibold text-white hover:bg-accent-soft disabled:opacity-50"
-          >
-            {running && <LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin" />}
-            {running
-              ? "Publishing…"
-              : `Generate AI metadata & publish${items.length - publishedCount > 1 ? ` ${items.length - publishedCount} videos` : " video"}`}
-          </button>
-          {running && (
-            <button
-              type="button"
-              onClick={cancelPublish}
-              className="inline-flex h-9 items-center rounded-md border border-line px-4 text-[12px] hover:bg-white/5"
-            >
-              Cancel
-            </button>
-          )}
-          {items.length > 0 && !running && (
-            <button
-              type="button"
-              onClick={resetItems}
-              className="inline-flex h-9 items-center rounded-md border border-line px-4 text-[12px] hover:bg-white/5"
-            >
-              Clear list
-            </button>
-          )}
-          {items.length > 0 && (
-            <span className="text-[11px] tabular-nums text-ink-3">
-              {publishedCount} of {items.length} published
-            </span>
-          )}
-        </div>
-
-        {error && <p className="mt-5 rounded-md bg-red-500/10 p-3 text-[12px] text-red-300">{error}</p>}
-        {notice && !error && <p className="mt-5 rounded-md bg-emerald-500/10 p-3 text-[12px] text-emerald-300">{notice}</p>}
-      </form>
-
-      <p className="mt-4 text-[11px] leading-relaxed text-ink-3">
-        Erobabe saves the video URL and fetches frame samples only when generating a thumbnail — it does not copy or host
-        the full video file. The original video host is responsible
-        for serving the media. If the remote host blocks hotlinking, expires the URL, or returns non-video content, the
-        public player will report the failure to the viewer.
-      </p>
+        </section>
+      )}
     </div>
   );
 }

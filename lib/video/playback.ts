@@ -1,56 +1,45 @@
-/** Shared, browser-safe playback selection. Never load Streamtape's ad player. */
-const STREAMTAPE_HOST = /(^|\.)streamtape\.(com|net|to)$/i;
-
-export function streamtapeFileId(raw: string): string | null {
-  try {
-    const url = new URL(raw);
-    if (!/^https?:$/.test(url.protocol) || !STREAMTAPE_HOST.test(url.hostname)) return null;
-    return url.pathname.match(/^\/(?:e|v|d)\/([a-z0-9]+)(?:\/|$)/i)?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
-
+/** Stored direct media and embeds only. No retired-provider API calls or URL fabrication. */
 export type PlaybackSource =
   | { kind: "direct" | "embed"; url: string }
-  | { kind: "streamtape"; fileId: string | null }
-  | { kind: "missing" };
-
-export function selectPlaybackSource(playableUrl?: string | null, embedUrl?: string | null): PlaybackSource {
-  for (const [raw, kind] of [[playableUrl, "direct"], [embedUrl, "embed"]] as const) {
+  | { kind: "missing" | "unsupported" };
+export function selectPlaybackSource(
+  playableUrl?: string | null,
+  embedUrl?: string | null,
+  provider?: string | null,
+): PlaybackSource {
+  if (provider === "streamtape") return { kind: "unsupported" };
+  if (provider === "filekosh") {
+    try {
+      const url = new URL(embedUrl || "");
+      if (
+        url.origin === "https://filekosh.com" &&
+        !url.username &&
+        !url.password
+      )
+        return { kind: "embed", url: url.toString() };
+    } catch {
+      /* Missing or invalid returned embed. */
+    }
+    return { kind: "missing" };
+  }
+  for (const [raw, kind] of [
+    [playableUrl, "direct"],
+    [embedUrl, "embed"],
+  ] as const) {
     if (!raw) continue;
     try {
       const url = new URL(raw);
-      if (!/^https?:$/.test(url.protocol) || url.username || url.password) continue;
-      const fileId = streamtapeFileId(raw);
-      // Old records may contain an expired, IP-bound download URL alongside
-      // the durable embed ID. Refresh that source instead of replaying a ticket.
-      const legacyFileId = !fileId && kind === "direct" && /(^|\.)(tapecontent\.net|streamtape\.(com|net|to))$/i.test(url.hostname)
-        ? streamtapeFileId(embedUrl || "") : null;
-      if (legacyFileId) return { kind: "streamtape", fileId: legacyFileId };
-      // Also catch legacy watch pages mistakenly saved in playable_url.
-      if (fileId || (kind === "embed" && STREAMTAPE_HOST.test(url.hostname))) {
-        return { kind: "streamtape", fileId };
-      }
+      if (!/^https?:$/.test(url.protocol) || url.username || url.password)
+        continue;
+      // These historic records cannot be refreshed safely after retiring the API.
+      if (
+        /(^|\.)(streamtape\.(com|net|to)|tapecontent\.net)$/i.test(url.hostname)
+      )
+        return { kind: "unsupported" };
       return { kind, url: url.toString() };
     } catch {
-      // Invalid legacy data must not become an executable iframe URL.
+      /* Invalid stored data must not become an executable iframe. */
     }
   }
   return { kind: "missing" };
-}
-
-/** API output is media only, not an arbitrary URL or a credential-bearing API request. */
-export function safeStreamtapeMediaUrl(raw: string): string {
-  const url = new URL(raw);
-  if (
-    url.protocol !== "https:" || url.username || url.password || url.port ||
-    !/(^|\.)(tapecontent\.net|streamtape\.(com|net|to))$/i.test(url.hostname) ||
-    url.hostname.toLowerCase().startsWith("api.") ||
-    /^\/(?:e|v|d)(?:\/|$)/i.test(url.pathname) ||
-    [...url.searchParams.keys()].some((key) => /^(login|key)$/i.test(key))
-  ) {
-    throw new Error("Invalid Streamtape media URL");
-  }
-  return url.toString();
 }

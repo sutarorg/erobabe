@@ -4,8 +4,6 @@ import VideoPlayer from "@/src/components/VideoPlayer";
 
 const props = { id: "22222222-2222-4222-8222-222222222222", title: "Test clip", poster: "https://cdn.example.com/poster.jpg" };
 const embed = "https://streamtape.com/e/abc123";
-const media = `/api/videos/${props.id}/playback`;
-const prepare = `/api/videos/${props.id}/prepare`;
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -24,33 +22,24 @@ function warmCalls() {
 }
 
 describe("video player", () => {
+  it("renders the FileKosh returned embed with no popup or top-navigation permissions", () => {
+    const { container } = render(<VideoPlayer {...props} embedUrl="https://filekosh.com/embed/returned" />);
+    const frame = container.querySelector("iframe")!;
+    expect(frame).toHaveAttribute("src", "https://filekosh.com/embed/returned");
+    expect(frame.getAttribute("sandbox")).not.toMatch(/allow-popups|allow-top-navigation/);
+    expect(container.querySelector("video")).toBeNull();
+  });
+  it("shows unsupported historic records without calling an API", () => {
+    render(<VideoPlayer {...props} embedUrl={embed} />);
+    expect(screen.getByText(/legacy video provider/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it("prefers native video over any advertising iframe", () => {
-    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" embedUrl={embed} />);
+    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" playableUrl="https://cdn.example.com/a.mp4" />);
     expect(container.querySelector("video")).toHaveAttribute("src", "https://cdn.example.com/a.mp4");
     expect(container.querySelector("iframe")).toBeNull();
     // A direct file needs no server-side preparation at all.
     expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it("mounts the same-origin media element on load so playback is ready before the click", () => {
-    const { container } = render(<VideoPlayer {...props} embedUrl={embed} />);
-    const video = container.querySelector("video")!;
-    expect(video).toHaveAttribute("src", media);
-    expect(video).toHaveAttribute("playsinline");
-    expect(video).toHaveAttribute("preload", "metadata");
-    // The poster is on screen with the site's own play control; no provider UI.
-    expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
-    expect(container.querySelector("iframe, a")).toBeNull();
-    expect(container.innerHTML).not.toMatch(/streamtape\.(com|net|to)\/(e|v)\//i);
-  });
-
-  it("warms the media link before the click, and never fetches a signed URL", async () => {
-    render(<VideoPlayer {...props} embedUrl={embed} />);
-    await act(async () => { await Promise.resolve(); });
-    expect(warmCalls()).toHaveLength(1);
-    expect(warmCalls()[0][1]).toMatchObject({ method: "POST" });
-    // Only the warm-up JSON call: the media itself is requested by the element.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("buffers ahead behind the poster so the first frame is instant", () => {
@@ -72,7 +61,7 @@ describe("video player", () => {
   });
 
   it("starts the element that is already buffering instead of mounting a new one", () => {
-    const { container } = render(<VideoPlayer {...props} embedUrl={embed} />);
+    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
     const video = container.querySelector("video")!;
 
     fireEvent.click(screen.getByRole("button", { name: "Play video" }));
@@ -89,7 +78,7 @@ describe("video player", () => {
   });
 
   it("starts buffering ahead on plain intent, before the click", () => {
-    const { container } = render(<VideoPlayer {...props} embedUrl={embed} />);
+    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
     const video = container.querySelector("video")!;
     expect(video).toHaveAttribute("preload", "metadata");
 
@@ -97,11 +86,11 @@ describe("video player", () => {
 
     expect(video).toHaveAttribute("preload", "auto");
     expect(HTMLMediaElement.prototype.load).toHaveBeenCalled();
-    expect(warmCalls()).toHaveLength(1);
+    expect(warmCalls()).toHaveLength(0);
   });
 
-  it("restarts the media request on retry so the server obtains a fresh ticket", () => {
-    const { container } = render(<VideoPlayer {...props} embedUrl={embed} />);
+  it("restarts native playback on retry", () => {
+    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
     fireEvent.click(screen.getByRole("button", { name: "Play video" }));
     const first = container.querySelector("video")!;
     fireEvent.error(first);
@@ -110,7 +99,7 @@ describe("video player", () => {
     expect(container.querySelector("iframe, a")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
     expect(container.querySelector("video")).not.toBe(first);
-    expect(container.querySelector("video")).toHaveAttribute("src", media);
+    expect(container.querySelector("video")).toHaveAttribute("src", "https://cdn.example.com/a.mp4");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -132,16 +121,16 @@ describe("video player", () => {
     expect(container.querySelector("iframe")).toBeNull();
   });
 
-  it("resets the player when navigating to another Streamtape video", () => {
-    const { container, rerender } = render(<VideoPlayer {...props} embedUrl={embed} />);
+  it("resets native playback when navigating to another video", () => {
+    const { container, rerender } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
     fireEvent.click(screen.getByRole("button", { name: "Play video" }));
     expect(container.querySelector("video")).toHaveAttribute("controls");
 
-    rerender(<VideoPlayer {...props} id="another-video" embedUrl={embed} />);
+    rerender(<VideoPlayer {...props} id="another-video" playableUrl="https://cdn.example.com/a.mp4" />);
 
     // A fresh page state: poster and play control, nothing playing.
     expect(container.querySelector("video")).not.toHaveAttribute("controls");
-    expect(container.querySelector("video")).toHaveAttribute("src", "/api/videos/another-video/playback");
+    expect(container.querySelector("video")).toHaveAttribute("src", "https://cdn.example.com/a.mp4");
     expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
   });
 });
