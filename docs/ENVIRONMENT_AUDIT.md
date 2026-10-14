@@ -1,0 +1,24 @@
+# Environment inventory — 2026-10-14
+
+No real credentials were read, written or verified. `.env.example` contains placeholders only. Required below means required for that workflow, not proof that its production account is approved.
+
+| Variable(s) | Consumer | Requirement / validation and failure |
+|---|---|---|
+| NEXT_PUBLIC_SITE_URL | lib/site, metadata/sitemaps, NOWPayments callback derivation | Required for production canonical HTTPS identity. Normalizes URL and otherwise falls back to erobabe.com; verify explicitly before release. SITE_URL was unused and removed from example. |
+| NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY | browser/SSR clients and middleware | Required for Auth/data. Server rejects placeholder/malformed URL/short key; public offline reads are empty with a warning, mutations fail and protected routes cannot authenticate. Public browser key is not a service credential. Configure HTTPS in production. |
+| SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY | server-only service client | Required for privileged handlers/catalog. Missing/invalid fails creation; optional public reader falls back to empty. Never NEXT_PUBLIC. Legacy alias retained for existing deployments. |
+| NOWPAYMENTS_API_KEY | lib/nowpayments/client, create, admin health | Required for payment create/API verification. Missing create returns 503; provider failure preserves pending order for reconciliation. |
+| NOWPAYMENTS_IPN_SECRET | signed IPN | Required. Missing rejects IPN with 503; invalid signature rejects with 401 before DB access. |
+| NOWPAYMENTS_IPN_CALLBACK_URL | provider create/health | Optional exact callback override. Must be absolute HTTP(S), ending /api/nowpayments/ipn; invalid override falls back to site URL and health warning. Production must be HTTPS and owner-verified. Example no longer pins a specific Vercel deployment. |
+| NOWPAYMENTS_DEFAULT_PAY_CURRENCY | setup diagnostics | Optional supported-asset diagnostic default; checkout uses its explicit validated asset/network choice, not a browser price and not this environment value as a universal checkout default. |
+| BUNNY_STREAM_LIBRARY_ID / BUNNY_STREAM_API_KEY | lib/video/bunny, sessions/status/confirm/admin publishing | Required for hosted uploads/playback verification. Positive safe numeric library ID, nonempty whitespace-free library key. Invalid config fails 503; account API key is not a library key. |
+| BUNNY_UPLOAD_MAX_BYTES | uploadConfiguration / validateVideo | Optional positive safe integer operator budget, exposed as policy but no secret. Invalid config fails; over-budget declared metadata rejected before provider creation. Actual provider-byte enforcement needs account-side controls/staging. |
+| OPENROUTER_API_KEY / OPENROUTER_MODEL / OPENROUTER_MAX_OUTPUT_TOKENS | metadata adapter/suggestion | Optional for core publishing, required for AI suggestions. Model/token defaults retained; missing/malformed credentials give diagnostics, no invented provider success. Human review required. |
+| OPENROUTER_THUMBNAIL_ENABLED / OPENROUTER_THUMBNAIL_CONTENT_APPROVED | thumbnail ranking | Optional, both must explicitly enable external frame transfer. Disabled by default. |
+| OPENROUTER_THUMBNAIL_MODEL / OPENROUTER_THUMBNAIL_PROVIDER | optional vision ranking | Required if ranking enabled; explicit approved image-capable model and pinned provider. Local actual-frame scoring remains fallback. |
+| FFMPEG_PATH | manual existing direct-media frame extraction | Optional executable override. Bundled linux-x64 FFmpeg retained/traced; host must allow executable/outbound media access. Browser local-frame pipeline does not need server FFmpeg. |
+| RESEND_API_KEY / RESEND_FROM_EMAIL / SUPPORT_EMAIL | lib/resend, support/report handlers | Required for intended email delivery/support notifications. Missing email integration does not roll back persisted ticket/report; failure is logged without raw message/recipient payload. Verify sender/domain and real delivery. |
+| ANALYTICS_HASH_SECRET | HTTP safety / analytics / public form limits | Recommended dedicated server-only random secret (32+ bytes). Falls back to server Supabase credential; no secret means 503. Daily HMAC pseudonyms, IP-only rate key, no raw IP persisted. Trusted ingress must overwrite x-real-ip; distributed bot controls still required. |
+| NODE_ENV | Next security headers | Framework-managed; production adds same-origin framing restriction. Development preview accepts *.e2b.app and binds 0.0.0.0. |
+
+Test/operational settings (not application secrets): PLAYWRIGHT_BASE_URL selects authorized staging vs local server; PLAYWRIGHT_CHROMIUM_EXECUTABLE points to a supported local browser; CI controls retries/workers. Live test credentials are gated by the existing tests/live documentation. Standard npm scripts use Node 22.x. Do not run acceptance against production merely because its URL is configured.

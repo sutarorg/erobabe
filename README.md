@@ -1,11 +1,11 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, Bunny Stream resumable device uploads, Resend email, AI metadata (DeepSeek V3.2 via OpenRouter), and SEO optimization.
+Next.js application under production-readiness review with Supabase backend, NOWPayments crypto payments, Bunny Stream resumable device uploads, Resend email, AI metadata (DeepSeek V3.2 via OpenRouter), and SEO optimization.
 
 ## Quick Start
 
 ```bash
-npm install
+npm ci
 cp .env.example .env.local
 # Fill env vars per DEPLOYMENT.md
 npm run dev
@@ -15,7 +15,11 @@ Open http://localhost:3000
 
 ## Documentation
 
-- `IMPLEMENTATION_AUDIT.md` — pre-implementation file-by-file audit
+- `AUDIT_REPORT.md` — current findings and fixes
+- `PRODUCTION_READINESS.md` — verified evidence and release blockers
+- `CLEANUP_MANIFEST.md` — removed code and proof of non-use
+- `docs/WORKFLOW_MAP.md` — inspected business/data flows
+- `IMPLEMENTATION_AUDIT.md` — historical implementation notes (not current launch evidence)
 - `DEPLOYMENT.md` — click-by-click production setup
 - `GO_LIVE_CHECKLIST.md` — operational requirements and blockers
 - `IMPLEMENTATION_REPORT.md` — what changed, tests, blockers
@@ -35,12 +39,12 @@ Open http://localhost:3000
 
 `/admin/videos/upload` accepts multiple local videos through drag-and-drop or
 **Choose videos**. Bytes go directly to Bunny Stream's TUS endpoint, never through
-Next.js, Vercel functions or Supabase Storage. There is no application-level video
+Next.js, Vercel functions or Supabase Storage. The optional `BUNNY_UPLOAD_MAX_BYTES` sets an operator upload budget; without it there is no application-level video
 size cap, and four files upload in parallel with per-file progress. Bunny encoding
 runs asynchronously: each accepted upload appears immediately in `/admin/videos`
 with status **Encoding**, while upload workers continue to the next files. The
-library page reconciles encoding in the background and publishes only after Bunny
-reports Finished. Cancellation pauses transfer; reselecting the same source
+library page reconciles encoding in the background and moves completed media to private
+review. An active administrator must record rights/consent/moderation evidence and explicitly publish. Cancellation pauses transfer; reselecting the same source
 recovers its server session and resumable upload identity.
 
 Ten actual frames throughout each clip are scored for detail, contrast, colour,
@@ -50,7 +54,7 @@ recoverable and prevents publication. Optional consent-gated OpenRouter vision
 ranking is disabled by default and always falls back to local scoring.
 
 Publication requires Bunny's documented Finished status (4), a verified stored
-thumbnail and atomic session/video/job completion. Playback uses the validated
+thumbnail, atomic session/video/job completion, and explicit rights/moderation approval. Playback uses the validated
 stored library ID/GUID at `iframe.mediadelivery.net`. Existing direct-media playback
 and administrative tools remain; retired hosted records are unpublished and marked
 **requiring re-upload**, with metadata preserved. No media migration is claimed.
