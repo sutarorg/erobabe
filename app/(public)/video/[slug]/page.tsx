@@ -1,3 +1,4 @@
+import ViewTracker from "@/src/components/ViewTracker";
 import { createClient } from "@/lib/supabase/server";
 import { selectPlaybackSource } from "@/lib/video/playback";
 import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
@@ -10,19 +11,26 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
-export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}): Promise<Metadata> {
   const { slug } = await params;
   const supabase = await createClient();
   const { data: video } = await supabase
     .from("videos")
     .select("title, description, thumbnail_url, published_at, duration_seconds")
     .eq("slug", slug)
+    .eq("requires_reupload", false)
     .eq("status", "published")
     .eq("visibility", "public")
+    .eq("rights_status", "cleared")
+    .eq("moderation_status", "approved")
     .single();
 
   if (!video) {
-    return { title: "Video not found" };
+    notFound();
   }
 
   return {
@@ -39,13 +47,18 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   };
 }
 
-export default async function VideoPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function VideoPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
   const { slug } = await params;
   const supabase = await createClient();
 
   const { data: video } = await supabase
     .from("videos")
-    .select(`
+    .select(
+      `
       id,
       slug,
       title,
@@ -60,9 +73,12 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
       quality,
       view_count,
       published_at,
+      category_id,
       category:categories(label, slug)
-    `)
+    `,
+    )
     .eq("slug", slug)
+    .eq("requires_reupload", false)
     .eq("status", "published")
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
@@ -73,27 +89,31 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
     notFound();
   }
 
-  // Increment view count via event (server-side)
-  // We use service role? For now anon can insert video_events
-  await supabase.from("video_events").insert({
-    video_id: video.id,
-    event_type: "view",
-  });
-
   // Fetch related videos same category
   const { data: related } = await supabase
     .from("videos")
-    .select("id, slug, title, thumbnail_url, duration_seconds, quality, view_count, published_at")
+    .select(
+      "id, slug, title, thumbnail_url, duration_seconds, quality, view_count, published_at",
+    )
+    .eq("requires_reupload", false)
     .eq("status", "published")
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
     .eq("moderation_status", "approved")
+    .eq("category_id", video.category_id)
     .neq("id", video.id)
+    .order("published_at", { ascending: false })
     .limit(16);
 
   // A direct file is fetched by the browser from its own host: open that
   // connection, and start the poster, while the document is still parsing.
-  const playbackSource = selectPlaybackSource(video.playable_url, video.embed_url, video.provider, video.bunny_library_id, video.provider_file_id);
+  const playbackSource = selectPlaybackSource(
+    video.playable_url,
+    video.embed_url,
+    video.provider,
+    video.bunny_library_id,
+    video.provider_file_id,
+  );
   let mediaOrigin: string | null = null;
   if (playbackSource.kind === "direct") {
     try {
@@ -109,8 +129,12 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
     name: video.title,
     description: video.description || video.title,
     thumbnailUrl: video.thumbnail_url ? [video.thumbnail_url] : [],
-    uploadDate: video.published_at ? new Date(video.published_at).toISOString() : new Date().toISOString(),
-    duration: video.duration_seconds ? `PT${video.duration_seconds}S` : undefined,
+    uploadDate: video.published_at
+      ? new Date(video.published_at).toISOString()
+      : new Date().toISOString(),
+    duration: video.duration_seconds
+      ? `PT${video.duration_seconds}S`
+      : undefined,
     contentUrl: video.playable_url || undefined,
     embedUrl: video.embed_url || `${SITE_URL}/video/${video.slug}`,
     publisher: {
@@ -126,19 +150,30 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
 
   return (
     <div className="pt-4">
+      <ViewTracker videoId={video.id} />
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd) }}
       />
 
-      <Link href="/" className="inline-flex items-center gap-1.5 text-[12px] font-medium text-ink-3 hover:text-accent">
+      <Link
+        href="/"
+        className="inline-flex items-center gap-1.5 text-[12px] font-medium text-ink-3 hover:text-accent"
+      >
         ← Back to home
       </Link>
 
       {/* Instant play starts before React hydrates: connect to the media host and
           fetch the poster the visitor is about to look at. */}
       {mediaOrigin && <link rel="preconnect" href={mediaOrigin} />}
-      {video.thumbnail_url && <link rel="preload" as="image" href={video.thumbnail_url} fetchPriority="high" />}
+      {video.thumbnail_url && (
+        <link
+          rel="preload"
+          as="image"
+          href={video.thumbnail_url}
+          fetchPriority="high"
+        />
+      )}
 
       <VideoPlayer
         provider={video.provider}
@@ -151,11 +186,15 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
         embedUrl={video.embed_url}
       />
 
-      <h1 className="mt-4 text-[19px] font-semibold tracking-tight text-ink">{video.title}</h1>
+      <h1 className="mt-4 text-[19px] font-semibold tracking-tight text-ink">
+        {video.title}
+      </h1>
       <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-3">
         <span className="flex items-center gap-1.5">
           <Eye className="h-3.5 w-3.5" aria-hidden />
-          <span className="tabular-nums">{(video.view_count || 0).toLocaleString("en-US")} views</span>
+          <span className="tabular-nums">
+            {(video.view_count || 0).toLocaleString("en-US")} views
+          </span>
         </span>
         <span aria-hidden>•</span>
         <span>{formatTimeAgo(video.published_at)}</span>
@@ -171,7 +210,10 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
         <VideoActions title={video.title} />
         <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
           {video.category && (
-            <Link href={`/category/${(video.category as any).slug}`} className="rounded-full border border-accent/45 bg-accent/8 px-2.5 py-[3px] text-[10.5px] font-semibold text-accent">
+            <Link
+              href={`/category/${(video.category as any).slug}`}
+              className="rounded-full border border-accent/45 bg-accent/8 px-2.5 py-[3px] text-[10.5px] font-semibold text-accent"
+            >
               {(video.category as any).label}
             </Link>
           )}
@@ -184,7 +226,9 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
       </div>
 
       {video.description && (
-        <p className="mt-4 max-w-[640px] text-[13px] leading-relaxed text-ink-2">{video.description}</p>
+        <p className="mt-4 max-w-[640px] text-[13px] leading-relaxed text-ink-2">
+          {video.description}
+        </p>
       )}
 
       {/* Related */}

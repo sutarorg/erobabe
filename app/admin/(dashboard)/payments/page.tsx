@@ -1,13 +1,24 @@
+import RecoverPayment from "@/src/components/RecoverPayment";
+import PaymentRefresh from "@/src/components/PaymentRefresh";
 import { createServiceClient } from "@/lib/supabase/server";
 
 export default async function PaymentsAdmin() {
   const supabase = createServiceClient();
-  const { data: payments } = await supabase.from("payments").select("id, provider, invoice_number, provider_payment_id, amount_cents, payment_currency, pay_currency, chain, status, provider_status, created_at, advertiser_id").order("created_at", { ascending: false }).limit(100);
+  const { data: payments } = await supabase
+    .from("payments")
+    .select(
+      "id, provider, invoice_number, provider_payment_id, amount_cents, payment_currency, pay_currency, chain, status, provider_status, created_at, advertiser_id",
+    )
+    .order("created_at", { ascending: false })
+    .limit(100);
 
   return (
     <div>
       <h1 className="text-[20px] font-semibold">Payments</h1>
-      <p className="mt-1 text-[12px] text-ink-3">Real crypto payments — confirmed only after verified provider completion. No fake balances.</p>
+      <p className="mt-1 text-[12px] text-ink-3">
+        Real crypto payments — confirmed only after verified provider
+        completion. No fake balances.
+      </p>
 
       {(payments || []).length === 0 ? (
         <div className="mt-6 rounded-lg border border-dashed border-line bg-pcard p-12 text-center">
@@ -17,17 +28,47 @@ export default async function PaymentsAdmin() {
         <div className="mt-6 overflow-x-auto rounded-lg border border-line">
           <table className="w-full text-left text-[12px]">
             <thead className="border-b border-line bg-pcard text-[11px] uppercase text-ink-3">
-              <tr><th className="px-4 py-3">Reference</th><th className="px-4 py-3">Provider</th><th className="px-4 py-3">Amount</th><th className="px-4 py-3">Currency/Chain</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Date</th></tr>
+              <tr>
+                <th className="px-4 py-3">Reference</th>
+                <th className="px-4 py-3">Provider</th>
+                <th className="px-4 py-3">Amount</th>
+                <th className="px-4 py-3">Currency/Chain</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Date</th>
+              </tr>
             </thead>
             <tbody>
               {(payments || []).map((p: any) => (
                 <tr key={p.id} className="border-b border-line/50">
-                  <td className="px-4 py-3 font-mono text-[11px]">{p.invoice_number || p.provider_payment_id || "—"}</td>
-                  <td className="px-4 py-3 text-[11px] uppercase">{p.provider || "bcon"}</td>
-                  <td className="px-4 py-3">${(p.amount_cents / 100).toFixed(2)}</td>
-                  <td className="px-4 py-3">{p.pay_currency || p.payment_currency} / {p.chain}</td>
-                  <td className="px-4 py-3"><span className="rounded-full bg-white/5 px-2 py-1 text-[10px] uppercase">{p.status}</span>{p.provider_status ? <span className="ml-1 text-[10px] text-ink-3">({p.provider_status})</span> : null}</td>
-                  <td className="px-4 py-3 text-ink-3">{new Date(p.created_at).toLocaleDateString()}</td>
+                  <td className="px-4 py-3 font-mono text-[11px]">
+                    {p.invoice_number || p.provider_payment_id || "—"}
+                  </td>
+                  <td className="px-4 py-3 text-[11px] uppercase">
+                    {p.provider || "bcon"}
+                  </td>
+                  <td className="px-4 py-3">
+                    ${(p.amount_cents / 100).toFixed(2)}
+                  </td>
+                  <td className="px-4 py-3">
+                    {p.pay_currency || p.payment_currency} / {p.chain}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="rounded-full bg-white/5 px-2 py-1 text-[10px] uppercase">
+                      {p.status}
+                    </span>
+                    <PaymentRefresh id={p.id} />
+                    {p.provider === "nowpayments" && !p.provider_payment_id && (
+                      <RecoverPayment id={p.id} />
+                    )}
+                    {p.provider_status ? (
+                      <span className="ml-1 text-[10px] text-ink-3">
+                        ({p.provider_status})
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3 text-ink-3">
+                    {new Date(p.created_at).toLocaleDateString()}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -100,9 +100,9 @@ export default async function SystemHealthAdmin() {
     },
     {
       name: "Auth",
-      status: "Operational",
+      status: "Not tested",
       latency: "—",
-      desc: "Supabase Auth",
+      desc: "Current administrator session passed authorization. Registration, recovery and email delivery require staging acceptance.",
     },
     {
       name: "NOWPayments API",
@@ -138,6 +138,13 @@ export default async function SystemHealthAdmin() {
     },
   ];
 
+  const { data: retainedMedia, error: retentionError } = await supabase
+    .from("media_retention")
+    .select("id, video_id, provider, provider_file_id, library_id, status")
+    .eq("status", "pending_review")
+    .order("created_at", { ascending: false })
+    .limit(50);
+
   return (
     <div>
       <h1 className="text-[20px] font-semibold">System Health</h1>
@@ -146,6 +153,30 @@ export default async function SystemHealthAdmin() {
         checked.
       </p>
 
+      <section className="mt-6 rounded-lg border border-line bg-pcard p-4">
+        <h2 className="text-sm font-semibold">Retained remote media</h2>
+        <p className="mt-1 text-xs text-ink-3">
+          Catalog deletion does not delete provider media. Review these retained
+          objects under the retention policy in DEPLOYMENT.md before
+          provider-side deletion.
+        </p>
+        {retentionError ? (
+          <p className="mt-2 text-xs text-amber-300">
+            Retention inventory unavailable. Check migrations.
+          </p>
+        ) : retainedMedia?.length ? (
+          retainedMedia.map((row: any) => (
+            <p key={row.id} className="mt-2 break-all font-mono text-xs">
+              {row.provider} · library {row.library_id || "legacy"} ·{" "}
+              {row.provider_file_id} · review {row.id}
+            </p>
+          ))
+        ) : (
+          <p className="mt-2 text-xs text-ink-3">
+            No pending remote-media reviews.
+          </p>
+        )}
+      </section>
       <div className="mt-6 grid gap-3 md:grid-cols-2">
         {checks.map((c) => (
           <div

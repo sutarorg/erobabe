@@ -2,8 +2,10 @@
 import AdSlot from "./AdSlot";
 
 interface ActiveCampaign {
+  campaign_id?: string;
   slot_id: number;
   creative?: {
+    id?: string;
     image_url?: string;
     destination_url?: string;
     title?: string;
@@ -23,7 +25,13 @@ interface AdRailProps {
  * rendered outside the scrollable center column, and hidden below the
  * desktop three-column breakpoint (1000px).
  */
-export default function AdRail({ side, start, count = 5, onAdvertise, activeCampaigns = [] }: AdRailProps) {
+export default function AdRail({
+  side,
+  start,
+  count = 5,
+  onAdvertise,
+  activeCampaigns = [],
+}: AdRailProps) {
   const slots = Array.from({ length: count }, (_, i) => start + i);
 
   const getCreativeForSlot = (slotId: number) => {
@@ -39,7 +47,13 @@ export default function AdRail({ side, start, count = 5, onAdvertise, activeCamp
       }`}
     >
       {slots.map((n) => (
-        <AdSlot key={n} index={n} onAdvertise={onAdvertise} creative={getCreativeForSlot(n)} />
+        <AdSlot
+          key={`${n}:${activeCampaigns.find((c) => c.slot_id === n)?.creative?.id || "vacant"}`}
+          index={n}
+          onAdvertise={onAdvertise}
+          campaignId={activeCampaigns.find((c) => c.slot_id === n)?.campaign_id}
+          creative={getCreativeForSlot(n)}
+        />
       ))}
     </aside>
   );
