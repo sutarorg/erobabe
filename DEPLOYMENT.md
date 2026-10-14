@@ -89,7 +89,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 2. Open `supabase/migrations/00000000000000_initial_schema.sql` in your editor, copy entire content, paste into SQL Editor, click **Run**
 3. Repeat for `00000000000001_rls_policies.sql`
 4. Repeat for `00000000000002_seed_fixed_data.sql`
-5. Apply the remaining checked-in migrations in order through `00000000000012_bunny_stream_uploads.sql`; do not re-run or edit migrations already recorded as applied.
+5. Apply the remaining checked-in migrations in order through `00000000000013_bunny_background_encoding.sql`; do not re-run or edit migrations already recorded as applied.
 6. Verify in **Table Editor** that tables exist: `profiles`, `categories`, `videos`, `ad_slots` (should have 10 rows), `site_settings` (1 row), etc.
 
 **Option B — via Supabase CLI**
@@ -412,8 +412,8 @@ none of these providers/accounts has been approved by this implementation.
 
 1. Copy `.env.example` to `.env.local`; add library ID/key and existing Supabase URL,
    publishable key and `SUPABASE_SECRET_KEY` (or service-role alias).
-2. Optionally set `BUNNY_STREAM_MAX_UPLOAD_BYTES` to a lower application size policy.
-   Default 10 GiB is **site policy**, not Bunny's universal technical/account limit.
+2. The application imposes no maximum video file size. Bunny Stream, the selected
+   library/account, browser storage, and network may still enforce their own limits.
 3. In your hosting dashboard open the application → **Settings → Environment
    Variables/Secrets**. Add the same variable names with the correct production
    library values, Production scope. Set separate values for Preview/Staging.
@@ -439,19 +439,20 @@ none of these providers/accounts has been approved by this implementation.
 
 1. Back up the production DB and snapshot current provider/status counts and
    thumbnail URLs. Test against a staging copy first.
-2. Ensure migrations 00–11 have already been applied, in order. Do not edit or
-   re-run historical migrations.
+2. Ensure migrations 00–11 have already been applied, in order. Apply pending
+   migrations 12 and 13 in order; do not edit or re-run applied history.
 3. CLI: install the Supabase CLI; run `supabase init` if there is no local
    `supabase/config.toml` (this checkout does not include one). Run
    `supabase link --project-ref YOUR_PROJECT_REF`, then
    `supabase migration list` and `supabase db push --dry-run`. Review the pending
    migration list, then run `supabase db push`.
-4. Dashboard alternative: **SQL Editor → New query**; paste the entire
-   `supabase/migrations/00000000000012_bunny_stream_uploads.sql` and click **Run**
-   exactly once. Track dashboard execution in your migration ledger before later
-   CLI pushes; do not let the CLI re-apply it. Do not run CLI and dashboard together.
+4. Dashboard alternative: **SQL Editor → New query**; run migration 12, then
+   `supabase/migrations/00000000000013_bunny_background_encoding.sql`, exactly
+   once each and in order. Track dashboard execution in your migration ledger
+   before later CLI pushes; do not let the CLI re-apply either file. Do not run CLI
+   and dashboard together.
 5. Verify `bunny_uploads` has RLS enabled, no anon/authenticated privileges; only
-   service role can write sessions and execute `finish_bunny_upload`.
+   service role can write sessions and execute the staging/finalization RPCs.
 6. Verify archived hosted records retain IDs, titles, descriptions, categories,
    URLs and thumbnails but are `unpublished`, `requires_reupload=true`. They are
    not silently transferred. The legacy recovery table is read-only; its old
@@ -475,23 +476,27 @@ none of these providers/accounts has been approved by this implementation.
    POST/HEAD/PATCH TUS requests go to `https://video.bunnycdn.com/tusupload` with
    `AuthorizationSignature`, `AuthorizationExpire`, `LibraryId`, `VideoId` headers.
    There must be no file-byte POST to the app or Supabase.
-5. Confirm real per-file byte progress and two bounded workers. Cancel a transfer,
+5. Confirm real per-file byte progress and four bounded upload workers. After
+   transfer, the row should appear as **Encoding** in `/admin/videos`; the next
+   upload starts without waiting for Bunny's transcoder. Cancel a transfer,
    retry and briefly disconnect/reconnect the network. Reload and reselect the
    **same source**: existing metadata/session/video ID must be retained. TUS resume
    URLs are fingerprinted by library/video/file, not merely filename.
 6. Confirm JPEG PUT goes to a signed Supabase `video-thumbnails` URL. Check final
    image is 1280×720. If decoding/storage fails, use Retry; publication is blocked,
    and already transferred video bytes are not sent again.
-7. Verify **Processing** separately from Uploading. GET video reports Created=0,
-   Uploaded=1, Processing=2, Transcoding=3, Finished=4, Error=5, UploadFailed=6,
-   JitSegmenting=7, JitPlaylistsCreated=8. Only 4 publishes. `storageSize` is encoded
+7. Verify **Encoding** separately from Uploading in `/admin/videos`. GET video
+   reports Created=0, Uploaded=1, Processing=2, Transcoding=3, Finished=4, Error=5,
+   UploadFailed=6, JitSegmenting=7, JitPlaylistsCreated=8. Only 4 publishes.
+   `storageSize` is encoded
    storage, **not** original byte count; original MIME/size come from the reserved
    local upload metadata, duration from Bunny `length`.
-8. After Completed, inspect Supabase `videos`, `upload_jobs`, `bunny_uploads`:
-   exactly one video/job per session, provider `bunny`, actual GUID, stored library
-   ID/embed, MIME/size/duration/category, generated thumbnail and published state.
-   This retains existing active-admin publishing/moderation rules; administrators
-   are responsible for clearing rights and content before starting uploads.
+8. While Bunny encodes, inspect Supabase `videos`, `upload_jobs`, `bunny_uploads`:
+   there is one private `processing`/Encoding catalog row and job per session. The
+   admin list polls status in the background; after Finished=4, that same row/job
+   becomes published/completed with the actual GUID, library/embed, MIME/size,
+   duration, category and verified thumbnail. Administrators remain responsible
+   for rights and content authorization before starting uploads.
 9. Check cards, admin lists, watch poster, OpenGraph/VideoObject thumbnail and
    play/pause/seek/fullscreen on desktop and mobile from the production domain.
    Playback iframe URL is `https://iframe.mediadelivery.net/embed/{LIBRARY_ID}/{VIDEO_ID}`.
@@ -511,9 +516,11 @@ none of these providers/accounts has been approved by this implementation.
   Re-signing does not extend a resource's original life. tus-js-client handles a
   missing expired resource by restarting transfer to the **same** video object.
 - Finished but DB error: Check and finish or Retry; never re-upload video.
-- Processing too long: polling stops after ten minutes; use recovery later. This
-  is not reported as successful publication. Status 5/6 is a real provider failure;
-  inspect provider diagnostics rather than pretending the transfer succeeded.
+- Encoding takes a long time: upload workers are already free; the row remains
+  **Encoding** and `/admin/videos` resumes background reconciliation whenever an
+  admin opens the library. It is not reported as published until status 4. Status
+  5/6 is a provider failure; inspect provider diagnostics rather than pretending
+  the transfer succeeded.
 - Uncertain creation (timeout/lost response): creation is not automatically replayed.
   Find the exact `[session:UUID]` title marker in the selected Bunny library. Compare
   the session owner, title, filename and library. If exactly one video exists, an

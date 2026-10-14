@@ -7,9 +7,12 @@ Working branch: `arena/185da4ab-erobabe`; audited baseline: `9aa06f8` (main).
 
 Implemented Bunny Stream as the only new-video hosting/upload/processing/playback
 provider. Local multiple-file selection and the existing admin layout are retained.
-Browser TUS uploads have measured progress, bounded concurrency, retries, pause,
-identity-bound resumability and private metadata recovery. Library API credentials
-stay server-only. No video-byte relay or Supabase video upload remains.
+Browser TUS uploads have measured progress, four parallel upload workers, retries,
+pause, identity-bound resumability and private metadata recovery. There is no
+application-level video-size cap. Each upload is staged immediately with status
+Encoding while Bunny transcodes asynchronously; upload workers never wait for
+encoding. Library API credentials stay server-only. No video-byte relay or Supabase
+video upload remains.
 
 The local thumbnail pipeline ranks ten actual candidate frames throughout a clip
 using the existing quality scorer (detail, exposure, contrast, colour and interior
@@ -19,8 +22,10 @@ Thumbnail and persistence failures retry independently of transferred video byte
 Existing manual ffmpeg tools share the restrained grading settings.
 
 Only documented Bunny Finished status 4 can publish through the locked atomic
-session/video/upload-job RPC. Standard encoding is required; JIT 7/8 deliberately
-wait. Original MIME/size are reserved local metadata, duration comes from Bunny
+session/video/upload-job RPC. Processing catalog rows remain private until then,
+and the admin library reconciles status in the background. Standard encoding is
+required; JIT 7/8 deliberately remain in Encoding. Original MIME/size are reserved
+local metadata, duration comes from Bunny
 `length`; encoded `storageSize` is not misrepresented as original size.
 
 Playback validates stored library/GUID and exact canonical Bunny embed, with poster,
@@ -106,7 +111,6 @@ are excluded from the patch.
 
 ### Optional migration settings
 
-- `BUNNY_STREAM_MAX_UPLOAD_BYTES`: positive integer bytes; default 10 GiB site policy.
 - `OPENROUTER_THUMBNAIL_ENABLED`: default false.
 - `OPENROUTER_THUMBNAIL_CONTENT_APPROVED`: default false; both gates must be true.
 - `OPENROUTER_THUMBNAIL_MODEL`: no default; live catalogue must list image input.
@@ -166,12 +170,13 @@ supabase db push --dry-run
 supabase db push
 ```
 
-The new file is `supabase/migrations/00000000000012_bunny_stream_uploads.sql`.
-Dashboard alternative: SQL Editor → New query → paste the entire file → Run **once**,
+The new files are `supabase/migrations/00000000000012_bunny_stream_uploads.sql`
+and `supabase/migrations/00000000000013_bunny_background_encoding.sql`.
+Dashboard alternative: SQL Editor → New query → run both files once, in order,
 then reconcile your migration ledger before future CLI pushes. Do not use both
 methods to apply the same migration.
 
-Verify `bunny_uploads` RLS/service-only grants, `finish_bunny_upload`, archived
+Verify `bunny_uploads` RLS/service-only grants, the stage/finalize/fail RPCs, archived
 `requires_reupload` rows, retained thumbnail URLs, and removal of the obsolete
 finalizer. No migration was applied to a live Supabase project in this session.
 
@@ -231,6 +236,8 @@ No claim of live acceptance, account approval or completed legacy-media transfer
 ### Created
 
 - `app/api/videos/bunny/confirm/route.ts`
+- `app/admin/(dashboard)/videos/upload/page.tsx`
+- `app/admin/(dashboard)/videos/VideoManager.tsx`
 - `app/api/videos/bunny/sessions/route.ts`
 - `app/api/videos/bunny/thumbnail-rank/route.ts`
 - `docs/BUNNY_MIGRATION_AUDIT.md`
@@ -240,6 +247,7 @@ No claim of live acceptance, account approval or completed legacy-media transfer
 - `lib/video/thumbnail-style.ts`
 - `src/utils/bunnyUpload.ts`
 - `supabase/migrations/00000000000012_bunny_stream_uploads.sql`
+- `supabase/migrations/00000000000013_bunny_background_encoding.sql`
 - `tests/e2e/bunny-media.spec.ts`
 - `tests/unit/bunny-migration.test.ts`
 - `tests/unit/bunny-routes.test.ts`

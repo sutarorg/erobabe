@@ -31,11 +31,6 @@ export function bunnyConfiguration() {
 }
 export function uploadConfiguration(): { policy: UploadPolicy } {
   bunnyConfiguration();
-  const maxBytes = Number(
-    process.env.BUNNY_STREAM_MAX_UPLOAD_BYTES || 10 * 1024 ** 3,
-  );
-  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0)
-    throw new BunnyError("Invalid Bunny upload size policy.", 503);
   return {
     policy: {
       mimeTypes: [
@@ -46,8 +41,7 @@ export function uploadConfiguration(): { policy: UploadPolicy } {
         "video/x-msvideo",
         "video/mpeg",
       ],
-      maxBytes,
-      concurrency: 2,
+      concurrency: 4,
       headers: {},
       visionRanking: thumbnailVisionEnabled(),
     },

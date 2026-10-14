@@ -16,7 +16,7 @@ type Phase =
   | "Queued"
   | "Preparing"
   | "Uploading"
-  | "Processing"
+  | "Encoding"
   | "Confirming"
   | "Completed"
   | "Failed"
@@ -81,6 +81,7 @@ export default function UploadPage() {
   const current = useRef(items);
   current.current = items;
   const controllers = useRef(new Map<string, AbortController>());
+  const encodingWatchers = useRef(new Map<string, AbortController>());
   const alive = useRef(true);
   const busy = useRef(false);
   const decodeQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -118,6 +119,8 @@ export default function UploadPage() {
   }, []);
   useEffect(() => {
     alive.current = true;
+    const transferControllers = controllers.current;
+    const activeEncodingWatchers = encodingWatchers.current;
     void load();
     createClient()
       .from("categories")
@@ -128,7 +131,8 @@ export default function UploadPage() {
       });
     return () => {
       alive.current = false;
-      controllers.current.forEach((c) => c.abort());
+      transferControllers.forEach((c) => c.abort());
+      activeEncodingWatchers.forEach((c) => c.abort());
       current.current.forEach((i) => {
         if (i.preview) URL.revokeObjectURL(i.preview);
       });
@@ -238,6 +242,81 @@ export default function UploadPage() {
       });
     }
   }
+  function clearSavedSession(item: Item) {
+    try {
+      localStorage.removeItem(
+        `erobabe-session:${item.file.name}:${item.file.size}:${item.file.lastModified}`,
+      );
+    } catch {
+      /* optional cache */
+    }
+  }
+  async function watchEncoding(itemId: string) {
+    if (encodingWatchers.current.has(itemId)) return;
+    const watcher = new AbortController();
+    encodingWatchers.current.set(itemId, watcher);
+    try {
+      while (alive.current && !watcher.signal.aborted) {
+        try {
+          const response = await fetch("/api/videos/bunny/confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionId: itemId }),
+            cache: "no-store",
+            signal: watcher.signal,
+          });
+          const result = await response.json();
+          if (!response.ok && !(response.status === 409 && result.failed))
+            throw new Error(result.error || "Encoding status check failed.");
+          if (result.failed) {
+            patch(itemId, {
+              phase: "Failed",
+              error: result.error || "Bunny could not encode this video.",
+              warning: undefined,
+            });
+            return;
+          }
+          if (!result.processing && result.slug) {
+            patch(itemId, {
+              phase: "Completed",
+              percent: 100,
+              slug: result.slug,
+              warning: undefined,
+            });
+            const uploaded = current.current.find((i) => i.id === itemId);
+            if (uploaded) clearSavedSession(uploaded);
+            return;
+          }
+          patch(itemId, {
+            phase: "Encoding",
+            percent: 100,
+            slug: result.slug,
+            warning: `Bunny ${result.providerStatus || "processing"} · ${Math.floor(result.progress || 0)}% encoding`,
+          });
+        } catch {
+          if (watcher.signal.aborted) return;
+          patch(itemId, {
+            phase: "Encoding",
+            warning: "Encoding status check is temporarily unavailable; retrying in the background.",
+          });
+        }
+        await new Promise<void>((resolve) => {
+          let timer: ReturnType<typeof setTimeout>;
+          const abort = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          timer = setTimeout(() => {
+            watcher.signal.removeEventListener("abort", abort);
+            resolve();
+          }, 15000);
+          watcher.signal.addEventListener("abort", abort, { once: true });
+        });
+      }
+    } finally {
+      encodingWatchers.current.delete(itemId);
+    }
+  }
   async function upload(item: Item) {
     let latest = current.current.find((i) => i.id === item.id)!;
     const controller = new AbortController();
@@ -325,52 +404,35 @@ export default function UploadPage() {
         }
       }
       latest = current.current.find((i) => i.id === item.id)!;
-      for (let attempt = 0; attempt < 120; attempt++) {
-        if (controller.signal.aborted) throw new UploadAbortedError();
-        const done = await json<{
-          slug?: string;
-          processing?: boolean;
-          providerStatus?: string;
-          progress?: number;
-        }>("/api/videos/bunny/confirm", {
-          sessionId: item.id,
-          thumbnailPath: latest.thumbnailPath || null,
-        });
-        if (!done.processing && done.slug) {
-          patch(item.id, {
-            phase: "Completed",
-            percent: 100,
-            slug: done.slug,
-            warning: undefined,
-          });
-          try {
-            localStorage.removeItem(
-              `erobabe-session:${item.file.name}:${item.file.size}:${item.file.lastModified}`,
-            );
-          } catch {
-            /* optional cache */
-          }
-          return;
-        }
+      if (controller.signal.aborted) throw new UploadAbortedError();
+      const done = await json<{
+        slug?: string;
+        processing?: boolean;
+        providerStatus?: string;
+        progress?: number;
+      }>("/api/videos/bunny/confirm", {
+        sessionId: item.id,
+        thumbnailPath: latest.thumbnailPath || null,
+      });
+      if (!done.processing && done.slug) {
         patch(item.id, {
-          phase: "Processing",
-          warning: `Bunny ${done.providerStatus || "processing"} · ${Math.floor(done.progress || 0)}% encoding`,
+          phase: "Completed",
+          percent: 100,
+          slug: done.slug,
+          warning: undefined,
         });
-        await new Promise<void>((resolve, reject) => {
-          const abort = () => {
-            clearTimeout(timer);
-            reject(new UploadAbortedError());
-          };
-          const timer = setTimeout(() => {
-            controller.signal.removeEventListener("abort", abort);
-            resolve();
-          }, 5000);
-          controller.signal.addEventListener("abort", abort, { once: true });
-        });
+        clearSavedSession(item);
+        return;
       }
-      throw new Error(
-        "Bunny is still processing. Use Check and finish later; video and thumbnail are saved in the session.",
-      );
+      patch(item.id, {
+        phase: "Encoding",
+        percent: 100,
+        slug: done.slug,
+        warning: `Bunny ${done.providerStatus || "processing"} · ${Math.floor(done.progress || 0)}% encoding`,
+      });
+      // Keep encoding checks separate from the upload worker so the next file
+      // starts immediately instead of waiting for Bunny's transcoder.
+      void watchEncoding(item.id);
     } catch (e) {
       if (
         /Thumbnail (storage failed|generation required)/i.test(
@@ -442,7 +504,7 @@ export default function UploadPage() {
       });
       if (result.processing)
         setError(
-          `Bunny ${result.providerStatus}. Processing is in progress; check again later.`,
+          `Bunny ${result.providerStatus}. The video is saved as Encoding in the video library; transcoding continues in the background.`,
         );
       await load();
     } catch (e) {
@@ -538,9 +600,7 @@ export default function UploadPage() {
         </button>
         {policy && (
           <p className="mt-4 text-xs text-ink-3">
-            {policy.mimeTypes.join(", ")} · Site limit{" "}
-            {Math.round(policy.maxBytes / 1024 / 1024)} MB ·{" "}
-            {policy.concurrency} parallel uploads
+            {policy.mimeTypes.join(", ")} · {policy.concurrency} parallel uploads · no application-level video size limit
           </p>
         )}
       </div>
@@ -569,8 +629,7 @@ export default function UploadPage() {
           </button>
         </div>
         <p role="status" className="text-xs text-ink-3">
-          {completed} completed · {failed} failed. Completion includes provider
-          confirmation and database persistence.
+          {completed} published · {items.filter((i) => i.phase === "Encoding").length} encoding · {failed} failed. Uploads continue while Bunny encodes in the background.
         </p>
         {!items.length && (
           <p className="rounded-xl border border-line p-6 text-center text-sm text-ink-3">
@@ -626,7 +685,7 @@ export default function UploadPage() {
                       "Preparing",
                       "Uploading",
                       "Confirming",
-                      "Processing",
+                      "Encoding",
                     ].includes(item.phase) ? (
                     <LoaderCircle className="h-4 w-4 animate-spin" />
                   ) : null}
@@ -652,7 +711,12 @@ export default function UploadPage() {
                   </p>
                 )}
                 <div className="mt-3 flex gap-4 text-xs">
-                  {item.slug && (
+                  {item.phase === "Encoding" && (
+                    <Link href="/admin/videos" className="text-accent">
+                      View encoding status in video library
+                    </Link>
+                  )}
+                  {item.phase === "Completed" && item.slug && (
                     <Link href={`/video/${item.slug}`} className="text-accent">
                       View published video
                     </Link>

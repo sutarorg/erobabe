@@ -46,7 +46,6 @@ const remote = {
 beforeEach(() => {
   vi.stubEnv("BUNNY_STREAM_LIBRARY_ID", "123");
   vi.stubEnv("BUNNY_STREAM_API_KEY", "test-secret");
-  vi.stubEnv("BUNNY_STREAM_MAX_UPLOAD_BYTES", "1000");
   h = createHarness({ categories: [{ id: CATEGORY }], bunny_uploads: [] });
   vi.mocked(createClient).mockResolvedValue(h.auth);
   vi.mocked(createServiceClient).mockReturnValue(h.service);
@@ -115,6 +114,11 @@ describe("Bunny Stream server routes (mock provider, not live acceptance)", () =
       expect(() => uploadConfiguration()).toThrow(/configuration/);
     },
   );
+  it("configures four parallel uploads without an application video-size cap", () => {
+    const { policy } = uploadConfiguration();
+    expect(policy.concurrency).toBe(4);
+    expect(policy).not.toHaveProperty("maxBytes");
+  });
   it("validates key and expiration/signature exactly", () => {
     const signed = signUpload(REMOTE, "123", 1700000000000);
     expect(signed.expiration).toBe(1700086400);
@@ -133,7 +137,6 @@ describe("Bunny Stream server routes (mock provider, not live acceptance)", () =
   });
   it.each([
     { mimeType: "text/html" },
-    { sizeBytes: 1001 },
     { sizeBytes: 0 },
     { originalName: "../file.mp4" },
     { sessionId: "bad" },
@@ -168,6 +171,15 @@ describe("Bunny Stream server routes (mock provider, not live acceptance)", () =
     expect(body.videoId).toBe(REMOTE);
     expect(JSON.stringify(body)).not.toContain("test-secret");
   });
+  it("accepts upload metadata larger than the former 10 GiB application limit", async () => {
+    const response = await create(
+      jsonRequest("/api/videos/bunny/sessions", {
+        ...metadata,
+        sizeBytes: 20 * 1024 ** 3,
+      }),
+    );
+    expect(response.status).toBe(201);
+  });
   it("re-signs same video and prevents duplicate creation", async () => {
     seed();
     expect(
@@ -189,31 +201,49 @@ describe("Bunny Stream server routes (mock provider, not live acceptance)", () =
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
   it.each([0, 1, 2, 3, 7, 8])(
-    "never publishes non-Finished status %s",
+    "stages a private Encoding row for provider status %s without publishing",
     async (status) => {
       seed();
       fetchMock.mockResolvedValue(Response.json({ ...remote, status }));
-      expect(
-        (
-          await confirm(
-            jsonRequest("/api/videos/bunny/confirm", { sessionId: ID }),
-          )
-        ).status,
-      ).toBe(202);
-      expect(h.service.rpc).not.toHaveBeenCalled();
+      const response = await confirm(
+        jsonRequest("/api/videos/bunny/confirm", { sessionId: ID }),
+      );
+      expect(response.status).toBe(202);
+      expect(await response.json()).toMatchObject({
+        processing: true,
+        slug: "clip",
+        providerStatus: expect.any(String),
+      });
+      expect(h.service.rpc).toHaveBeenCalledWith(
+        "stage_bunny_upload",
+        expect.objectContaining({
+          p_session: ID,
+          p_provider_status: status,
+          p_embed: `https://iframe.mediadelivery.net/embed/123/${REMOTE}`,
+        }),
+      );
+      expect(h.service.rpc).not.toHaveBeenCalledWith(
+        "finish_bunny_upload",
+        expect.anything(),
+      );
     },
   );
   it.each([5, 6])("reports provider failure %s", async (status) => {
     seed();
     fetchMock.mockResolvedValue(Response.json({ ...remote, status }));
-    expect(
-      (
-        await confirm(
-          jsonRequest("/api/videos/bunny/confirm", { sessionId: ID }),
-        )
-      ).status,
-    ).toBe(409);
-    expect(h.service.rpc).not.toHaveBeenCalled();
+    const response = await confirm(
+      jsonRequest("/api/videos/bunny/confirm", { sessionId: ID }),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ failed: true });
+    expect(h.service.rpc).toHaveBeenCalledWith(
+      "fail_bunny_upload",
+      expect.objectContaining({ p_provider_status: status }),
+    );
+    expect(h.service.rpc).not.toHaveBeenCalledWith(
+      "finish_bunny_upload",
+      expect.anything(),
+    );
   });
   it("publishes only Finished with verified thumbnail via atomic RPC", async () => {
     seed();
@@ -253,17 +283,17 @@ describe("Bunny Stream server routes (mock provider, not live acceptance)", () =
       true,
     );
   });
-  it("rejects wrong owner or mismatched remote identity", async () => {
+  it("allows another active admin to reconcile a shared encoding row, but rejects mismatched remote identity", async () => {
     seed();
-    h.db.bunny_uploads[0].created_by = "other";
-    expect(
-      (
-        await confirm(
-          jsonRequest("/api/videos/bunny/confirm", { sessionId: ID }),
-        )
-      ).status,
-    ).toBe(404);
+    h.db.bunny_uploads[0].created_by = "other-admin";
+    h.db.bunny_uploads[0].thumbnail_path = "other-admin/frame.jpg";
+    fetchMock.mockResolvedValue(Response.json({ ...remote, status: 3 }));
+    const staged = await confirm(
+      jsonRequest("/api/videos/bunny/confirm", { sessionId: ID }),
+    );
+    expect(staged.status).toBe(202);
     h.db.bunny_uploads[0].created_by = ADMIN_ID;
+    h.db.bunny_uploads[0].thumbnail_path = `${ADMIN_ID}/frame.jpg`;
     fetchMock.mockResolvedValue(
       Response.json({ ...remote, videoLibraryId: 999 }),
     );

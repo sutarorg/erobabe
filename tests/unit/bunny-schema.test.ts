@@ -6,7 +6,7 @@ import { uuid_ossp } from "@electric-sql/pglite/contrib/uuid_ossp";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 describe("Bunny migration against all actual checked-in migrations", () => {
-  it("applies 00–12 intact with Supabase auth/storage schema fixtures and completes a real-schema record", async () => {
+  it("applies 00–13 with Supabase auth/storage schema fixtures and completes a real-schema record", async () => {
     const db = new PGlite({ extensions: { pgcrypto, uuid_ossp } });
     try {
       // Only Supabase-managed infrastructure is stubbed; application migrations are unmodified.
