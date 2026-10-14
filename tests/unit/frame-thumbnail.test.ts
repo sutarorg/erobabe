@@ -109,10 +109,10 @@ describe("captureFrameJpeg", () => {
     await expect(captureFrameJpeg(`${baseUrl}/missing.mp4`)).rejects.toThrow();
   }, 60_000);
 
-  it("uses bounded sampling and a vibrancy, sharpening, and vignette pass", () => {
+  it("uses bounded sampling and a restrained vibrancy and sharpening pass", () => {
     expect(THUMBNAIL_SAMPLE_COUNT).toBe(12);
-    expect(THUMBNAIL_FILTER).toContain("saturation=1.35");
+    expect(THUMBNAIL_FILTER).toContain("saturation=1.12");
     expect(THUMBNAIL_FILTER).toContain("unsharp");
-    expect(THUMBNAIL_FILTER).toContain("vignette");
+    expect(THUMBNAIL_FILTER).toContain("contrast=1.08");
   });
 });

@@ -1,10 +1,10 @@
 # DEPLOYMENT.md — Erobabe Production Setup (Click-by-Click)
 
-Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWPayments, video publishing, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. FileKosh device uploads are implemented behind mandatory contract/browser-verification gates; section D documents enablement and remaining live acceptance.
+Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWPayments, video publishing, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. Bunny Stream resumable device uploads are implemented; section D documents setup and remaining live acceptance.
 
 **Video-provider guidance audited**: October 14, 2026
 
-**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, OpenRouter (DeepSeek V3.2), gated FileKosh device uploads, Tailwind CSS 4.
+**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, OpenRouter (DeepSeek V3.2), Bunny Stream device uploads, Tailwind CSS 4.
 
 ---
 
@@ -27,7 +27,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 - Playwright browsers: `npx playwright install`
 
 ### Decisions requiring owner authorization before production
-1. **Video hosting provider**: Device-file uploads only; FileKosh enablement requires its missing confirmation/transport contract, content/use approval and live staging verification. Never bypass the verification gates. See section D and `docs/FILEKOSH_API_RESEARCH.md`.
+1. **Video hosting provider**: Bunny Stream device uploads only; obtain account/content-use confirmation and complete section D live staging acceptance.
 2. **Hosting provider**: Vercel Hobby is limited to personal non-commercial use and its Acceptable Use Policy restricts objectionable content. Do NOT deploy commercial Erobabe to Vercel Hobby. Choose a host whose terms explicitly permit adult content and commercial use. Document approval.
 3. **Legal identity**: Operator must provide real legal name, business address, registration, contact emails, age-verification procedures. Do not publish fictional identity.
 4. **Age assurance**: Evaluate jurisdiction-specific requirements (e.g., UK, EU, US state laws). Frontend age gate alone is not robust assurance. Implement required verification integration where legally required.
@@ -89,7 +89,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 2. Open `supabase/migrations/00000000000000_initial_schema.sql` in your editor, copy entire content, paste into SQL Editor, click **Run**
 3. Repeat for `00000000000001_rls_policies.sql`
 4. Repeat for `00000000000002_seed_fixed_data.sql`
-5. Apply the remaining checked-in migrations in order through `00000000000011_filekosh_uploads.sql`; do not re-run or edit migrations already recorded as applied.
+5. Apply the remaining checked-in migrations in order through `00000000000012_bunny_stream_uploads.sql`; do not re-run or edit migrations already recorded as applied.
 6. Verify in **Table Editor** that tables exist: `profiles`, `categories`, `videos`, `ad_slots` (should have 10 rows), `site_settings` (1 row), etc.
 
 **Option B — via Supabase CLI**
@@ -109,26 +109,20 @@ supabase migration up
    - `profiles` should restrict to own + admin
 4. Test with SQL: try to query `videos` as anon — should only see published
 
-### 8. Configure and deploy Edge Functions (optional, for small orchestration)
-If you use Edge Functions for email or notifications:
-```bash
-supabase functions new resend
-# Edit function, then
-supabase functions deploy resend --no-verify-jwt
-```
-Set secrets:
-```bash
-supabase secrets set RESEND_API_KEY=... NOWPAYMENTS_API_KEY=...
-```
+### 8. Application routes, not assumed Edge Functions
 
-### 9. Add production function secrets
-In Supabase Dashboard → **Edge Functions** → **Secrets**, add:
-- `RESEND_API_KEY`
-- `OPENROUTER_API_KEY`
-- `NOWPAYMENTS_API_KEY`
-- `NOWPAYMENTS_IPN_SECRET`
-- `FILEKOSH_API_KEY` and verified FileKosh contract settings (server-only; see section D).
-- `SITE_URL`
+This checkout implements payments/IPN, metadata, storage-token and Bunny sessions
+as Next.js routes. There are no checked-in Supabase Edge Functions to deploy for
+these operations. Do not create retired upload relay functions.
+
+### 9. Configure server secrets on the application host
+
+Set `SUPABASE_SECRET_KEY` (or the legacy service-role alias), `RESEND_API_KEY`,
+`OPENROUTER_API_KEY` when using metadata AI, `NOWPAYMENTS_API_KEY`,
+`NOWPAYMENTS_IPN_SECRET`, `BUNNY_STREAM_LIBRARY_ID`, `BUNNY_STREAM_API_KEY` and site
+URL settings on the **Next.js application host**. Supabase Edge Function secrets
+alone are not visible to Next.js. Keep every secret server-only; redeploy after
+updates. See sections C/D for gateway and Stream configuration.
 
 ### 10. Create initial administrator using secure documented process
 **NEVER allow browser to set role=admin. Use service_role or SQL.**
@@ -376,134 +370,217 @@ shows `finished` for that address and amount) — see "Rollback and recovery".
 
 ---
 
-## D. FileKosh device uploads
+## D. Bunny Stream device uploads
 
-### Verification gate — required before enablement
+### Content and hosting policy (checked October 14, 2026)
 
-The workflow is implemented but **not live-verified or ready to enable with a key alone**.
-Official documentation checked on 2026-10-14: https://filekosh.com/docs and
-https://filekosh.com/api/v1/openapi.json. Both omit the confirmation request body;
-the specification also omits accepted formats, signed PUT headers, storage hosts,
-URL expiry/renewal and browser CORS requirements. No dedicated thumbnail API is documented.
-The homepage's “no size limits” claim is not an object-upload transport contract.
+Read https://bunny.net/acceptable-use/ and https://bunny.net/tos/ before uploading.
+The current AUP's **Adult Content** section accepts adult-content providers only
+when the content is legal under Slovenia's laws, all 50 US states, and all other
+terms. This is **not approval of this account, catalogue, consent/rights records,
+or business**. Obtain legal review and written account/use confirmation from Bunny
+support before production. Document performer age/consent, copyright ownership,
+takedown handling, data protection and jurisdiction-specific age assurance.
+Choose an application host that also permits this business and commercial use;
+none of these providers/accounts has been approved by this implementation.
 
-Obtain a sanitized, versioned quick-start/support response covering those missing
-fields, create response envelope, repeated-confirm semantics, WEB readiness and
-embed compatibility. Obtain appropriate content/use permission for this catalog.
-See `docs/FILEKOSH_API_RESEARCH.md` for the clarification request. **Do not guess
-`{id}`, `{ids}`, storage keys, or a bodyless confirmation from generated API examples.**
-If the supplied confirmation contract cannot be represented by the documented JSON
-template mechanism below, update the server adapter from that contract before enabling.
+### 1. Create the library and retrieve credentials (click-by-click)
 
-### Required deployment steps
+1. Sign in at https://dash.bunny.net/; enable MFA, billing and account security.
+2. Open **Stream** in the left navigation (not Storage or CDN).
+3. Click **Add Video Library** / **Create Video Library**.
+4. Enter a recognizable library name, e.g. `erobabe-staging`; choose storage regions
+   and encoding resolutions based on your privacy, quality and cost requirements.
+5. Create the library and open it from the Stream library list.
+6. Open the library's **API** settings. Copy **Video Library ID** into
+   `BUNNY_STREAM_LIBRARY_ID` (a positive numeric ID).
+7. Copy/reveal the **Video Library API Key** for this exact library into
+   `BUNNY_STREAM_API_KEY`. Do **not** use the global account key, Storage password,
+   CDN key or a different library's key. Dashboard labels can change; the official
+   [Stream API](https://docs.bunny.net/reference/video_getvideo) uses this key as `AccessKey`.
+8. Keep credentials in a password manager/server secret store, never chat, Git,
+   screenshots or `NEXT_PUBLIC_*` variables. Use separate staging/production libraries.
+9. Open **Security** settings: ensure allowed domains/referrers permit your actual
+   production apex and www domain and staging domain. Test using the real browser
+   origin. Keep embed-token authentication off for this implementation (signed
+   playback tokens are not implemented); upload signatures are **not** playback tokens.
+10. For this version, use standard encoding rather than just-in-time encoding. Only
+    documented status **4 (Finished)** publishes; statuses 7/8 intentionally wait.
+    Verify no library setting prevents the documented iframe player from embedding.
 
-1. Obtain a bearer API key in **Dashboard → API**, the location identified by the
-   official specification. Use a staging key first. Set `FILEKOSH_API_KEY` privately
-   in the server deployment environment; never prefix it with `NEXT_PUBLIC_`.
-2. Configure existing Supabase project URL, publishable key, and server-only
-   `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`). Never expose the service key.
-3. Apply existing migrations in order and then
-   `supabase/migrations/00000000000011_filekosh_uploads.sql` with Supabase CLI or
-   SQL editor. Do not modify/re-run previously applied migrations. New SQL expands
-   provider constraints, adds MIME/size/share metadata, and creates private recovery
-   sessions plus a service-role-only transactional finalizer. Historical records
-   and existing RLS policies remain intact. Test on staging before production.
-4. Set the **provider-verified** comma-separated `FILEKOSH_ALLOWED_MIME_TYPES`,
-   exact `FILEKOSH_UPLOAD_HOSTS`, and `FILEKOSH_UPLOAD_HEADERS_JSON` (a JSON object,
-   `{}` only if verified correct). Set `FILEKOSH_MAX_UPLOAD_BYTES` to the verified
-   account/transport cap or a deliberately lower site policy; this is not a claimed
-   universal FileKosh limit. The implementation uses a single PUT, not multipart.
-5. Set `FILEKOSH_CONFIRM_BODY_TEMPLATE` to the **exact documented confirmation
-   JSON**, replacing video-ID values with the literal string `{{id}}`. Replacement
-   is structural, so IDs are not interpolated into raw JSON. No guessed example is
-   supplied. The final readiness check independently GETs `/videos/{id}` and requires
-   matching ID, slug, MIME, byte size, `platform=WEB`, `status=READY`, and a valid
-   returned `embedUrl` on `https://filekosh.com` before publication.
-6. Verify provider/storage access from the deployed server and actual browser PUT
-   from the staging origin. Storage CORS must allow that origin, PUT and documented
-   headers. Browser developer tools must show the **File bytes going to the storage
-   host**, never `/api/*`. There is no server relay fallback. Set
-   `FILEKOSH_CONTRACT_VERIFIED=true` and `FILEKOSH_BROWSER_UPLOAD_VERIFIED=true` only
-   after obtaining that evidence. Defaults are false and create fails closed.
-   Optional `FILEKOSH_UPLOAD_CONCURRENCY` defaults to 2, clamped to 1–3.
-7. Deploy the updated app. Sign in as an active administrator, open
-   `/admin/videos/upload`, select a category and drag/drop several small authorized
-   test videos. Edit titles before starting. Verify local thumbnails, per-file
-   measured byte progress, Confirming, and Completed. Completion includes database
-   persistence, not just 100% transferred bytes.
-8. Check Supabase videos/jobs: provider `filekosh`, verified provider ID/slug,
-   size/MIME/duration, persisted thumbnail, returned embed and published state.
-   `playable_url` stays NULL: FileKosh's `url` is not documented as direct media.
-   Presigned URLs exist only in the private service-role recovery table until
-   completion, then are cleared; never copy them into public video fields.
-9. Open each public watch page and test play/pause/seek/fullscreen on desktop and
-   mobile. The iframe uses the returned URL with no popup or top-navigation
-   permissions. Sandbox compatibility has **not** been live-tested. It cannot
-   remove ads inside a cross-origin player; do not promise ad-free playback or
-   loosen navigation permissions without documented need and security review.
+### 2. Configure local and production environments
 
-### Thumbnail and recovery behavior
+1. Copy `.env.example` to `.env.local`; add library ID/key and existing Supabase URL,
+   publishable key and `SUPABASE_SECRET_KEY` (or service-role alias).
+2. Optionally set `BUNNY_STREAM_MAX_UPLOAD_BYTES` to a lower application size policy.
+   Default 10 GiB is **site policy**, not Bunny's universal technical/account limit.
+3. In your hosting dashboard open the application → **Settings → Environment
+   Variables/Secrets**. Add the same variable names with the correct production
+   library values, Production scope. Set separate values for Preview/Staging.
+4. Remove all retired video-provider credentials, transport gates and relay jobs
+   from deployment settings. None are read by the new application.
+5. Configure server outbound HTTPS to `video.bunnycdn.com` and your Supabase project;
+   browsers need `video.bunnycdn.com`, `iframe.mediadelivery.net`, player/CDN domains
+   used by the selected library and Supabase thumbnail Storage. If using CSP, allow
+   the Bunny iframe in `frame-src`, TUS in `connect-src` and local decoding/posters
+   in `media-src blob:` / `img-src blob:`. Never add a server video relay.
+6. Node.js 20+ hosting is required. New automatic local thumbnails use browser
+   decoding/canvas, not server ffmpeg. The existing manual direct-media thumbnail
+   tool requires an executable ffmpeg binary on a compatible Node host.
+7. Redeploy/restart after environment changes; verify **Admin → System Health**.
+   Bunny check performs read-only `GET /library/{id}/videos?page=1&itemsPerPage=1`.
+   Missing configuration, authentication failure and successful connectivity are
+   distinct. A separate lifecycle panel shows uploading, processing, ready, completed,
+   reported failure/pause and thumbnail failures from recent private sessions;
+   connectivity does not prove upload, processing, Storage or playback. Browser
+   lifecycle reports are diagnostic only, never proof of readiness.
 
-Local `<video>` decoding and canvas capture sample three interior timestamps,
-reject near-black frames, encode a compressed JPEG and release object URLs/media.
-A decoding failure is a separate warning and does not block the video. When a
-thumbnail was generated but storage fails, the queue retains it for retry; video
-bytes are not re-uploaded. The existing signed Supabase `video-thumbnails` PUT
-mechanism stores images. Local thumbnail capture does not require ffmpeg. Existing
-library frame-generation for direct legacy sources still uses ffmpeg.
+### 3. Apply the forward database migration
 
-Private sessions reserve a UUID before create, and confirmation finalization locks
-that session and atomically inserts one video/job. A duplicate request cannot
-create a second row. GET retry uses bounded jittered backoff on 429/5xx and honors
-Retry-After; long delays are returned to the administrator rather than holding a
-serverless function open. Create is not automatically retried after an ambiguous
-network/5xx outcome. Definitive rejection can release the reservation. Confirmation
-is atomically attempted once; uncertain outcomes reconcile using GET, never blindly
-repeat the undocumented POST. A definite rejection permits another confirmation.
+1. Back up the production DB and snapshot current provider/status counts and
+   thumbnail URLs. Test against a staging copy first.
+2. Ensure migrations 00–11 have already been applied, in order. Do not edit or
+   re-run historical migrations.
+3. CLI: install the Supabase CLI; run `supabase init` if there is no local
+   `supabase/config.toml` (this checkout does not include one). Run
+   `supabase link --project-ref YOUR_PROJECT_REF`, then
+   `supabase migration list` and `supabase db push --dry-run`. Review the pending
+   migration list, then run `supabase db push`.
+4. Dashboard alternative: **SQL Editor → New query**; paste the entire
+   `supabase/migrations/00000000000012_bunny_stream_uploads.sql` and click **Run**
+   exactly once. Track dashboard execution in your migration ledger before later
+   CLI pushes; do not let the CLI re-apply it. Do not run CLI and dashboard together.
+5. Verify `bunny_uploads` has RLS enabled, no anon/authenticated privileges; only
+   service role can write sessions and execute `finish_bunny_upload`.
+6. Verify archived hosted records retain IDs, titles, descriptions, categories,
+   URLs and thumbnails but are `unpublished`, `requires_reupload=true`. They are
+   not silently transferred. The legacy recovery table is read-only; its old
+   publication RPC is removed.
+7. Verify `video-thumbnails` is public and restricted to image MIME types/10 MB.
+   The existing storage helper creates it if missing. Video Storage is not used.
+8. Deploy the app only after SQL succeeds. Roll back app code only with care: the
+   retired uploader cannot finalize with the archived RPC removed. Prefer disabling
+   uploads and a forward fix, not reactivating an obsolete integration.
 
-Do not close the tab while uploading. Browser `File` objects are not persisted.
-After reload, **Recover interrupted sessions** can check/finish known provider IDs
-without another upload. If creation outcome is unknown, a transfer was partial or
-its URL expired, reconcile with FileKosh support; no URL-renewal/resumable/cancel API
-is invented. Cancel stops the current XHR, not a provider record deletion. Known
-orphan media may require provider-side cleanup. Completed videos are not republished
-by retries after later moderation changes.
+### 4. Verify a genuine authorized staging upload
 
-### Troubleshooting and remaining acceptance
+1. Sign in as an **active administrator** and open `/admin/videos/upload`.
+2. Choose a category, click **Choose videos** or drag several local authorized
+   MP4/WebM files. Include a short clip, black introduction, portrait clip and a
+   longer clip. Use browser-decodable files; convert unsupported codecs locally
+   before selecting. A MIME declaration alone cannot prove decodability.
+3. Verify each automatically generated actual-frame preview; edit titles before
+   Start uploads. No frame-selection or URL-import action is needed.
+4. Open browser Developer Tools → **Network**, start the batch. Confirm actual
+   POST/HEAD/PATCH TUS requests go to `https://video.bunnycdn.com/tusupload` with
+   `AuthorizationSignature`, `AuthorizationExpire`, `LibraryId`, `VideoId` headers.
+   There must be no file-byte POST to the app or Supabase.
+5. Confirm real per-file byte progress and two bounded workers. Cancel a transfer,
+   retry and briefly disconnect/reconnect the network. Reload and reselect the
+   **same source**: existing metadata/session/video ID must be retained. TUS resume
+   URLs are fingerprinted by library/video/file, not merely filename.
+6. Confirm JPEG PUT goes to a signed Supabase `video-thumbnails` URL. Check final
+   image is 1280×720. If decoding/storage fails, use Retry; publication is blocked,
+   and already transferred video bytes are not sent again.
+7. Verify **Processing** separately from Uploading. GET video reports Created=0,
+   Uploaded=1, Processing=2, Transcoding=3, Finished=4, Error=5, UploadFailed=6,
+   JitSegmenting=7, JitPlaylistsCreated=8. Only 4 publishes. `storageSize` is encoded
+   storage, **not** original byte count; original MIME/size come from the reserved
+   local upload metadata, duration from Bunny `length`.
+8. After Completed, inspect Supabase `videos`, `upload_jobs`, `bunny_uploads`:
+   exactly one video/job per session, provider `bunny`, actual GUID, stored library
+   ID/embed, MIME/size/duration/category, generated thumbnail and published state.
+   This retains existing active-admin publishing/moderation rules; administrators
+   are responsible for clearing rights and content before starting uploads.
+9. Check cards, admin lists, watch poster, OpenGraph/VideoObject thumbnail and
+   play/pause/seek/fullscreen on desktop and mobile from the production domain.
+   Playback iframe URL is `https://iframe.mediadelivery.net/embed/{LIBRARY_ID}/{VIDEO_ID}`.
+10. Repeat confirmation and induce a DB failure after transfer; retry must save
+    without creating another remote video, catalog record or upload job. Verify
+    unsigned/non-admin calls receive 401/403.
+11. Record video IDs, screenshots without secrets and results as live acceptance
+    evidence. Passing mocked tests is not sufficient.
 
-- Unauthorized/Forbidden: verify logged-in active admin profile and server Supabase credentials.
-- Configuration blocked: verify every required contract/transport setting and migration;
-  System Health reports configuration only, not live availability.
-- Unsupported/oversized: verify account-supported MIME types and chosen site policy;
-  browsers unable to identify a MIME type fail validation rather than guessing.
-- Network/CORS: inspect browser network/preflight in staging. A status-zero XHR cannot
-  distinguish CORS from a dropped connection. Ask the provider to enable documented
-  browser uploads; never proxy video bytes through Vercel.
-- Authentication/rate limits: rotate/check the server key privately; wait the displayed
-  Retry-After. The approximate provider rate is 120 requests/minute **per key**;
-  conservative concurrency does not coordinate rate budgets across multiple admins.
-- Confirmation/persistence: retry the same session. A READY-but-database-failed upload
-  remains recoverable; no new video transfer is necessary. Uncertain POST outcomes
-  need safe read reconciliation or provider support.
-- Library deletion removes the catalog record/thumbnail as before, not the remote
-  FileKosh media. Explicit provider retention/cleanup is an operator responsibility.
+### 5. Recovery, failures and retention
 
-No credentials or live Supabase connection were available here. The sandbox's
-application outbound allowlist excludes FileKosh/storage hosts. Real upload, CORS,
-thumbnail storage and iframe acceptance **have not been proved**. Unit tests mock
-third-party responses; embedded PostgreSQL tests verify the new migration/finalizer
-on a schema fixture, not a live production schema. Do not enable production until
-an authorized staging upload-to-public-playback test succeeds.
+- Thumbnail error: Retry thumbnail/processing/save. After reload, reselect the
+  source; server metadata is restored. Frames are not sent to AI by default.
+- Interrupted upload: reselect source to reuse the server UUID and provider GUID;
+  fresh authorization lasts 24 hours. Bunny expires incomplete resources at the
+  original authorization expiry or roughly 48 hours inactivity, whichever first.
+  Re-signing does not extend a resource's original life. tus-js-client handles a
+  missing expired resource by restarting transfer to the **same** video object.
+- Finished but DB error: Check and finish or Retry; never re-upload video.
+- Processing too long: polling stops after ten minutes; use recovery later. This
+  is not reported as successful publication. Status 5/6 is a real provider failure;
+  inspect provider diagnostics rather than pretending the transfer succeeded.
+- Uncertain creation (timeout/lost response): creation is not automatically replayed.
+  Find the exact `[session:UUID]` title marker in the selected Bunny library. Compare
+  the session owner, title, filename and library. If exactly one video exists, an
+  authorized DBA can set that row's `provider_id` to the verified GUID and `state`
+  to `uploading` via the SQL editor; then reselect the same file. If uncertain or
+  multiple objects exist, reconcile with Bunny support. Never fabricate an ID.
+- Duplicate policy: same administrator/filename/size/MIME cannot reserve a second
+  session. Use the recovery row; for genuinely different media sharing this tuple,
+  rename the authorized file before starting. This is duplicate prevention, not a
+  cryptographic proof of source identity. Renaming a partial source loses file
+  matching and is not a resume workflow.
+- Cancelling pauses local transfer, not deletion of provider media. Catalog deletion
+  remains catalog/thumbnail-only. Review incomplete/orphan remote videos and delete
+  confirmed unused objects manually in Bunny dashboard after retention approval.
+  Keep completed session audit rows; retries cannot republish a subsequently deleted
+  or moderated video. If the old record was deleted, completed recovery may point to
+  a missing record; it does not recreate it.
 
-### Legacy preservation
+### 6. Legacy media migration report/workflow
 
-Active Streamtape API, ticket streaming, thumbnail import and relay helpers have
-been removed. Remove their old deployment secrets. Historic Streamtape rows remain
-in the database but are explicitly unsupported rather than making active API calls.
-Other direct-media and stored generic-embed legacy playback remains. The old URL
-publisher/embed-ingestion APIs are removed, not hidden. Historical migrations stay
-unchanged. `video-incoming` is not used; retain old objects until ownership/retention
-is reviewed rather than deleting them automatically.
+No hosted media bytes have been migrated in this change; there are no live DB or
+provider credentials here. Obtain counts with:
+
+```sql
+select provider, status, requires_reupload, count(*) from public.videos
+ group by provider, status, requires_reupload order by provider, status;
+select id, slug, title, category_id, provider, provider_file_id, thumbnail_url
+ from public.videos where requires_reupload order by created_at;
+```
+
+In **Admin → Videos**, archived rows link to the existing uploader. Retrieve only
+source files you are authorized to use from your own archive/provider-supported
+export. Re-upload locally to Bunny, preserving title/category and reviewing the
+new thumbnail. After real playback verification, transfer any curated description,
+tags/rights relationships through an authorized metadata maintenance process,
+record the old→new catalog ID mapping and retain the archived row for audit. No
+legacy URL fallback, automatic remote import, fake Bunny GUID or deletion occurs.
+Existing direct-media records keep native playback. Known YouTube/Vimeo historical
+player formats retain restrictive iframe playback; untrusted generic iframes are
+not executed. Review historical generic embeds and re-upload authorized sources.
+
+### 7. Optional consent-gated vision ranking
+
+Local ranking is complete and reliable without OpenRouter. To optionally enhance:
+
+1. Verify your chosen model in OpenRouter's live model catalogue lists **image**
+   input; do not reuse a text model by assumption. No model slug is preselected,
+   including any unverified DeepSeek example. The code checks live capability
+   before transmitting frames.
+2. Obtain permission for the specific provider/model to process your intended
+   content, privacy and data handling; no provider approval is implied here.
+3. Set server-only `OPENROUTER_API_KEY`, `OPENROUTER_THUMBNAIL_MODEL`, and the
+   explicitly approved `OPENROUTER_THUMBNAIL_PROVIDER` slug. Routing is pinned to
+   that provider with fallbacks disabled and data collection denied.
+4. Only after approval, set **both** `OPENROUTER_THUMBNAIL_ENABLED=true` and
+   `OPENROUTER_THUMBNAIL_CONTENT_APPROVED=true`. Leave false otherwise.
+5. Only up to four actual low-resolution candidate JPEGs are transmitted. The AI
+   returns a candidate index; it cannot invent a scene. API/model/content rejection,
+   quota failure, timeout or invalid output falls back to the deterministic local
+   winner without blocking upload. Images and upstream error bodies are not logged.
+6. Disable either flag to stop external ranking. Existing text metadata AI remains
+   a separate, unchanged feature.
+
+Official implementation references: [TUS](https://bunny.net/docs/stream/tus-resumable-uploads),
+[Get Video](https://docs.bunny.net/reference/video_getvideo),
+[pre-signed upload announcement](https://bunny.net/blog/bunny-stream-introducing-pre-signed-and-resumable-uploads/),
+[video guidelines](https://docs.bunny.net/docs/stream-best-practices).
 
 ## D2. Video admin tools (migration 00000000000010)
 
@@ -515,19 +592,18 @@ this release. It adds:
   the default artwork.
 - `videos.source_key` and an index: used by the duplicate-upload detector.
 
-**Automatic frame thumbnails.** When a direct-link video is published without a
-thumbnail, the server captures a frame with a bundled ffmpeg
-(`@ffmpeg-installer/ffmpeg`, linux-x64 binary, ~68 MB) and stores a 1280×720
-JPEG in the `video-thumbnails` bucket. The binary is included in the
-`/api/admin/videos/thumbnails` function via
-`outputFileTracingIncludes` in `next.config.mjs`. Set `FFMPEG_PATH` to use another
-binary. Embed (player-page) links cannot be framed; add those thumbnails by hand.
-Existing videos can be filled in from /admin/videos (“Generate thumb” or bulk
-“Generate thumbnails”).
+**Existing manual frame tools.** Direct-media records without thumbnails can use
+/admin/videos “Generate thumb” / bulk “Generate thumbnails”. This captures actual
+frames via bundled ffmpeg (`@ffmpeg-installer/ffmpeg`, linux-x64) and stores 1280×720
+JPEGs. `next.config.mjs` traces the binary for `/api/admin/videos/thumbnails`;
+`FFMPEG_PATH` optionally selects another executable. This is independent of the
+new automatic local-frame pipeline described in section D. Embed pages cannot be
+used as source videos. Existing manual thumbnail/category/carousel tools remain.
 
-**Duplicate uploads.** Publishing skips a link that matches an existing video
-(same host and path, ignoring query strings), or one with the same file name on
-another host. The upload page shows the match; tick “Publish anyway” to add it.
+**Duplicate protection.** The uploader now reserves a private session and a unique
+administrator/filename/size/MIME tuple. There is no URL publisher, override gate,
+“Publish anyway”, remote import or retired-provider fallback. `source_key` is
+historical metadata, not a current URL-upload option.
 
 ---
 
@@ -701,7 +777,8 @@ fly deploy
 | `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional pin for the IPN callback URL the app sends with every payment (must be an absolute URL ending in `/api/nowpayments/ipn`) | No | Your domain | Hosting env | prod (optional) | Admin → System Health shows `URL source`: `NOWPAYMENTS_IPN_CALLBACK_URL`; an invalid value is reported as a config warning and ignored | Yes |
 | `NOWPAYMENTS_DEFAULT_PAY_CURRENCY` | Default NOWPayments asset identifier | No | One of: usdterc20, usdttrc20, usdtbsc, usdtsol, btc, eth, trx, bnbbsc, sol | Hosting env | prod | Must be enabled in the NOWPayments dashboard; checkout validates every selection server-side | Yes |
 | `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key for `x-nowpayments-sig` verification | No | NOWPayments Dashboard → Store Settings → IPN Secret Key | Hosting secrets | prod | Admin → System Health shows IPN secret set; every IPN is rejected without it | Yes |
-| `FILEKOSH_API_KEY` | FileKosh server bearer key | No | Dashboard → API (official specification) | Hosting secrets | uploads | Section D staging upload test | Yes |
+| `BUNNY_STREAM_LIBRARY_ID` | Selected Video Library ID | No | Stream → Library → API | Server env | uploads/playback | Section D | Yes |
+| `BUNNY_STREAM_API_KEY` | Selected Video Library API Key | No | Stream → Library → API | Hosting secrets | uploads | Section D staging upload test | Yes |
 | `OPENROUTER_API_KEY` | OpenRouter API key for AI metadata suggestions | No | https://openrouter.ai/keys → Create key | Hosting secrets | prod (optional) | Test via System Health → Test OpenRouter, or `/api/metadata/suggest` as admin | Yes |
 | `OPENROUTER_MODEL` | OpenRouter model slug | No | `deepseek/deepseek-v3.2` (default) | Hosting env | prod (optional) | Check https://openrouter.ai/models for the slug | No |
 | `OPENROUTER_MAX_OUTPUT_TOKENS` | Output-token budget for one metadata suggestion | No | `2048` (default) | Hosting env | prod (optional) | Raise it if suggestions are truncated | No |
@@ -709,7 +786,7 @@ fly deploy
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |
 
-**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `FILEKOSH_API_KEY`, `OPENROUTER_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
+**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `BUNNY_STREAM_API_KEY`, `OPENROUTER_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
 
 ---
 
@@ -740,7 +817,7 @@ npx playwright test
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
 - [ ] Device uploads at `/admin/videos/upload` → multiple local files, real progress, local thumbnails and verified completion.
 - [ ] Choose a category, review editable filename-derived titles and generated thumbnails before upload. Existing metadata suggestion tools remain independent.
-- [ ] Confirmed READY metadata plus atomic finalization sets published/public/cleared/approved and appears on public listings. Unconfirmed sessions never appear publicly.
+- [ ] Verified Bunny Finished (4) plus stored thumbnail and atomic finalization sets published/public/cleared/approved and appears on public listings. Unconfirmed sessions never appear publicly.
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
 - [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject
@@ -789,11 +866,11 @@ npx playwright test
 - [ ] No API key, secret or wallet material appears in `payment_events`, `audit_logs` or server logs
 
 **Video hosting:**
-- [ ] Direct-URL and generic embed publishing, category/metadata/duplicate handling and optional thumbnails work with an active staging administrator
+- [ ] Bunny device upload publishing, category/metadata/duplicate handling and required automatic thumbnails work with an active staging administrator
 - [ ] Historic retired-provider records remain intact and show an unsupported message; no API calls occur
-- [ ] FileKosh gates are enabled only after section D verification and authorized live acceptance
-- [ ] Before future enablement: genuine device upload, accurate byte progress, verified completion/readiness, stable embed playback and failure/cancellation/idempotency tests all pass
-- [ ] FileKosh jobs never expose keys or upload authorization publicly
+- [ ] Bunny Stream has passed section D authorized live acceptance
+- [ ] Before launch: genuine device upload, accurate byte progress, verified completion/readiness, stable embed playback and failure/cancellation/idempotency tests all pass
+- [ ] Bunny jobs never expose keys or upload authorization publicly
 
 **Email:**
 - [ ] Resend domain verified (check Resend dashboard)
@@ -853,15 +930,15 @@ update invoices set status='paid', paid_at=now() where number='...';
 
 **Video hosting outage:**
 1. Check provider status page
-2. If FileKosh is unavailable, keep failed sessions for reconciliation. Do not create a duplicate or proxy video bytes through the app server.
-3. Existing published videos remain accessible because their stored embed/watch URLs do not expire
+2. If Bunny Stream is unavailable, keep failed sessions for reconciliation. Do not create a duplicate or proxy video bytes through the app server.
+3. Stored embed identities remain stable, but a provider outage, deletion or security restriction can still prevent playback
 
 ---
 
 ## Unresolved Provider Approvals and Blockers
 
-1. **Filekosh API and content/use approval**: its official API specification is incomplete for upload confirmation. Obtain the clarification and written content/use permission listed in `docs/FILEKOSH_API_RESEARCH.md`. The implemented upload integration remains gated until verification.
-2. **Hosted-upload implementation and live acceptance**: enablement needs authorized staging credentials, documented browser PUT transport, the new forward migration, and real upload → readiness → publish → desktop/mobile iframe playback evidence. Current passing unit tests/build do not prove Filekosh functionality.
+1. **Bunny account/content-use confirmation**: AUP is conditional, not evidence this catalogue/account is approved. Obtain support/legal confirmation.
+2. **Live acceptance**: authorized staging credentials, forward migration, real TUS upload, generated thumbnail storage, Finished status and desktop/mobile playback must be verified. Automated tests do not prove live Bunny functionality.
 3. **Vercel Hobby**: Not suitable for commercial adult site. Hosting decision required — see `GO_LIVE_CHECKLIST.md`.
 4. **Age assurance**: Frontend gate alone not robust. Legal review required for jurisdiction-specific verification.
 5. **Legal identity**: Owner must provide real business details before publishing Terms/Privacy.

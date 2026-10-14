@@ -52,6 +52,8 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
       description,
       thumbnail_url,
       provider,
+      provider_file_id,
+      bunny_library_id,
       playable_url,
       embed_url,
       duration_seconds,
@@ -91,7 +93,7 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
 
   // A direct file is fetched by the browser from its own host: open that
   // connection, and start the poster, while the document is still parsing.
-  const playbackSource = selectPlaybackSource(video.playable_url, video.embed_url, video.provider);
+  const playbackSource = selectPlaybackSource(video.playable_url, video.embed_url, video.provider, video.bunny_library_id, video.provider_file_id);
   let mediaOrigin: string | null = null;
   if (playbackSource.kind === "direct") {
     try {
@@ -140,6 +142,8 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
 
       <VideoPlayer
         provider={video.provider}
+        libraryId={video.bunny_library_id}
+        videoId={video.provider_file_id}
         id={video.id}
         title={video.title}
         poster={video.thumbnail_url}

@@ -1,7 +1,11 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { inspectNowpaymentsSetup } from "@/lib/nowpayments/client";
 import { getSiteUrl } from "@/lib/site";
-import { uploadConfiguration } from "@/lib/video/filekosh";
+import {
+  uploadConfiguration,
+  bunnyRequest,
+  providerError,
+} from "@/lib/video/bunny";
 import { openRouterDiagnostics } from "@/lib/metadata/openrouter";
 import NowpaymentsCheck from "./NowpaymentsCheck";
 import OpenRouterCheck from "./OpenRouterCheck";
@@ -14,7 +18,11 @@ export default async function SystemHealthAdmin() {
   let dbLatency = "—";
   try {
     const start = Date.now();
-    const { error } = await supabase.from("site_settings").select("id").limit(1).single();
+    const { error } = await supabase
+      .from("site_settings")
+      .select("id")
+      .limit(1)
+      .single();
     const latency = Date.now() - start;
     dbStatus = error ? `Error: ${error.message}` : "Operational";
     dbLatency = `${latency} ms`;
@@ -33,7 +41,8 @@ export default async function SystemHealthAdmin() {
       payDetail = setup.error;
     } else if (!setup.ipnSecretConfigured) {
       payStatus = "IPN secret missing";
-      payDetail = "NOWPAYMENTS_IPN_SECRET is not set — incoming payment notifications will be rejected";
+      payDetail =
+        "NOWPAYMENTS_IPN_SECRET is not set — incoming payment notifications will be rejected";
     } else if (setup.configWarnings.length) {
       payStatus = "Needs attention";
       payDetail = setup.configWarnings[0];
@@ -49,19 +58,76 @@ export default async function SystemHealthAdmin() {
   const aiStatus = ai.configured ? "Configured" : "Not configured";
 
   let videoStatus = "Configuration blocked";
-  try { uploadConfiguration(); videoStatus = "Configured (not live-tested)"; } catch { /* Fail closed, no secrets. */ }
+  try {
+    uploadConfiguration();
+    await bunnyRequest("?page=1&itemsPerPage=1");
+    videoStatus = "Operational — API connected";
+  } catch (e) {
+    videoStatus = providerError(e).error;
+  }
+
+  let videoLifecycle =
+    "Unknown — apply the Bunny migration before checking sessions";
+  try {
+    const { data, error } = await supabase
+      .from("bunny_uploads")
+      .select("state,provider_status,last_error")
+      .order("updated_at", { ascending: false })
+      .limit(100);
+    if (!error) {
+      const rows = (data || []) as {
+        state: string;
+        provider_status: number | null;
+        last_error?: string | null;
+      }[];
+      const count = (states: string[]) =>
+        rows.filter((r) => states.includes(r.state)).length;
+      const thumbnails = rows.filter((r) =>
+        /thumbnail/i.test(r.last_error || ""),
+      ).length;
+      videoLifecycle = `${count(["uploading", "creating"])} awaiting/uploading · ${count(["processing"])} processing · ${count(["ready"])} ready awaiting save · ${count(["completed"])} completed · ${count(["failed"])} failed · ${count(["cancelled"])} paused · ${thumbnails} thumbnail failures (latest 100 sessions)`;
+    }
+  } catch {
+    /* Honest unknown, never fabricated availability. */
+  }
 
   const checks = [
-    { name: "Database", status: dbStatus, latency: dbLatency, desc: "Supabase PostgreSQL" },
-    { name: "Auth", status: "Operational", latency: "—", desc: "Supabase Auth" },
-    { name: "NOWPayments API", status: payStatus, latency: "—", desc: payDetail },
+    {
+      name: "Database",
+      status: dbStatus,
+      latency: dbLatency,
+      desc: "Supabase PostgreSQL",
+    },
+    {
+      name: "Auth",
+      status: "Operational",
+      latency: "—",
+      desc: "Supabase Auth",
+    },
+    {
+      name: "NOWPayments API",
+      status: payStatus,
+      latency: "—",
+      desc: payDetail,
+    },
     {
       name: "Video Provider",
       status: videoStatus,
       latency: "—",
-      desc: "FileKosh device uploads. This is a configuration check only; validate a real direct upload and embed on staging.",
+      desc: "Bunny Stream read-only API connectivity. This does not prove TUS upload or playback; verify a real staging upload. Processing and thumbnail failures appear in upload sessions.",
     },
-    { name: "Resend", status: process.env.RESEND_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "Transactional email" },
+    {
+      name: "Bunny upload lifecycle",
+      status: "Session diagnostics",
+      latency: "—",
+      desc: videoLifecycle,
+    },
+    {
+      name: "Resend",
+      status: process.env.RESEND_API_KEY ? "Configured" : "Not configured",
+      latency: "—",
+      desc: "Transactional email",
+    },
     {
       name: "AI metadata (OpenRouter)",
       status: aiStatus,
@@ -75,17 +141,29 @@ export default async function SystemHealthAdmin() {
   return (
     <div>
       <h1 className="text-[20px] font-semibold">System Health</h1>
-      <p className="mt-1 text-[12px] text-ink-3">Real checks only — no hardcoded uptime. Shows Unknown if cannot be checked.</p>
+      <p className="mt-1 text-[12px] text-ink-3">
+        Real checks only — no hardcoded uptime. Shows Unknown if cannot be
+        checked.
+      </p>
 
       <div className="mt-6 grid gap-3 md:grid-cols-2">
         {checks.map((c) => (
-          <div key={c.name} className="rounded-lg border border-line bg-pcard p-4">
+          <div
+            key={c.name}
+            className="rounded-lg border border-line bg-pcard p-4"
+          >
             <div className="flex items-center justify-between">
               <p className="text-[13px] font-medium">{c.name}</p>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] ${c.status.includes("Operational") || c.status.includes("Configured") || c.status.includes("direct_url") ? "bg-emerald-500/10 text-emerald-400" : c.status.includes("Unknown") ? "bg-zinc-500/10 text-zinc-400" : "bg-amber-500/10 text-amber-300"}`}>{c.status}</span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] ${c.status.includes("Operational") || c.status.includes("Configured") || c.status.includes("direct_url") ? "bg-emerald-500/10 text-emerald-400" : c.status.includes("Unknown") ? "bg-zinc-500/10 text-zinc-400" : "bg-amber-500/10 text-amber-300"}`}
+              >
+                {c.status}
+              </span>
             </div>
             <p className="mt-1 text-[11px] text-ink-3">{c.desc}</p>
-            <p className="mt-2 text-[11px] tabular-nums">Latency: {c.latency}</p>
+            <p className="mt-2 text-[11px] tabular-nums">
+              Latency: {c.latency}
+            </p>
           </div>
         ))}
       </div>
@@ -95,7 +173,12 @@ export default async function SystemHealthAdmin() {
       <OpenRouterCheck />
 
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
-        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the NOWPayments API. FileKosh configuration is checked without making provider requests. Use “Test OpenRouter” to prove the AI metadata key with a live call.</p>
+        <p className="text-[11px] text-ink-3">
+          Last checked: {new Date().toLocaleString()} — real diagnostic requests
+          performed for Database and the NOWPayments API. Bunny Stream
+          connectivity is checked with a read-only library request. Use “Test
+          OpenRouter” to prove the AI metadata key with a live call.
+        </p>
       </div>
     </div>
   );

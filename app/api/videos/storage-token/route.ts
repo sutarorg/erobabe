@@ -5,7 +5,7 @@ import { createThumbnailUploadTarget } from "@/lib/video/storage";
 /**
  * Issues a short-lived signed upload URL for a thumbnail image.
  *
- * Video bytes upload directly to FileKosh and never pass through
+ * Video bytes upload directly to Bunny Stream and never pass through
  * Erobabe. Thumbnails are small enough to live in Supabase Storage and keep
  * using a signed upload URL.
  */

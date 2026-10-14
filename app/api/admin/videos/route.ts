@@ -7,7 +7,7 @@ import { revalidatePublicTag } from "@/lib/public/revalidate";
  * Admin video maintenance: change/remove a thumbnail, or delete a video.
  *
  * Nothing here touches provider video bytes. Deleting removes the catalog row,
- * not remote FileKosh media; provider-side retention/cleanup is separate. The thumbnail, which
+ * not remote Bunny Stream media; provider-side retention/cleanup is separate. The thumbnail, which
  * *is* uploaded to Supabase Storage, is removed from the bucket as well (best
  * effort: a missing object never fails the database change).
  */

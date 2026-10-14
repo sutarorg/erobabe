@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, gated FileKosh device uploads, Resend email, AI metadata (DeepSeek V3.2 via OpenRouter), and SEO optimization.
+Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, Bunny Stream resumable device uploads, Resend email, AI metadata (DeepSeek V3.2 via OpenRouter), and SEO optimization.
 
 ## Quick Start
 
@@ -28,30 +28,33 @@ Open http://localhost:3000
 - NOWPayments (crypto payments)
 - Resend (transactional email)
 - OpenRouter API, DeepSeek V3.2 (server-generated video metadata)
-- FileKosh presigned browser PUT uploads (provider verification required)
+- Bunny Stream direct pre-signed TUS uploads (`tus-js-client`)
 - Tailwind CSS 4
 
 ## Video Uploads
 
-`/admin/videos/upload` accepts multiple local video files through drag-and-drop or
-**Choose videos**. There is no URL-import method. Videos PUT directly from the
-browser to FileKosh storage, with measured per-file progress and bounded concurrency.
-Actual local frames are captured into JPEG thumbnails and PUT to Supabase Storage.
-A video becomes public only after verified `READY` metadata and atomic database persistence.
-Existing direct-media and generic-embed records keep stored playback. Retired
-Streamtape records are retained but explicitly unsupported; no provider API or relay remains.
+`/admin/videos/upload` accepts multiple local videos through drag-and-drop or
+**Choose videos**. Bytes go directly to Bunny Stream's TUS endpoint, never through
+Next.js, Vercel functions or Supabase Storage. Per-file progress is measured;
+concurrency is bounded to two. Cancellation pauses transfer; reselecting the same
+source recovers its server session and resumable upload identity.
 
-**Not yet live-verified:** The official FileKosh docs still omit the confirmation
-body, accepted format matrix and upload headers/CORS details. The implementation
-fails closed until the operator supplies a verified contract and browser-upload
-configuration. A key alone does not enable uploads. See [deployment section D](DEPLOYMENT.md#d-filekosh-device-uploads)
-and [the API research](docs/FILEKOSH_API_RESEARCH.md). Do not fabricate configuration
-or treat passing mocks as a successful provider upload.
+Ten actual frames throughout each clip are scored for detail, contrast, colour,
+exposure and composition. The best frame becomes a restrained, sharpened 1280×720
+JPEG stored via a signed upload to `video-thumbnails`. Thumbnail failure is
+recoverable and prevents publication. Optional consent-gated OpenRouter vision
+ranking is disabled by default and always falls back to local scoring.
 
-Apply migration `00000000000011_filekosh_uploads.sql` forward, without editing old
-migrations. The generated thumbnail uses `video-thumbnails`; videos never pass
-through Next.js or Supabase. Existing manual thumbnail/category/carousel tools,
-authentication, advertiser and payment features remain.
+Publication requires Bunny's documented Finished status (4), a verified stored
+thumbnail and atomic session/video/job completion. Playback uses the validated
+stored library ID/GUID at `iframe.mediadelivery.net`. Existing direct-media playback
+and administrative tools remain; retired hosted records are unpublished and marked
+**requiring re-upload**, with metadata preserved. No media migration is claimed.
+
+Apply the new forward migration `00000000000012_bunny_stream_uploads.sql` after all
+existing migrations; do not edit applied history. See [deployment section D](DEPLOYMENT.md#d-bunny-stream-device-uploads)
+for credentials, content policy, recovery and a genuine staging upload test.
+**Automated mocks/build are not live Bunny acceptance evidence.**
 
 ## Routes
 
@@ -69,7 +72,7 @@ SEO: `/sitemap.xml`, `/video-sitemap.xml`, `/robots.txt`
 npm run type-check
 npm run test
 npm run build
-npx playwright test
+npm run test:e2e
 ```
 
 ## Production Blockers

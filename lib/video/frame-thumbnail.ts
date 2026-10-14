@@ -5,13 +5,14 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { assertPublicHttpUrl, type ServiceClient } from "@/lib/video/publishing";
 import { ensureStorageBuckets, THUMBNAIL_BUCKET } from "@/lib/video/storage";
+import { THUMBNAIL_CONTRAST, THUMBNAIL_SATURATION } from "@/lib/video/thumbnail-style";
 import { selectThumbnailFrame } from "@/lib/video/thumbnail-quality";
 
 /**
  * Samples actual frames from a remote video and chooses the clearest,
  * well-exposed, colourful candidate rather than a statistically average frame.
  * The selected image receives a restrained saturation, contrast, sharpening,
- * and vignette pass and is saved as a 1280×720 JPEG. No scene is invented.
+ * pass and is saved as a 1280×720 JPEG. No scene is invented.
  *
  * ffmpeg fetches media bytes over HTTP(S), using range requests when the host
  * supports them. Temporary samples are removed after every attempt. It runs
@@ -27,8 +28,8 @@ const ANALYSIS_HEIGHT = 90;
 /** Colour grade, applied to each full-size candidate. */
 export const THUMBNAIL_FILTER =
   "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,setsar=1," +
-  "eq=saturation=1.35:contrast=1.12:brightness=0.03:gamma=1.04," +
-  "unsharp=5:5:0.7:5:5:0.0,vignette=angle=PI/5";
+  `eq=saturation=${THUMBNAIL_SATURATION}:contrast=${THUMBNAIL_CONTRAST}:brightness=0.01:gamma=1.02,` +
+  "unsharp=5:5:0.45:5:5:0.0";
 
 // Keep a final frame even for clips shorter than the two-second sample interval.
 const SAMPLE_FILTER = "fps=1/2:start_time=0:eof_action=pass";

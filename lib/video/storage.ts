@@ -4,7 +4,7 @@ import type { ServiceClient } from "@/lib/video/publishing";
 /**
  * Thumbnail storage only.
  *
- * Video bytes upload directly to FileKosh, never Supabase or the application server.
+ * Video bytes upload directly to Bunny Stream, never Supabase or the application server.
  * Thumbnails are small enough for a signed upload URL.
  */
 
