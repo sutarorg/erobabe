@@ -4,17 +4,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { UploadCloud, CheckCircle2, LoaderCircle, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import {
-  validateVideo,
-  type UploadPolicy,
-} from "@/lib/video/filekosh-validation";
+import { validateVideo, type UploadPolicy } from "@/lib/video/bunny-validation";
 import { localVideoThumbnail } from "@/src/utils/localVideoThumbnail";
+import {
+  uploadBunnyVideo,
+  type BunnyUploadTarget,
+} from "@/src/utils/bunnyUpload";
 import { uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
 
 type Phase =
   | "Queued"
   | "Preparing"
   | "Uploading"
+  | "Processing"
   | "Confirming"
   | "Completed"
   | "Failed"
@@ -42,6 +44,9 @@ type Recovery = {
   state: string;
   provider_id?: string;
   thumbnail_path?: string;
+  mime_type: string;
+  size_bytes: number;
+  category_id: string;
 };
 async function json<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, {
@@ -78,6 +83,16 @@ export default function UploadPage() {
   const controllers = useRef(new Map<string, AbortController>());
   const alive = useRef(true);
   const busy = useRef(false);
+  const decodeQueue = useRef<Promise<unknown>>(Promise.resolve());
+  function prepareThumbnail(file: File) {
+    const result = decodeQueue.current.then(() =>
+      alive.current
+        ? localVideoThumbnail(file, policy?.visionRanking === true)
+        : { thumbnail: null },
+    );
+    decodeQueue.current = result.catch(() => undefined);
+    return result;
+  }
   const patch = (id: string, value: Partial<Item>) => {
     current.current = current.current.map((i) =>
       i.id === id ? { ...i, ...value } : i,
@@ -90,7 +105,7 @@ export default function UploadPage() {
         policy: UploadPolicy | null;
         configurationError: string | null;
         sessions: Recovery[];
-      }>("/api/videos/filekosh/sessions");
+      }>("/api/videos/bunny/sessions");
       if (!alive.current) return;
       setPolicy(result.policy);
       setRecovery(result.sessions);
@@ -147,14 +162,56 @@ export default function UploadPage() {
         )
       )
         continue;
+      let interrupted = recovery.find(
+        (r) =>
+          r.original_name === file.name &&
+          Number(r.size_bytes) === file.size &&
+          r.mime_type === file.type,
+      );
+      const savedKey = `erobabe-session:${file.name}:${file.size}:${file.lastModified}`;
+      let savedId: string | null = null;
+      try {
+        savedId = localStorage.getItem(savedKey);
+      } catch {
+        /* Storage may be unavailable. */
+      }
+      if (!interrupted && savedId) {
+        try {
+          const result = await json<{ session: Recovery | null }>(
+            `/api/videos/bunny/sessions?sessionId=${encodeURIComponent(savedId)}`,
+          );
+          if (
+            result.session &&
+            result.session.original_name === file.name &&
+            Number(result.session.size_bytes) === file.size &&
+            result.session.mime_type === file.type
+          )
+            interrupted = result.session;
+          else savedId = null;
+        } catch {
+          savedId = null;
+        }
+      }
+      const id = interrupted?.id || savedId || crypto.randomUUID();
+      if ([...current.current, ...accepted].some((i) => i.id === id)) continue;
+      try {
+        localStorage.setItem(savedKey, id);
+      } catch {
+        /* Server recovery remains available. */
+      }
       accepted.push({
-        id: crypto.randomUUID(),
+        id,
+        categoryId: interrupted?.category_id,
+        thumbnailPath: interrupted?.thumbnail_path,
+
         file,
         title:
+          interrupted?.title ||
           file.name
             .replace(/\.[^.]+$/, "")
             .replace(/[_-]+/g, " ")
-            .slice(0, 240) || "Untitled",
+            .slice(0, 240) ||
+          "Untitled",
         phase: "Preparing",
         percent: 0,
       });
@@ -164,15 +221,20 @@ export default function UploadPage() {
     setError(rejected.join("\n"));
     // Sequential decoding keeps browser memory bounded independently of upload concurrency.
     for (const item of accepted) {
-      const result = await localVideoThumbnail(item.file);
+      const result = await prepareThumbnail(item.file);
       if (!alive.current || !current.current.some((i) => i.id === item.id))
         continue;
+      if (result.thumbnail && item.preview) URL.revokeObjectURL(item.preview);
       patch(item.id, {
         ...result,
         preview: result.thumbnail
           ? URL.createObjectURL(result.thumbnail)
           : undefined,
-        phase: "Queued",
+        phase: result.thumbnail || item.thumbnailPath ? "Queued" : "Failed",
+        error:
+          result.thumbnail || item.thumbnailPath
+            ? undefined
+            : "Thumbnail generation failed. Retry with the same browser-decodable source file.",
       });
     }
   }
@@ -181,6 +243,22 @@ export default function UploadPage() {
     const controller = new AbortController();
     controllers.current.set(item.id, controller);
     try {
+      if (!latest.thumbnail && !latest.thumbnailPath) {
+        patch(item.id, { phase: "Preparing", error: undefined });
+        const generated = await prepareThumbnail(item.file);
+        patch(item.id, {
+          ...generated,
+          preview: generated.thumbnail
+            ? URL.createObjectURL(generated.thumbnail)
+            : undefined,
+        });
+        latest = current.current.find((i) => i.id === item.id)!;
+        if (!latest.thumbnail)
+          throw new Error(
+            "Thumbnail generation failed. Retry with a browser-decodable source; video will not be published without a real frame thumbnail.",
+          );
+      }
+      if (controller.signal.aborted) throw new UploadAbortedError();
       if (!latest.transferred) {
         patch(item.id, {
           phase: "Preparing",
@@ -188,28 +266,37 @@ export default function UploadPage() {
           categoryId: latest.categoryId || categoryId,
         });
         latest = current.current.find((i) => i.id === item.id)!;
-        const session = await json<{
-          uploadUrl: string;
-          headers: Record<string, string>;
-        }>("/api/videos/filekosh/sessions", {
-          sessionId: item.id,
-          title: item.title,
-          originalName: item.file.name,
-          mimeType: item.file.type,
-          sizeBytes: item.file.size,
-          categoryId: latest.categoryId,
-          ...(item.duration === undefined
-            ? {}
-            : { durationSeconds: Math.floor(item.duration) }),
-        });
+        const session = await json<BunnyUploadTarget>(
+          "/api/videos/bunny/sessions",
+          {
+            sessionId: item.id,
+            title: item.title,
+            originalName: item.file.name,
+            mimeType: item.file.type,
+            sizeBytes: item.file.size,
+            categoryId: latest.categoryId,
+            ...(item.duration === undefined
+              ? {}
+              : { durationSeconds: Math.floor(item.duration) }),
+          },
+        );
+        if (session.completed) {
+          patch(item.id, {
+            phase: "Completed",
+            slug: session.slug,
+            percent: 100,
+          });
+          return;
+        }
         if (controller.signal.aborted) throw new UploadAbortedError();
-        patch(item.id, { phase: "Uploading", percent: 0 });
-        await uploadWithProgress(session.uploadUrl, item.file, {
-          contentType: "",
-          headers: session.headers,
-          signal: controller.signal,
-          onProgress: (p) => patch(item.id, { percent: p.percent }),
-        });
+        if (!session.transferred) {
+          patch(item.id, { phase: "Uploading", percent: 0 });
+          await uploadBunnyVideo(session, item.file, {
+            title: latest.title,
+            signal: controller.signal,
+            onProgress: (p) => patch(item.id, { percent: p.percent }),
+          });
+        }
         patch(item.id, { transferred: true });
       }
       // Cancellation is disabled after transfer: persistence must not be abandoned accidentally.
@@ -238,16 +325,78 @@ export default function UploadPage() {
         }
       }
       latest = current.current.find((i) => i.id === item.id)!;
-      const done = await json<{ slug: string }>(
-        "/api/videos/filekosh/confirm",
-        { sessionId: item.id, thumbnailPath: latest.thumbnailPath || null },
+      for (let attempt = 0; attempt < 120; attempt++) {
+        if (controller.signal.aborted) throw new UploadAbortedError();
+        const done = await json<{
+          slug?: string;
+          processing?: boolean;
+          providerStatus?: string;
+          progress?: number;
+        }>("/api/videos/bunny/confirm", {
+          sessionId: item.id,
+          thumbnailPath: latest.thumbnailPath || null,
+        });
+        if (!done.processing && done.slug) {
+          patch(item.id, {
+            phase: "Completed",
+            percent: 100,
+            slug: done.slug,
+            warning: undefined,
+          });
+          try {
+            localStorage.removeItem(
+              `erobabe-session:${item.file.name}:${item.file.size}:${item.file.lastModified}`,
+            );
+          } catch {
+            /* optional cache */
+          }
+          return;
+        }
+        patch(item.id, {
+          phase: "Processing",
+          warning: `Bunny ${done.providerStatus || "processing"} · ${Math.floor(done.progress || 0)}% encoding`,
+        });
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => {
+            clearTimeout(timer);
+            reject(new UploadAbortedError());
+          };
+          const timer = setTimeout(() => {
+            controller.signal.removeEventListener("abort", abort);
+            resolve();
+          }, 5000);
+          controller.signal.addEventListener("abort", abort, { once: true });
+        });
+      }
+      throw new Error(
+        "Bunny is still processing. Use Check and finish later; video and thumbnail are saved in the session.",
       );
-      patch(item.id, { phase: "Completed", percent: 100, slug: done.slug });
     } catch (e) {
+      if (
+        /Thumbnail (storage failed|generation required)/i.test(
+          (e as Error).message,
+        )
+      )
+        patch(item.id, { thumbnailPath: undefined });
       patch(item.id, {
         phase: e instanceof UploadAbortedError ? "Cancelled" : "Failed",
         error: (e as Error).message,
       });
+      // Persist only a bounded diagnostic enum, never browser-supplied raw errors or bytes.
+      await fetch("/api/videos/bunny/sessions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: item.id,
+          reason:
+            e instanceof UploadAbortedError
+              ? "user_cancelled"
+              : /thumbnail/i.test((e as Error).message)
+                ? "thumbnail_failed"
+                : "upload_failed",
+        }),
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => undefined);
     } finally {
       controllers.current.delete(item.id);
     }
@@ -284,10 +433,17 @@ export default function UploadPage() {
     setRecovering(session.id);
     setError("");
     try {
-      await json("/api/videos/filekosh/confirm", {
+      const result = await json<{
+        processing?: boolean;
+        providerStatus?: string;
+      }>("/api/videos/bunny/confirm", {
         sessionId: session.id,
         thumbnailPath: session.thumbnail_path || null,
       });
+      if (result.processing)
+        setError(
+          `Bunny ${result.providerStatus}. Processing is in progress; check again later.`,
+        );
       await load();
     } catch (e) {
       setError((e as Error).message);
@@ -303,7 +459,7 @@ export default function UploadPage() {
         <div>
           <h1 className="text-2xl font-semibold">Upload videos</h1>
           <p className="mt-2 text-sm text-ink-3">
-            Local files → FileKosh. Automatic frame thumbnails are stored in
+            Local files → Bunny Stream. Automatic frame thumbnails are stored in
             Erobabe.
           </p>
         </div>
@@ -466,9 +622,12 @@ export default function UploadPage() {
                 >
                   {item.phase === "Completed" ? (
                     <CheckCircle2 className="h-4 w-4 text-green-400" />
-                  ) : ["Preparing", "Uploading", "Confirming"].includes(
-                      item.phase,
-                    ) ? (
+                  ) : [
+                      "Preparing",
+                      "Uploading",
+                      "Confirming",
+                      "Processing",
+                    ].includes(item.phase) ? (
                     <LoaderCircle className="h-4 w-4 animate-spin" />
                   ) : null}
                   {item.phase}
@@ -505,7 +664,7 @@ export default function UploadPage() {
                       className="text-accent disabled:opacity-40"
                     >
                       {item.transferred
-                        ? "Retry confirmation / save"
+                        ? "Retry thumbnail / processing / save"
                         : "Retry transfer"}
                     </button>
                   )}
@@ -542,9 +701,11 @@ export default function UploadPage() {
         <section className="mt-8 rounded-xl border border-line bg-pcard p-5">
           <h2 className="font-semibold">Recover interrupted sessions</h2>
           <p className="mt-2 text-xs text-ink-3">
-            Check confirmation before uploading again. Partial or expired
-            transfers and uncertain creation outcomes require provider
-            reconciliation; this never creates another video.
+            Re-select the same source file with Choose videos to resume transfer
+            or regenerate a missing thumbnail. Existing metadata and provider
+            identity are retained. Check and finish saves ready videos without
+            uploading again. Unknown creation outcomes require dashboard
+            reconciliation.
           </p>
           {recovery
             .filter((s) => !items.some((i) => i.id === s.id))

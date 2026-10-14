@@ -11,6 +11,8 @@ type Props = {
   playableUrl?: string | null;
   embedUrl?: string | null;
   provider?: string | null;
+  libraryId?: string | null;
+  videoId?: string | null;
 };
 
 /** Give a visitor a beat with the poster before buffering starts on its own. */
@@ -167,11 +169,93 @@ function NativePlayer({
   );
 }
 
+function BunnyPlayer({
+  url,
+  title,
+  poster,
+}: {
+  url: string;
+  title: string;
+  poster?: string | null;
+}) {
+  const [started, setStarted] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!started || loaded) return;
+    const timer = setTimeout(() => setFailed(true), 20000);
+    return () => clearTimeout(timer);
+  }, [started, loaded, attempt]);
+  return (
+    <div className="relative h-full w-full">
+      {started && (
+        <iframe
+          key={attempt}
+          src={`${url}?autoplay=true&responsive=true`}
+          title={title}
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+          allowFullScreen
+          referrerPolicy="strict-origin-when-cross-origin"
+          className="h-full w-full border-0"
+          onLoad={() => {
+            setLoaded(true);
+            setFailed(false);
+          }}
+          onError={() => setFailed(true)}
+        />
+      )}
+      {!started && (
+        <button
+          onClick={() => setStarted(true)}
+          aria-label="Play video"
+          className="absolute inset-0 flex items-center justify-center"
+        >
+          {poster && (
+            <img
+              src={poster}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover opacity-80"
+            />
+          )}
+          <Play className="relative h-16 w-16 rounded-full bg-accent p-4 text-white" />
+        </button>
+      )}
+      {started && !loaded && !failed && (
+        <p
+          role="status"
+          className="absolute inset-0 flex items-center justify-center bg-black/70 text-white"
+        >
+          Loading Bunny player…
+        </p>
+      )}
+      {failed && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-white">
+          <p role="alert">
+            Player unavailable. Check your connection or try again.
+          </p>
+          <button
+            onClick={() => {
+              setFailed(false);
+              setLoaded(false);
+              setAttempt((a) => a + 1);
+            }}
+          >
+            Retry playback
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function VideoPlayer(props: Props) {
   const source = selectPlaybackSource(
     props.playableUrl,
     props.embedUrl,
     props.provider,
+    props.libraryId,
+    props.videoId,
   );
   const key = "url" in source ? `${props.id}:${source.url}` : props.id;
 
@@ -184,13 +268,20 @@ export default function VideoPlayer(props: Props) {
           title={props.title}
           poster={props.poster}
         />
+      ) : source.kind === "embed" && props.provider === "bunny" ? (
+        <BunnyPlayer
+          key={key}
+          url={source.url}
+          title={props.title}
+          poster={props.poster}
+        />
       ) : source.kind === "embed" ? (
         <iframe
           key={key}
           src={source.url}
           title={props.title}
           className="h-full w-full"
-          allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
           sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
           allowFullScreen
           loading="lazy"

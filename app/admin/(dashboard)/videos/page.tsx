@@ -8,7 +8,7 @@ export default async function AdminVideosPage() {
     supabase
       .from("videos")
       .select(
-        "id, slug, title, status, visibility, provider, thumbnail_url, playable_url, embed_url, view_count, created_at, carousel_position, category_id, category:categories(label)"
+        "id, slug, title, status, visibility, provider, requires_reupload, thumbnail_url, playable_url, embed_url, view_count, created_at, carousel_position, category_id, category:categories(label)"
       )
       .order("created_at", { ascending: false })
       .limit(1000),
@@ -24,6 +24,7 @@ export default async function AdminVideosPage() {
       status: String(video.status || "draft"),
       visibility: video.visibility || null,
       provider: video.provider || null,
+      requires_reupload: Boolean(video.requires_reupload),
       thumbnail_url: video.thumbnail_url || null,
       playable_url: video.playable_url || null,
       embed_url: video.embed_url || null,

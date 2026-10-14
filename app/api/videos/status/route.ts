@@ -8,7 +8,7 @@ import { errorMessageFrom, errorStatusFrom } from "@/lib/video/publishing";
  * For direct_url records the video is already published — no provider
  * conversion or reconciliation is needed. Legacy records from retired
  * integrations (streamtape, ufoload, uqload) are returned as stored history:
- * their playback/embed URLs still render, but nothing contacts the retired
+ * their metadata is archived and requires re-upload; nothing contacts the retired
  * provider APIs.
  */
 export async function GET(req: NextRequest) {
@@ -51,7 +51,12 @@ export async function GET(req: NextRequest) {
     let providerState: "ready" | "processing" | "failed" | null = null;
     let note: string | null = null;
 
-    if (video.provider === "direct_url") {
+    if (video.requires_reupload) {
+      note = "Archived hosting record. Re-upload authorized source files to Bunny Stream; metadata is preserved.";
+    } else if (video.provider === "bunny") {
+      providerState = video.status === "published" ? "ready" : null;
+      note = "Bunny Stream catalog record. Upload processing is checked in upload sessions.";
+    } else if (video.provider === "direct_url") {
       providerState = "ready";
       note = "This video plays directly from the source URL — no provider conversion needed.";
     } else if (video.provider === "streamtape") {

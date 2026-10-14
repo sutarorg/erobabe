@@ -18,21 +18,26 @@ vi.mock("@/lib/supabase/client", () => ({
 }));
 vi.mock("@/src/utils/localVideoThumbnail", () => ({
   localVideoThumbnail: vi.fn(async () => ({
-    thumbnail: null,
+    thumbnail: new Blob(["jpeg"], { type: "image/jpeg" }),
     duration: 10,
-    warning: "Thumbnail decoding unavailable",
   })),
 }));
 vi.mock("@/src/utils/uploadFile", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/src/utils/uploadFile")>()),
   uploadWithProgress: vi.fn(),
 }));
+vi.mock("@/src/utils/bunnyUpload", () => ({ uploadBunnyVideo: vi.fn() }));
+import { uploadBunnyVideo } from "@/src/utils/bunnyUpload";
 import UploadPage from "@/app/admin/(dashboard)/videos/upload/page";
 import { uploadWithProgress, UploadAbortedError } from "@/src/utils/uploadFile";
-const transfer = vi.mocked(uploadWithProgress);
+const transfer = vi.mocked(uploadBunnyVideo);
 let fetchMock: ReturnType<typeof vi.fn>;
 let saveFails: boolean;
 beforeEach(() => {
+  localStorage.clear();
+  URL.createObjectURL = vi.fn(() => "blob:preview");
+  URL.revokeObjectURL = vi.fn();
+  vi.mocked(uploadWithProgress).mockResolvedValue();
   saveFails = false;
   transfer.mockImplementation(async (_url, _file, options) => {
     options?.onProgress?.({
@@ -57,7 +62,7 @@ beforeEach(() => {
       return saveFails
         ? Response.json(
             {
-              error: "FileKosh READY; persistence failed. Retry confirmation.",
+              error: "Bunny Finished; persistence failed. Retry confirmation.",
             },
             { status: 502 },
           )
@@ -65,6 +70,8 @@ beforeEach(() => {
     return Response.json({
       uploadUrl: "https://storage.example.com/signed",
       headers: {},
+      videoId: "provider",
+      storagePath: "admin/frame.jpg",
     });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -121,9 +128,11 @@ describe("device-only upload queue", () => {
       expect(screen.getByText("Completed")).toBeInTheDocument(),
     );
     expect(transfer).toHaveBeenCalledWith(
-      "https://storage.example.com/signed",
+      expect.objectContaining({
+        uploadUrl: "https://storage.example.com/signed",
+      }),
       expect.any(File),
-      expect.objectContaining({ contentType: "" }),
+      expect.objectContaining({ title: "clip" }),
     );
     const postBodies = fetchMock.mock.calls
       .filter(([, o]) => o?.body)
@@ -139,11 +148,13 @@ describe("device-only upload queue", () => {
     await select();
     fireEvent.click(screen.getByText("Start uploads"));
     await waitFor(() =>
-      expect(screen.getByText("Retry confirmation / save")).toBeInTheDocument(),
+      expect(
+        screen.getByText("Retry thumbnail / processing / save"),
+      ).toBeInTheDocument(),
     );
     expect(screen.queryByText("Completed")).toBeNull();
     saveFails = false;
-    fireEvent.click(screen.getByText("Retry confirmation / save"));
+    fireEvent.click(screen.getByText("Retry thumbnail / processing / save"));
     await waitFor(() =>
       expect(screen.getByText("Completed")).toBeInTheDocument(),
     );
@@ -200,15 +211,46 @@ describe("device-only upload queue", () => {
   });
   it("bounds simultaneous transfers independently per file", async () => {
     const resolvers: (() => void)[] = [];
-    transfer.mockImplementation(() => new Promise(resolve => { resolvers.push(resolve); }));
-    await select(["one", "two", "three"].map(name => new File([name], `${name}.mp4`, { type: "video/mp4" })));
+    transfer.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    await select(
+      ["one", "two", "three"].map(
+        (name) => new File([name], `${name}.mp4`, { type: "video/mp4" }),
+      ),
+    );
     fireEvent.click(screen.getByText("Start uploads"));
     await waitFor(() => expect(transfer).toHaveBeenCalledTimes(2));
     expect(resolvers).toHaveLength(2);
     resolvers[0]();
     await waitFor(() => expect(transfer).toHaveBeenCalledTimes(3));
-    resolvers[1](); resolvers[2]();
-    await waitFor(() => expect(screen.getAllByText("Completed")).toHaveLength(3));
+    resolvers[1]();
+    resolvers[2]();
+    await waitFor(() =>
+      expect(screen.getAllByText("Completed")).toHaveLength(3),
+    );
   });
 
+  it("retries thumbnail storage without transferring video again", async () => {
+    vi.mocked(uploadWithProgress).mockRejectedValueOnce(
+      new Error("storage unavailable"),
+    );
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(
+        screen.getByText("Retry thumbnail / processing / save"),
+      ).toBeInTheDocument(),
+    );
+    expect(transfer).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText("Retry thumbnail / processing / save"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    expect(transfer).toHaveBeenCalledTimes(1);
+    expect(uploadWithProgress).toHaveBeenCalledTimes(2);
+  });
 });

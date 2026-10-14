@@ -34,6 +34,10 @@ The same check is available to admins at runtime: **Admin → System Health →
 - Keys issued by OpenRouter start with `sk-or-`. Create one at openrouter.ai/keys.
 - Never paste real production keys into an issue, a commit, or a bug report.
 
-## FileKosh
+## Bunny Stream
 
-No live FileKosh test has run. Follow DEPLOYMENT.md section D after obtaining the missing contract, staging credentials and browser CORS verification. Mocked tests are not integration evidence.
+No live Bunny test has run in this checkout. Follow DEPLOYMENT.md section D with
+authorized staging credentials, a live Supabase project and browser network access.
+Verify genuine TUS upload, thumbnail storage, status 4, atomic publication, resume,
+cancellation, duplicate prevention and desktop/mobile playback. Mocked tests and
+browser protocol fixtures are not provider integration evidence.

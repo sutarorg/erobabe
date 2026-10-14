@@ -1,8 +1,8 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import { uploadWithProgress } from "@/src/utils/uploadFile";
 afterEach(() => vi.unstubAllGlobals());
-describe("direct byte transport", () => {
-  it("PUTs the original File to the provider host with real byte progress and no bearer key", async () => {
+describe("signed thumbnail transport", () => {
+  it("PUTs only a thumbnail to signed storage with real byte progress", async () => {
     const xhr = {
       upload: {} as { onprogress: (e: unknown) => void },
       open: vi.fn(),
@@ -15,12 +15,12 @@ describe("direct byte transport", () => {
     vi.stubGlobal("XMLHttpRequest", function () {
       return xhr;
     });
-    const file = new File(["video bytes"], "test.mp4", { type: "video/mp4" });
+    const file = new File(["jpeg bytes"], "frame.jpg", { type: "image/jpeg" });
     const progress = vi.fn();
     const promise = uploadWithProgress(
       "https://storage.example.com/presigned",
       file,
-      { contentType: "", onProgress: progress },
+      { contentType: "image/jpeg", onProgress: progress },
     );
     expect(xhr.open).toHaveBeenCalledWith(
       "PUT",

@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import VideoPlayer from "@/src/components/VideoPlayer";
 
-const props = { id: "22222222-2222-4222-8222-222222222222", title: "Test clip", poster: "https://cdn.example.com/poster.jpg" };
+const props = {
+  id: "22222222-2222-4222-8222-222222222222",
+  title: "Test clip",
+  poster: "https://cdn.example.com/poster.jpg",
+};
 const embed = "https://streamtape.com/e/abc123";
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -11,23 +21,50 @@ beforeEach(() => {
   fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
   vi.stubGlobal("fetch", fetchMock);
   // jsdom has no media stack; the player only needs these calls to happen.
-  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
-  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() =>
+    Promise.resolve(),
+  );
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(
+    () => undefined,
+  );
 });
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 /** The warm-up endpoint the player calls, ignoring the media element's own requests. */
 function warmCalls() {
-  return fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/prepare"));
+  return fetchMock.mock.calls.filter(([input]) =>
+    String(input).endsWith("/prepare"),
+  );
 }
 
 describe("video player", () => {
-  it("renders the FileKosh returned embed with no popup or top-navigation permissions", () => {
-    const { container } = render(<VideoPlayer {...props} embedUrl="https://filekosh.com/embed/returned" />);
+  it("shows Bunny poster before mounting validated playback", () => {
+    const guid = "44444444-4444-4444-8444-444444444444";
+    const url = `https://iframe.mediadelivery.net/embed/123/${guid}`;
+    const { container } = render(
+      <VideoPlayer
+        {...props}
+        provider="bunny"
+        libraryId="123"
+        videoId={guid}
+        embedUrl={url}
+      />,
+    );
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("img")).toHaveAttribute("src", props.poster);
+    fireEvent.click(screen.getByRole("button", { name: "Play video" }));
     const frame = container.querySelector("iframe")!;
-    expect(frame).toHaveAttribute("src", "https://filekosh.com/embed/returned");
-    expect(frame.getAttribute("sandbox")).not.toMatch(/allow-popups|allow-top-navigation/);
-    expect(container.querySelector("video")).toBeNull();
+    expect(frame).toHaveAttribute(
+      "src",
+      `${url}?autoplay=true&responsive=true`,
+    );
+    expect(frame).toHaveAttribute("allowfullscreen");
+    fireEvent.load(frame);
+    expect(screen.queryByRole("status")).toBeNull();
   });
   it("shows unsupported historic records without calling an API", () => {
     render(<VideoPlayer {...props} embedUrl={embed} />);
@@ -35,8 +72,13 @@ describe("video player", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
   it("prefers native video over any advertising iframe", () => {
-    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" playableUrl="https://cdn.example.com/a.mp4" />);
-    expect(container.querySelector("video")).toHaveAttribute("src", "https://cdn.example.com/a.mp4");
+    const { container } = render(
+      <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
+    );
+    expect(container.querySelector("video")).toHaveAttribute(
+      "src",
+      "https://cdn.example.com/a.mp4",
+    );
     expect(container.querySelector("iframe")).toBeNull();
     // A direct file needs no server-side preparation at all.
     expect(fetchMock).not.toHaveBeenCalled();
@@ -45,11 +87,15 @@ describe("video player", () => {
   it("buffers ahead behind the poster so the first frame is instant", () => {
     vi.useFakeTimers();
     try {
-      const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
+      const { container } = render(
+        <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
+      );
       const video = container.querySelector("video")!;
       expect(video).toHaveAttribute("preload", "metadata");
 
-      act(() => { vi.advanceTimersByTime(1200); });
+      act(() => {
+        vi.advanceTimersByTime(1200);
+      });
 
       expect(video).toHaveAttribute("preload", "auto");
       expect(HTMLMediaElement.prototype.load).toHaveBeenCalled();
@@ -61,7 +107,9 @@ describe("video player", () => {
   });
 
   it("starts the element that is already buffering instead of mounting a new one", () => {
-    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
+    const { container } = render(
+      <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
+    );
     const video = container.querySelector("video")!;
 
     fireEvent.click(screen.getByRole("button", { name: "Play video" }));
@@ -78,7 +126,9 @@ describe("video player", () => {
   });
 
   it("starts buffering ahead on plain intent, before the click", () => {
-    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
+    const { container } = render(
+      <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
+    );
     const video = container.querySelector("video")!;
     expect(video).toHaveAttribute("preload", "metadata");
 
@@ -90,7 +140,9 @@ describe("video player", () => {
   });
 
   it("restarts native playback on retry", () => {
-    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
+    const { container } = render(
+      <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Play video" }));
     const first = container.querySelector("video")!;
     fireEvent.error(first);
@@ -99,20 +151,25 @@ describe("video player", () => {
     expect(container.querySelector("iframe, a")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
     expect(container.querySelector("video")).not.toBe(first);
-    expect(container.querySelector("video")).toHaveAttribute("src", "https://cdn.example.com/a.mp4");
+    expect(container.querySelector("video")).toHaveAttribute(
+      "src",
+      "https://cdn.example.com/a.mp4",
+    );
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("does not upgrade popup or navigation permissions for other embeds", () => {
-    const { container } = render(<VideoPlayer {...props} embedUrl="https://example.com/embed/abc" />);
-    const iframe = container.querySelector("iframe")!;
-    expect(iframe).toHaveAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-presentation");
-    expect(iframe.getAttribute("sandbox")).not.toMatch(/allow-popups|allow-top-navigation/);
-    expect(warmCalls()).toHaveLength(0);
+  it("does not mount untrusted generic iframe URLs", () => {
+    const { container } = render(
+      <VideoPlayer {...props} embedUrl="https://example.com/embed/abc" />,
+    );
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.getByText(/legacy video provider/)).toBeInTheDocument();
   });
 
   it("can retry a failed direct source without opening an iframe", () => {
-    const { container } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
+    const { container } = render(
+      <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
+    );
     const first = container.querySelector("video")!;
     fireEvent.error(first);
     fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
@@ -122,15 +179,41 @@ describe("video player", () => {
   });
 
   it("resets native playback when navigating to another video", () => {
-    const { container, rerender } = render(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />);
+    const { container, rerender } = render(
+      <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Play video" }));
     expect(container.querySelector("video")).toHaveAttribute("controls");
 
-    rerender(<VideoPlayer {...props} id="another-video" playableUrl="https://cdn.example.com/a.mp4" />);
+    rerender(
+      <VideoPlayer
+        {...props}
+        id="another-video"
+        playableUrl="https://cdn.example.com/a.mp4"
+      />,
+    );
 
     // A fresh page state: poster and play control, nothing playing.
     expect(container.querySelector("video")).not.toHaveAttribute("controls");
-    expect(container.querySelector("video")).toHaveAttribute("src", "https://cdn.example.com/a.mp4");
-    expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
+    expect(container.querySelector("video")).toHaveAttribute(
+      "src",
+      "https://cdn.example.com/a.mp4",
+    );
+    expect(
+      screen.getByRole("button", { name: "Play video" }),
+    ).toBeInTheDocument();
+  });
+  it("keeps trusted historical players in their restrictive sandbox", () => {
+    const { container } = render(
+      <VideoPlayer
+        {...props}
+        provider="embed"
+        embedUrl="https://www.youtube-nocookie.com/embed/abc123"
+      />,
+    );
+    expect(container.querySelector("iframe")).toHaveAttribute(
+      "sandbox",
+      "allow-scripts allow-same-origin allow-forms allow-presentation",
+    );
   });
 });

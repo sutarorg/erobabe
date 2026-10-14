@@ -1,17 +1,20 @@
 # Erobabe go-live checklist
 
-## FileKosh — mandatory gates
+## Bunny Stream — mandatory acceptance
 
-- [ ] Obtain verified confirmation/create/PUT contracts and content/use approval.
-- [ ] Configure server-only key, accepted MIME types, size policy, upload hosts and headers.
-- [ ] Apply migrations through `00000000000011_filekosh_uploads.sql` forward on staging.
-- [ ] Test browser CORS from the deployed origin; prove video bytes go directly to storage.
-- [ ] Enable contract/browser verification flags only with real evidence.
-- [ ] Upload several authorized files; verify genuine progress, thumbnails, READY metadata and atomic persistence.
-- [ ] Test partial failure, retry without duplicate rows, cancellation, reload recovery and orphan cleanup.
-- [ ] Test returned embed play/pause/seek/fullscreen on desktop and mobile with the restrictive sandbox.
-- [ ] Preserve legacy rows; unsupported retired providers must not call APIs.
-- [ ] Remove retired-provider deployment secrets/infrastructure.
+- [ ] Review current AUP/ToS, obtain legal and account/content-use confirmation. No approval is assumed.
+- [ ] Configure selected Video Library ID/API key, not account/CDN/Storage credentials.
+- [ ] Back up DB; apply forward migrations through 12 on staging, then production. Keep historical migrations intact.
+- [ ] Confirm archived hosted metadata is retained and requires authorized source re-upload.
+- [ ] System Health reports successful read-only Bunny API connectivity, not merely configuration.
+- [ ] Real browser Network shows video bytes go directly to Bunny TUS; Supabase receives only thumbnails/metadata.
+- [ ] Batch authorized clips; validate real progress, 1280×720 best-frame JPEGs, status 4, atomic record/job creation.
+- [ ] Verify short/long/blank intro/portrait/corrupt clips; failed thumbnails block publication and retry independently.
+- [ ] Test pause/cancel, transient network retry, expired TUS resource, reload/reselection, DB failure and duplicate requests.
+- [ ] Verify watch poster, cards/admin/SEO and Bunny controls on desktop/mobile using actual allowed production referrers.
+- [ ] Standard encoding enabled; playback-token security settings compatible with unsigned validated embeds.
+- [ ] Remove retired deployment secrets/jobs. Review orphans manually under an approved retention policy.
+- [ ] Leave optional external vision ranking off unless both consent gates and provider/model approval are documented.
 
 ## Existing functionality
 
@@ -20,6 +23,7 @@
 - [ ] Validate NOWPayments API/IPN signature, idempotency, callback and a genuine authorized test payment.
 - [ ] Validate campaign/creative approval, invoices, advertiser portal and email delivery.
 - [ ] Verify backups, rollback, DNS, HTTPS and server-only secrets.
-- [ ] Run tests, lint, type checks, production build and environment-dependent browser tests.
+- [ ] Run type checks, unit tests, production build and browser tests.
+- [ ] Clear hosting, age assurance, legal identity and provider-account production blockers.
 
-See DEPLOYMENT.md for detailed setup. Passing mocks/build is not live provider evidence.
+See DEPLOYMENT.md for click-by-click setup. Passing mocks/build is not live provider evidence.

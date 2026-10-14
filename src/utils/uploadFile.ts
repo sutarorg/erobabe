@@ -1,7 +1,7 @@
 /**
  * Browser → storage upload helpers with real progress events.
  *
- * Used for direct FileKosh video PUTs and Supabase thumbnail PUTs. Video bytes
+ * Used for Supabase thumbnail PUTs only. Video bytes
  * never pass through Erobabe.
  */
 

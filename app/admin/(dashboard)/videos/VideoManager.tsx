@@ -21,6 +21,7 @@ export type AdminVideo = {
   status: string;
   visibility?: string | null;
   provider?: string | null;
+  requires_reupload?: boolean;
   thumbnail_url: string | null;
   playable_url?: string | null;
   embed_url?: string | null;
@@ -559,6 +560,7 @@ export default function VideoManager({
                     </td>
                     <td className="px-4 py-3">
                       <p className="font-medium">{video.title}</p>
+                      {video.requires_reupload && <Link href="/admin/videos/upload" className="text-xs text-amber-400">Archived — re-upload authorized source to Bunny</Link>}
                       <p className="text-[11px] text-ink-3">
                         {video.category_label || "—"} · <span className="font-mono">{video.slug}</span>
                       </p>
