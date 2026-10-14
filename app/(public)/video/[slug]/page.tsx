@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { selectPlaybackSource } from "@/lib/video/playback";
 import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
 import VideoActions from "@/src/components/VideoActions";
 import VideoPlayer from "@/src/components/VideoPlayer";
@@ -87,6 +88,18 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
     .neq("id", video.id)
     .limit(16);
 
+  // A direct file is fetched by the browser from its own host: open that
+  // connection, and start the poster, while the document is still parsing.
+  const playbackSource = selectPlaybackSource(video.playable_url, video.embed_url);
+  let mediaOrigin: string | null = null;
+  if (playbackSource.kind === "direct") {
+    try {
+      mediaOrigin = new URL(playbackSource.url).origin;
+    } catch {
+      mediaOrigin = null;
+    }
+  }
+
   const videoJsonLd = {
     "@context": "https://schema.org",
     "@type": "VideoObject",
@@ -118,6 +131,11 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
       <Link href="/" className="inline-flex items-center gap-1.5 text-[12px] font-medium text-ink-3 hover:text-accent">
         ← Back to home
       </Link>
+
+      {/* Instant play starts before React hydrates: connect to the media host and
+          fetch the poster the visitor is about to look at. */}
+      {mediaOrigin && <link rel="preconnect" href={mediaOrigin} />}
+      {video.thumbnail_url && <link rel="preload" as="image" href={video.thumbnail_url} fetchPriority="high" />}
 
       <VideoPlayer
         id={video.id}

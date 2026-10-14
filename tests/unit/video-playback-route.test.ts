@@ -8,6 +8,7 @@ const download = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => state.client }));
 vi.mock("@/lib/video/streamtape", () => ({ createDownloadUrl: download }));
 import { GET, HEAD } from "@/app/api/videos/[id]/playback/route";
+import { clearStreamtapeTicketCache } from "@/lib/video/streamtape-tickets";
 
 const ID = "22222222-2222-4222-8222-222222222222";
 const MEDIA = "https://node.tapecontent.net/video.mp4?token=abc";
@@ -26,6 +27,8 @@ function request(id = ID, headers: Record<string, string> = {}, method = "GET") 
 }
 afterEach(() => vi.unstubAllGlobals());
 beforeEach(() => {
+  // The media-link cache is process-wide and must not leak between cases.
+  clearStreamtapeTicketCache();
   setup();
   download.mockReset().mockResolvedValue(MEDIA);
   upstream.mockReset().mockImplementation(async () => new Response("video bytes", {
@@ -45,6 +48,33 @@ describe("public playback resolution", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("location")).toBeNull();
   });
+  it("reuses the resolved link for the click that follows the preload, and for seeks", async () => {
+    expect((await request()).status).toBe(200);
+    expect(download).toHaveBeenCalledTimes(1);
+
+    // The play click and every seek arrive as more range requests; they must
+    // not pay for another ticket resolution.
+    expect((await request(ID, { Range: "bytes=100-199" })).status).toBe(200);
+    expect((await request(ID, {}, "HEAD")).status).toBe(200);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(await (await request()).text()).toBe("video bytes");
+  });
+
+  it("drops a cached link upstream rejects and streams from a fresh one", async () => {
+    expect((await request()).status).toBe(200);
+    expect(download).toHaveBeenCalledTimes(1);
+
+    // A stale/consumed link: the media host answers with an error page.
+    upstream.mockResolvedValueOnce(new Response("blocked", { status: 403, headers: { "Content-Type": "text/html" } }));
+    download.mockResolvedValueOnce("https://node.tapecontent.net/fresh.mp4?token=fresh");
+
+    const response = await request();
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("video bytes");
+    expect(upstream.mock.calls.at(-1)?.[0]).toBe("https://node.tapecontent.net/fresh.mp4?token=fresh");
+  });
+
   it.each([
     { status: "draft" }, { visibility: "private" }, { rights_status: "pending" }, { moderation_status: "rejected" },
     { id: "33333333-3333-4333-8333-333333333333" },
