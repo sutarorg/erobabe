@@ -1,3 +1,5 @@
+> **Historical implementation record, not current deployment instructions.** Provider setup here is obsolete. See DEPLOYMENT.md for the current gated FileKosh workflow.
+
 # IMPLEMENTATION_AUDIT.md — Erobabe Pre-Implementation Audit (10 Oct 2026)
 
 > **Update (2026-10-12):** UFOLOAD has itself been replaced by **Streamtape** (browser →
