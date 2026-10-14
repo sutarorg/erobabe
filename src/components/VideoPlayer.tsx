@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { safeStreamtapeMediaUrl, selectPlaybackSource } from "@/lib/video/playback";
+import { useState } from "react";
+import { selectPlaybackSource } from "@/lib/video/playback";
 
 type Props = {
   id: string;
@@ -12,9 +12,10 @@ type Props = {
 };
 
 /** Native media playback never runs the host's advertising JavaScript. */
-function NativePlayer({ url, title, poster, onRetry, autoPlay = false }: {
-  url: string; title: string; poster?: string | null; onRetry?: () => void; autoPlay?: boolean;
+function NativePlayer({ url, title, poster, autoPlay = false }: {
+  url: string; title: string; poster?: string | null; autoPlay?: boolean;
 }) {
+  const [loading, setLoading] = useState(autoPlay);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
   return <>
@@ -28,55 +29,35 @@ function NativePlayer({ url, title, poster, onRetry, autoPlay = false }: {
       className="h-full w-full"
       preload="metadata"
       playsInline
-      onError={() => setFailed(true)}
+      onLoadStart={() => setLoading(true)}
+      onCanPlay={() => setLoading(false)}
+      onPlaying={() => setLoading(false)}
+      onError={() => { setLoading(false); setFailed(true); }}
     >Your browser does not support the video tag.</video>
+    {loading && !failed && <p role="status" className="pointer-events-none absolute inset-x-0 top-3 text-center text-sm text-white">Preparing video…</p>}
     {failed && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-center text-sm text-white">
       <p role="alert">The video could not be loaded. The source may be unavailable or unsupported by your browser.</p>
       <button type="button" className="rounded-lg bg-white/15 px-4 py-2" onClick={() => {
-        if (onRetry) onRetry();
-        else { setFailed(false); setAttempt((value) => value + 1); }
+        setFailed(false); setLoading(true); setAttempt((value) => value + 1);
       }}>Retry playback</button>
     </div>}
   </>;
 }
 
 function StreamtapePlayer({ id, title, poster }: Props) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const request = useRef<AbortController | null>(null);
-  useEffect(() => () => request.current?.abort(), []);
-
-  async function load() {
-    if (request.current) return;
-    const controller = new AbortController();
-    request.current = controller;
-    setLoading(true);
-    setFailed(false);
-    setUrl(null);
-    try {
-      const response = await fetch(`/api/videos/${encodeURIComponent(id)}/playback`, {
-        cache: "no-store", signal: controller.signal,
-      });
-      if (!response.ok) throw new Error("Playback unavailable");
-      const data = await response.json();
-      setUrl(safeStreamtapeMediaUrl(data.url));
-    } catch {
-      if (!controller.signal.aborted) setFailed(true);
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-      request.current = null;
-    }
-  }
-
-  if (url) return <NativePlayer url={url} title={title} poster={poster} onRetry={load} autoPlay />;
+  const [started, setStarted] = useState(false);
+  // Keep ticket creation and media consumption on the same server/IP. Using
+  // the native request also preserves Range, cancellation, and mobile playback.
+  if (started) return <NativePlayer
+    url={`/api/videos/${encodeURIComponent(id)}/playback`}
+    title={title} poster={poster} autoPlay
+  />;
   return <>
     {poster && <img src={poster} alt="" className="h-full w-full object-cover opacity-55" />}
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/50 p-4 text-center text-sm text-white">
-      {failed && <p role="alert">Ad-free playback is unavailable from this host. Please try again later.</p>}
-      {loading ? <p role="status">Preparing video…</p> : <button
-        type="button" onClick={load} className="rounded-lg bg-white/15 px-5 py-3 font-medium"
-      >{failed ? "Retry playback" : "Play video"}</button>}
+    <div className="absolute inset-0 flex items-center justify-center bg-black/50 p-4 text-center text-sm text-white">
+      <button type="button" onClick={() => setStarted(true)} className="rounded-lg bg-white/15 px-5 py-3 font-medium">
+        Play video
+      </button>
     </div>
   </>;
 }

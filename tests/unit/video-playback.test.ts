@@ -18,6 +18,10 @@ describe("playback selection", () => {
     expect(selectPlaybackSource("https://cdn.example.com/a.mp4", "https://streamtape.com/e/abc"))
       .toEqual({ kind: "direct", url: "https://cdn.example.com/a.mp4" });
   });
+  it.each(["https://node.tapecontent.net/a.mp4?token=expired", "https://streamtape.com/get_video?token=expired"])("refreshes a legacy ticket using the durable embed ID: %s", (url) => {
+    expect(selectPlaybackSource(url, "https://streamtape.com/e/abc"))
+      .toEqual({ kind: "streamtape", fileId: "abc" });
+  });
   it("never falls back to a malformed Streamtape iframe", () => {
     expect(selectPlaybackSource(null, "https://streamtape.com/unknown")).toEqual({ kind: "streamtape", fileId: null });
   });
