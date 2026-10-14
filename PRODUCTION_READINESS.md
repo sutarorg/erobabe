@@ -17,7 +17,7 @@ Environment: Linux sandbox, Node **22.22.3**, npm **10.9.8**. Final resolved ver
 | `npm run lint` | PASS, exit 0; **0 errors, 24 warnings** (existing image optimization / JSX guidance). Supported `eslint app lib src middleware.ts --ext .ts,.tsx` replaces deprecated `next lint`. |
 | `npm run test` | PASS, exit 0; **47 files, 536 tests passed**, no unit-test files skipped. |
 | `npm run build` | PASS, exit 0; production App Router output generated. No live DB/provider credentials. Expected missing-Supabase warnings/empty public prerender do not prove integration health. |
-| `npm run test:e2e -- --workers=2 --reporter=line` | PASS, exit 0; **26 passed**. Local Next dev server and Chromium 153.0.8010.0; public/API boundaries, actual local frame extraction, mocked TUS protocol, desktop/mobile production sidebar components with isolated router, every real portal URL's anonymous redirect. Not authenticated staging page-content acceptance. |
+| `npm run test:e2e` | PASS, exit 0; **26 passed**. Local Next dev server and Chromium 153.0.8010.0; public/API boundaries, actual local frame extraction, mocked TUS protocol, desktop/mobile production sidebar components with isolated router, every real portal URL's anonymous redirect. Not authenticated staging page-content acceptance. |
 | `npm run test:live` | Exit 0, but **15 skipped / 1 skipped file** under the existing credential gate. **NOT VERIFIED**, not a live-integration PASS. |
 | `npm audit --omit=dev --json` | PASS, exit 0; **0 reported production vulnerabilities**. Advisory scan, not a security guarantee. |
 | `npm audit --json` | **FAIL**, exit 1; **5 high, 0 critical**, all in one braces/Next ESLint development chain. |
@@ -28,7 +28,7 @@ Sandbox browser invocation:
 ```sh
 LD_LIBRARY_PATH=/tmp/al2023/lib \
 PLAYWRIGHT_CHROMIUM_EXECUTABLE=/tmp/chromium \
-npm run test:e2e -- --workers=2 --reporter=line
+npm run test:e2e
 ```
 
 Chromium and its packaged Linux libraries were obtained via `@sparticuz/chromium` in a **workspace-only tools directory**, not added to application dependencies/Git. Normal CI should use Playwright's supported browser installation (`npx playwright install --with-deps chromium`). The first browser attempt lacked libnspr4; extracting the supplied libraries resolved it. An npm 10 dependency-update resolver bug was worked around with npm 11.6.4 for lock generation; final normal npm 10 `npm ci` succeeded without special flags.
