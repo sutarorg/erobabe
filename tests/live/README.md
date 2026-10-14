@@ -54,3 +54,31 @@ search) and `STREAMTAPE_THUMBNAIL_FOLDER_NAME` (default `thumbnails`).
 
 The same check is available to admins at runtime: **Admin → Videos → Streamtape
 thumbnails → “Check folder”**.
+
+## Streamtape playback — `streamtape-playback.live.test.ts`
+
+Checks what instant start on the watch page depends on, which the unit suite
+can only simulate: how long Streamtape really makes a new media link wait, that
+one link serves the iOS probe, the first frames and a seek (so one handshake per
+file is enough), and that later requests reuse it at once. Outbound HTTPS to
+`api.streamtape.com` and the Streamtape/tapecontent media hosts is required.
+
+```bash
+STREAMTAPE_LOGIN=… STREAMTAPE_API_KEY=… STREAMTAPE_PLAYBACK_FILE_ID=… npm run test:live
+```
+
+`STREAMTAPE_PLAYBACK_FILE_ID` is the id in any of your videos' Streamtape links —
+the part after `/e/` or `/v/`. Strictly read-only. The media link itself is a
+credential and is never printed; the log shows only timings and the media host:
+
+```text
+[live-playback] new link after <ms> ms (media host <host>)   ← the wait the prepare request hides
+[live-playback] the same file again after <ms> ms           ← must be ~0: no second ticket
+[live-playback] first frames: first byte after <ms> ms, …   ← start-up time once the link is ready
+[live-playback] seek to 50%: first byte after <ms> ms       ← seek time with the same link
+```
+
+The ticket and the media requests both come from the machine running the test,
+just as they both come from the server in production. Timings depend on where
+it runs; run it in the same region as the deployment for numbers close to what
+visitors get.

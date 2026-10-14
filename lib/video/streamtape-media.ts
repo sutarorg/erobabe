@@ -3,6 +3,27 @@ import { safeStreamtapeMediaUrl } from "@/lib/video/playback";
 const MAX_REDIRECTS = 4;
 const CONNECT_TIMEOUT_MS = 30_000;
 
+/**
+ * Media could not be relayed. The message never contains the signed URL.
+ *
+ * `retryable` is true when the media host answered but refused or failed the
+ * link — what an expired or IP-mismatched link looks like — so a freshly
+ * resolved link may succeed. It is false when the visitor went away or the host
+ * did not answer within the connection timeout; a new link cannot fix those.
+ */
+export class StreamtapeMediaError extends Error {
+  readonly retryable: boolean;
+  /** HTTP status of the media host's last answer, or `null` if none arrived. Never a URL or body. */
+  readonly status: number | null;
+
+  constructor(retryable: boolean, status: number | null = null) {
+    super("Video media unavailable");
+    this.name = "StreamtapeMediaError";
+    this.retryable = retryable;
+    this.status = status;
+  }
+}
+
 /** Only a single byte range is supported; never forward arbitrary request headers. */
 export function validMediaRange(range: string): boolean {
   const match = /^bytes=(\d*)-(\d*)$/.exec(range);
@@ -26,12 +47,14 @@ export async function streamStreamtapeMedia(
   const abort = () => controller.abort();
   request.signal.addEventListener("abort", abort, { once: true });
   if (request.signal.aborted) abort();
-  const timeout = setTimeout(abort, CONNECT_TIMEOUT_MS);
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; abort(); }, CONNECT_TIMEOUT_MS);
   const cleanup = () => {
     clearTimeout(timeout);
     request.signal.removeEventListener("abort", abort);
   };
   let upstream: Response | undefined;
+  let status: number | null = null;
 
   try {
     const headers = new Headers({ "Accept-Encoding": "identity" });
@@ -42,10 +65,12 @@ export async function streamStreamtapeMedia(
     }
     let url = safeStreamtapeMediaUrl(rawUrl);
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      status = null;
       upstream = await fetch(url, {
         method: request.method === "HEAD" ? "HEAD" : "GET",
         headers, signal: controller.signal, redirect: "manual", cache: "no-store",
       });
+      status = upstream.status;
       if (![301, 302, 303, 307, 308].includes(upstream.status)) break;
       await upstream.body?.cancel();
       const location = upstream.headers.get("location");
@@ -115,6 +140,6 @@ export async function streamStreamtapeMedia(
     controller.abort();
     await upstream?.body?.cancel().catch(() => undefined);
     cleanup();
-    throw new Error("Video media unavailable");
+    throw new StreamtapeMediaError(!request.signal.aborted && !timedOut, status);
   }
 }

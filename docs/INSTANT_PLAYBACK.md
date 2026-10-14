@@ -1,99 +1,188 @@
 # Instant playback on the watch page
 
-The visitor should see the first frame right after pressing play. Nothing on the
-watch page may wait for a network round trip *after* the click. This document
-describes how that is achieved, and what the trade-offs are.
+The visitor should see the first frame right after pressing Play, in Erobabe's
+own player, with no provider player and no ad script. Nothing should wait on a
+provider round trip *after* the click. This document describes how that works,
+and what the trade-offs are. The security model of the Streamtape relay itself
+is described in `docs/AD_FREE_PLAYBACK.md`.
 
 ## What used to be slow
 
 1. The `<video>` element did not exist before the click, so the browser had
-   fetched nothing: no metadata, no first chunk, no provider ticket.
-2. For Streamtape-backed videos, the click started two sequential provider API
-   calls (`/file/dlticket` → `/file/dl`), plus any `wait_time` the API asked for.
-   Only then did the first byte of video leave the server.
-3. Every later range request — the first chunk, each seek — repeated that
-   resolution because no link was kept.
-4. Nothing hinted the browser at the media host, so the DNS + TLS handshake to a
-   direct file's host also happened after the click.
-
-The result was the "Preparing video…" wait the visitor saw.
+   fetched nothing: no metadata, no first chunk.
+2. Streamtape issues a media link in two steps: `/file/dlticket`, then — only
+   after the ticket's `wait_time`, documented as 10 seconds — `/file/dl`. The
+   relay ran that whole handshake for **every** request.
+3. A browser needs several byte-range requests to start an MP4 (a probe, the
+   `moov` index that is often at the end of the file, then the first frames),
+   and iOS Safari always probes with `Range: bytes=0-1` first. Each one paid the
+   full wait, so visitors watched "Preparing video…" for 10–30 seconds, and
+   every seek waited about 10 more seconds.
 
 ## What happens now
 
-| Step | What runs |
+| Moment | What runs |
 | --- | --- |
-| Page render (before the click) | The site's own `<video>` element is mounted with `preload="metadata"`, the poster and the Erobabe play control on top. The browser starts the media request itself. |
-| Same moment | `POST /api/videos/{id}/prepare` asks the server to resolve and cache the media link (Streamtape only; direct files need nothing). |
-| 1.2 s later, or on hover / press / focus / touch | The element switches to `preload="auto"` (and `load()` applies it), so it buffers the first seconds behind the poster. |
-| Click | `video.play()` on the element that is **already** buffering. No remount, no new source, no ticket. |
-| Playing | Seeks are range requests answered from the cached media link. |
-| Failure | A branded error panel with **Retry playback**, which remounts the element and resolves a fresh link. |
-
-Direct MP4/WebM sources additionally get `<link rel="preconnect">` to their host
-and a poster preload hint from the server-rendered watch page, so the handshake
-and the poster start before React hydrates.
+| HTML parsed (full page load) | A tiny inline script in the player's HTML sends `POST /api/videos/{id}/playback`. The server starts Streamtape's handshake right away and answers `204` once the link is ready. The answer never contains a URL. The page also preloads the poster and, for direct files, opens the connection to the media host (`<link rel="preconnect">`). |
+| Player mounts | The site's `<video>` exists from the first paint, under the dimmed poster, the quality badge and the pink Play button. Direct files load metadata. Relayed Streamtape media fetches **nothing** yet. After a client-side navigation, where inline scripts never run, the player sends the prepare request itself. A production page sends it once either way. |
+| Intent: pointer over the player, focus, touch | Direct files switch to `preload="auto"`. Relayed media switches to `preload="metadata"`, so the first bytes flow through the relay with the link prepared earlier. |
+| Click | `video.play()` runs on the element that already exists, inside the click, so browsers allow sound. A spinner shows only if data is still arriving. |
+| Playing | Every range request and seek reuses the cached link. The catalogue access decision is reused for 60 seconds. |
+| Link older than 20 minutes | The old link keeps serving while a replacement is resolved in the background. A link older than 2 hours is never used. |
+| Media host rejects a cached link | The link is discarded, and that request retries once with a fresh one before any error reaches the visitor. |
+| Failure | A branded panel offers **Retry playback**. Retry reloads the element and calls `play()` inside the same click, which keeps the iOS user gesture, and resumes at the same position. |
 
 ## The media-link cache
 
-`lib/video/streamtape-tickets.ts` holds resolved media links for **4 minutes**,
-at most 100 of them, in the server process. It is a plain `Map`; there is no
-database table and no configuration.
+`lib/video/playback-cache.ts` keeps resolved links in the memory of the server
+process that resolved them. There is no database table, no shared store and no
+configuration.
 
-- Concurrent requests for the same file share one resolution (single flight),
-  which also keeps the provider's rate limits happy.
-- Every link is validated against the HTTPS Streamtape/tapecontent allowlist
-  before it is stored, so a bad API answer can never be replayed later.
-- A link the media host refuses is forgotten and replaced by exactly one freshly
-  issued link, then the visitor sees the failure only if that one fails too.
-- Links are still consumed **server-side**; the browser only ever sees
-  `/api/videos/{id}/playback` streaming bytes. Nothing is logged or persisted.
+- **One handshake per file, shared.** Concurrent requests for the same file join
+  a single in-flight handshake, which also keeps the number of provider API
+  calls low.
+- **Refreshed ahead of time.** After 20 minutes a link keeps serving while a
+  replacement is resolved in the background, so seeks during a long video do
+  not wait for a new ticket. A link is never used after 2 hours.
+- **Self-healing.** A link the media host refuses (expired, egress-IP change,
+  HTML instead of media) is dropped and replaced by exactly one fresh link. A
+  link resolved for the current request is never retried, because a brand-new
+  link would fail the same way. A visitor cancelling, or a host that never
+  answers, does not discard a working link.
+- **Fewer database round trips.** A positive access decision (published, public,
+  rights-cleared, moderation-approved) is reused for 60 seconds. Failures are
+  never cached, and unpublishing a video stops new playback within a minute.
+- **Validated and private.** Links are cached only if they pass the same
+  HTTPS Streamtape/tapecontent allowlist used for streaming. They never leave
+  server memory: not the database, not a shared cache, not logs, not responses.
+  At most 1,000 entries are kept; the least recently used go first.
 
-Trade-offs, stated plainly:
+### Why the prepare request goes to the playback route
 
-- The cache is per server instance and disappears on redeploy or a cold start.
-  A shared multi-instance deployment therefore warms per instance: the first
-  request on an instance pays the ticket cost, every later one does not. This is
-  the intended best-effort behaviour, not a correctness requirement.
-- Streamtape does not publish the lifetime of a `/file/dl` link. Four minutes is
-  a deliberately conservative window; a rejected link is retried with a fresh
-  one before any error reaches the visitor.
-- Because the element is mounted with the page, a visitor who never presses play
-  has still requested the head of the video (metadata, then a little more after
-  the buffer-ahead timer). On the watch page that is the right trade for instant
-  playback; the grids and cards do not preload any media.
+The prepare request is a `POST` to the same route that streams the media, not a
+separate endpoint and not the page render:
+
+- Hosting platforms may deploy routes as separate functions, each with its own
+  memory. On Vercel, for example, routes with different function settings
+  (such as `maxDuration`) cannot share a function. A prepare endpoint in a
+  different route can warm a different process than the one that later
+  streams, which costs a second provider ticket and saves the visitor nothing.
+  The playback route always lands in the streaming function.
+- The page render cannot do it either: pages run in other functions, and the
+  video cards prefetch watch pages, so preparing during render would start a
+  provider handshake for every card on screen. Prefetching never executes the
+  inline script, so a page full of cards prepares nothing. Search engines that
+  render pages (Googlebot, Bingbot) skip it too, because `robots.txt` disallows
+  `/api/`.
+
+## The site's player
+
+`src/components/VideoPlayer.tsx` renders Erobabe's own controls on a native
+`<video>` element. It is used for direct files and the Streamtape relay; other
+providers keep their sandboxed iframe.
+
+- **Design:** dimmed poster with the quality badge and the pink Play button. An
+  auto-hiding gradient control bar carries play/pause, mute and a volume
+  slider, and an accent seek bar with the buffered range and a time preview.
+  It also shows elapsed and total time (the catalogue duration until metadata
+  loads), playback speed (0.5–2×), picture-in-picture where supported, and full
+  screen on the player itself. iPhone uses its native full-screen video view,
+  the only one it allows.
+- **Mouse:** click toggles playback, double-click toggles full screen.
+- **Touch:** a tap starts playback, then shows or hides the controls.
+- **Keyboard** (once the player has focus): Space/K play-pause, ←/→ ±5 s,
+  J/L ±10 s, ↑/↓ volume, M mute, F full screen, Home/End, 0–9 jump to 0–90 %.
+- The volume and mute choice is remembered.
 
 ## Endpoints
 
-- `GET|HEAD /api/videos/{id}/playback` — the media source of the element.
-  Rechecks published / public / rights-cleared / moderation-approved, streams a
-  single byte range with backpressure, `private, no-store`. Unchanged contract;
-  only the link resolution is now cached.
-- `POST /api/videos/{id}/prepare` — warm-up. Same access checks, same UUID
-  validation, answers `{"ready":true,"provider":"streamtape"|"direct"|"embed"}`
-  or `{"ready":false,"reason":"…"}`. It never returns a URL, so it cannot be used
-  to discover a source the watch page would not already serve, and it performs no
-  provider call when a link is already cached.
+- `GET|HEAD /api/videos/{id}/playback` — the media source of the element. It
+  checks access (a positive decision is reused for 60 seconds), streams a
+  single byte range with backpressure, and answers `private, no-store`. Range
+  and seek requests reuse the cached link.
+- `POST /api/videos/{id}/playback` — prepare. Same UUID validation and access
+  checks. Answers an empty `204` once the link is ready, or `404` (not
+  published), `422` (not a Streamtape source) or `503` (provider unavailable).
+  It never returns a URL, so it cannot reveal a source the watch page would not
+  already serve, and it makes no provider call when a fresh link is cached.
 
-No environment variables, migrations or hosting changes are required.
+No environment variables, migrations or hosting changes are required beyond the
+Streamtape setup in `docs/AD_FREE_PLAYBACK.md`.
+
+## Trade-offs
+
+- **First play of a file:** if Play is pressed before the preparation finishes,
+  the visitor waits for the rest of the ~10 s ticket. Pressing Play about 10
+  seconds after the page opens finds the link ready.
+- **Per-instance cache:** each server instance keeps its own cache, and it
+  disappears on redeploy or a cold start. On a single long-running Node server
+  (Fly, Render, Railway, a VPS) every visitor benefits. On serverless platforms
+  a request that lands on a cold or different instance pays the handshake once
+  for that instance. Vercel's Fluid compute routes concurrent requests to shared
+  instances, which keeps the hit rate high. A shared cache would not help:
+  links can be bound to the IP address that requested them.
+- **Link lifetime:** Streamtape does not publish how long a `/file/dl` link
+  lasts. Refreshing after 20 minutes and stopping at 2 hours are deliberate
+  choices, and a rejected link heals itself with one retry. The production logs
+  (below) show the age at which links are really refused; if that is regularly
+  under 20 minutes, lower `LINK_REFRESH_AFTER_MS` in
+  `lib/video/playback-cache.ts`.
+- **Bandwidth:** relayed media is not fetched before the visitor shows intent,
+  so a page view that never plays costs no relayed bandwidth and no
+  long-running server request. Direct files load their metadata from their own
+  host on page load.
+- **Fastest option:** a durable direct MP4/WebM source on a CDN has no handshake
+  at all, so even the very first play is instant.
 
 ## Verification
 
 `npx vitest run` covers, among others:
 
-- `tests/unit/streamtape-tickets.test.ts` — resolve once/reuse, single flight,
-  TTL expiry, forget-on-demand, allowlist rejection, upstream rejection is never
-  cached, bounded cache, malformed ids ignored.
-- `tests/unit/video-prepare-route.test.ts` — warm-up resolves and caches without
-  leaking the URL, re-checks access, fails closed, does not cache a non-media
-  URL.
-- `tests/unit/video-playback-route.test.ts` — the click and every seek reuse the
-  cached link, a rejected cached link is replaced by a fresh one, plus the
-  existing range/HEAD/access/no-leak contracts.
-- `tests/unit/video-player.test.tsx` — the element is mounted on load, the
-  warm-up call is made before the click, buffering starts behind the poster,
-  play reuses the buffered element instead of remounting it, retry remounts, and
-  no iframe or provider link ever appears.
+- `tests/unit/playback-cache.test.ts` — one handshake per file, single flight,
+  no caching of failures, invalidation that never drops a newer link,
+  background refresh and maximum age, prepare as a no-op for a fresh link, and
+  the bounded access-decision TTL.
+- `tests/unit/video-playback-route.test.ts` — one link for the start-up and
+  seek ranges, shared in-flight handshakes, the access-decision TTL, one
+  transparent retry for a rejected cached link and none for a fresh one,
+  keeping a working link when the visitor cancels, the prepare endpoint, and
+  the existing range, access, allowlist and no-leak contracts.
+- `tests/unit/streamtape-media.test.ts` — telling an expired link apart from a
+  visitor who left or a media host that never answered.
+- `tests/unit/video-player.test.tsx` — the element exists before the click; no
+  relayed bytes before intent; the inline prepare script is server-rendered,
+  sent once, injection-safe and harmless when `fetch` fails; the controls,
+  keyboard and touch behaviour, and error recovery. No iframe or provider link
+  ever appears.
 
-Real latency can only be confirmed on the deployed site with a real file: press
-play, seek, and check the browser network log shows no provider URL and no
-second ticket round trip.
+The real provider behaviour — how long a new link takes, and that one link
+serves the probe, the first frames and a seek — is checked with your own
+credentials by `tests/live/streamtape-playback.live.test.ts` (see
+`tests/live/README.md`):
+
+```bash
+STREAMTAPE_LOGIN=… STREAMTAPE_API_KEY=… STREAMTAPE_PLAYBACK_FILE_ID=… npm run test:live
+```
+
+On the deployed site: open a video page, wait about 10 seconds, then press
+Play. Playback should begin within about a second, and so should seeks. The
+browser's network log should show only same-origin `/playback` requests, never
+a provider URL.
+
+### Production logs
+
+Each new link and each link the media host stops serving writes one line to
+the hosting logs (on Vercel: the project's **Logs** tab, search `[playback]`):
+
+```text
+[playback] Streamtape link ready in 10.2 s (file wg8ad12d3QiJRXG, prepare)
+[playback] Streamtape link failed after 0.3 s (file wg8ad12d3QiJRXG, prepare): unauthorized
+[playback] Media host did not serve video for a Streamtape link (file wg8ad12d3QiJRXG, HTTP 403, 25 min old); retrying with a fresh link
+```
+
+The cause in brackets is `prepare` (the page opened), `request` (a media
+request found no link) or `refresh` (background renewal). Mostly `prepare`
+lines, few `request` lines and rare refusals mean links are prepared ahead and
+reused. A failure shows only a fixed code such as `not_configured`,
+`unauthorized`, `not_found` or `bandwidth`. Links, tickets, credentials and
+provider messages are never logged.

@@ -458,12 +458,13 @@ has a *Streamtape thumb* action.
 Existing Streamtape, UFOLOAD, Uqload and embed records are not migrated or
 relabelled. Preserve their stored identifiers, metadata, thumbnails and URLs.
 
-Streamtape **uploads** are retired, but playback is not: `VideoPlayer` uses
-`/api/videos/[id]/prepare` and `/api/videos/[id]/playback` to resolve and consume
-IP-bound tickets server-side. Retain server-only `STREAMTAPE_LOGIN` and
-`STREAMTAPE_API_KEY`, outbound access and streaming-capable hosting for those
-videos. See `docs/AD_FREE_PLAYBACK.md`. UFOLOAD/Uqload retain stored playback
-without status reconciliation against their retired APIs.
+Streamtape **uploads** are retired, but playback is not: `VideoPlayer` streams
+those videos through `/api/videos/[id]/playback`, which resolves and consumes
+IP-bound tickets server-side (a `POST` to the same route prepares the link
+before Play). Retain server-only `STREAMTAPE_LOGIN` and `STREAMTAPE_API_KEY`,
+outbound access and streaming-capable hosting for those videos. See
+`docs/AD_FREE_PLAYBACK.md` and `docs/INSTANT_PLAYBACK.md`. UFOLOAD/Uqload retain
+stored playback without status reconciliation against their retired APIs.
 
 The old upload-session, relay and conversion-polling instructions are historical,
 not deployable steps for this checkout. They have been removed from this setup

@@ -111,6 +111,8 @@ The generic iframe validates HTTP(S)/userinfo via source selection, not an exact
 
 `app/api/videos/[id]/playback/route.ts` validates UUID/range and all publication gates, obtains/caches a Streamtape ticket, consumes its IP-bound URL **on the server**, streams media ranges with no-store headers, retries an expired cached ticket once, and redacts upstream errors. `prepare/route.ts` applies the same access checks and warms tickets without returning a secret URL. Both intentionally retain real Streamtape API dependencies through `streamtape-tickets.ts`, `streamtape-media.ts` and `streamtape.ts`.
 
+> **Later change (after this audit):** the warm-up is now `POST /api/videos/{id}/playback` in the playback route itself, and `prepare/route.ts` and `streamtape-tickets.ts` were replaced by `lib/video/playback-cache.ts`. The real Streamtape API dependency is unchanged. See `docs/INSTANT_PLAYBACK.md`.
+
 Therefore “Streamtape retired” means **new hosted uploads are retired**, not that the legacy playback API is unused. Preserve credentials and streaming-capable hosting while these rows exist. UFOLOAD/Uqload stored playback is retained without upload reconciliation. No rows/IDs/slugs/URLs/thumbnails/publication states have been rewritten in this work.
 
 ## 5. Schema audit and future migration
