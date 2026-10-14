@@ -1,10 +1,10 @@
 # DEPLOYMENT.md — Erobabe Production Setup (Click-by-Click)
 
-Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWPayments, video publishing, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. Filekosh hosted uploads are not implemented or enabled; section D documents the research blockers and required staging verification.
+Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWPayments, video publishing, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. FileKosh device uploads are implemented behind mandatory contract/browser-verification gates; section D documents enablement and remaining live acceptance.
 
 **Video-provider guidance audited**: October 14, 2026
 
-**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, OpenRouter (DeepSeek V3.2), direct MP4 URL video publishing, Tailwind CSS 4.
+**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, OpenRouter (DeepSeek V3.2), gated FileKosh device uploads, Tailwind CSS 4.
 
 ---
 
@@ -27,7 +27,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 - Playwright browsers: `npx playwright install`
 
 ### Decisions requiring owner authorization before production
-1. **Video hosting provider**: Current publishing saves direct URLs or generic embed links; local video-file uploads are unavailable. Filekosh integration is blocked on missing details in its official API contract, content/use approval and live staging verification. Do not deploy the retired Streamtape upload relay or enable Filekosh by changing a provider label. See section D and `docs/FILEKOSH_API_RESEARCH.md`.
+1. **Video hosting provider**: Device-file uploads only; FileKosh enablement requires its missing confirmation/transport contract, content/use approval and live staging verification. Never bypass the verification gates. See section D and `docs/FILEKOSH_API_RESEARCH.md`.
 2. **Hosting provider**: Vercel Hobby is limited to personal non-commercial use and its Acceptable Use Policy restricts objectionable content. Do NOT deploy commercial Erobabe to Vercel Hobby. Choose a host whose terms explicitly permit adult content and commercial use. Document approval.
 3. **Legal identity**: Operator must provide real legal name, business address, registration, contact emails, age-verification procedures. Do not publish fictional identity.
 4. **Age assurance**: Evaluate jurisdiction-specific requirements (e.g., UK, EU, US state laws). Frontend age gate alone is not robust assurance. Implement required verification integration where legally required.
@@ -89,7 +89,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 2. Open `supabase/migrations/00000000000000_initial_schema.sql` in your editor, copy entire content, paste into SQL Editor, click **Run**
 3. Repeat for `00000000000001_rls_policies.sql`
 4. Repeat for `00000000000002_seed_fixed_data.sql`
-5. Apply the remaining checked-in migrations in order through `00000000000010_admin_video_tools.sql`; do not re-run or edit migrations already recorded as applied. No Filekosh migration is included in this research-only change.
+5. Apply the remaining checked-in migrations in order through `00000000000011_filekosh_uploads.sql`; do not re-run or edit migrations already recorded as applied.
 6. Verify in **Table Editor** that tables exist: `profiles`, `categories`, `videos`, `ad_slots` (should have 10 rows), `site_settings` (1 row), etc.
 
 **Option B — via Supabase CLI**
@@ -127,7 +127,7 @@ In Supabase Dashboard → **Edge Functions** → **Secrets**, add:
 - `OPENROUTER_API_KEY`
 - `NOWPAYMENTS_API_KEY`
 - `NOWPAYMENTS_IPN_SECRET`
-- `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY` only for retained legacy playback and optional file-manager thumbnails (server-only; see section D). No upload relay secret is used by the current routes.
+- `FILEKOSH_API_KEY` and verified FileKosh contract settings (server-only; see section D).
 - `SITE_URL`
 
 ### 10. Create initial administrator using secure documented process
@@ -376,159 +376,134 @@ shows `finished` for that address and amount) — see "Rollback and recovery".
 
 ---
 
-## D. Video Publishing — URLs, embeds, and Filekosh readiness
+## D. FileKosh device uploads
 
-### How it works
+### Verification gate — required before enablement
 
-Videos are published by pasting direct MP4 URLs into the admin panel
-(`/admin/videos/upload`). Erobabe saves the URL in `videos.playable_url` and
-the browser plays the video straight from the original host. Erobabe may fetch
-frame samples for thumbnails, but does not copy or host the full source video.
-Player-page links and iframe sources use the separate generic embed publisher.
+The workflow is implemented but **not live-verified or ready to enable with a key alone**.
+Official documentation checked on 2026-10-14: https://filekosh.com/docs and
+https://filekosh.com/api/v1/openapi.json. Both omit the confirmation request body;
+the specification also omits accepted formats, signed PUT headers, storage hosts,
+URL expiry/renewal and browser CORS requirements. No dedicated thumbnail API is documented.
+The homepage's “no size limits” claim is not an object-upload transport contract.
 
-- **Provider:** `direct_url` (the default — no `VIDEO_PROVIDER` variable needed)
-- **Playback:** Native `<video>` element with `playable_url`
-- **Thumbnail:** Uploaded to Supabase Storage (signed upload URL)
-- **Metadata:** Generated by DeepSeek V3.2 via OpenRouter (with file-name fallback)
-- **No hosting-provider upload API or relay needed** for these link workflows; optional Streamtape thumbnail fallback and legacy playback still use its API.
+Obtain a sanitized, versioned quick-start/support response covering those missing
+fields, create response envelope, repeated-confirm semantics, WEB readiness and
+embed compatibility. Obtain appropriate content/use permission for this catalog.
+See `docs/FILEKOSH_API_RESEARCH.md` for the clarification request. **Do not guess
+`{id}`, `{ids}`, storage keys, or a bodyless confirmation from generated API examples.**
+If the supplied confirmation contract cannot be represented by the documented JSON
+template mechanism below, update the server adapter from that contract before enabling.
 
-### Setup steps
+### Required deployment steps
 
-1. Run the database migration `supabase/migrations/00000000000008_direct_video_urls.sql`
-   (forward-only; adds `direct_url` to the allowed provider values).
-   Older migrations are untouched; legacy rows keep playing from their stored URLs.
-2. Open Admin → **System Health**: *Video Provider* should read `direct_url`.
-3. Open `/admin/videos/upload`, choose a category, paste a direct `.mp4` URL,
-   and press **Generate AI metadata & publish**. The video should appear
-   immediately with AI-generated metadata (or file-name fallback).
-4. Open `/video/[slug]` and confirm playback, seeking, and error handling.
+1. Obtain a bearer API key in **Dashboard → API**, the location identified by the
+   official specification. Use a staging key first. Set `FILEKOSH_API_KEY` privately
+   in the server deployment environment; never prefix it with `NEXT_PUBLIC_`.
+2. Configure existing Supabase project URL, publishable key, and server-only
+   `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`). Never expose the service key.
+3. Apply existing migrations in order and then
+   `supabase/migrations/00000000000011_filekosh_uploads.sql` with Supabase CLI or
+   SQL editor. Do not modify/re-run previously applied migrations. New SQL expands
+   provider constraints, adds MIME/size/share metadata, and creates private recovery
+   sessions plus a service-role-only transactional finalizer. Historical records
+   and existing RLS policies remain intact. Test on staging before production.
+4. Set the **provider-verified** comma-separated `FILEKOSH_ALLOWED_MIME_TYPES`,
+   exact `FILEKOSH_UPLOAD_HOSTS`, and `FILEKOSH_UPLOAD_HEADERS_JSON` (a JSON object,
+   `{}` only if verified correct). Set `FILEKOSH_MAX_UPLOAD_BYTES` to the verified
+   account/transport cap or a deliberately lower site policy; this is not a claimed
+   universal FileKosh limit. The implementation uses a single PUT, not multipart.
+5. Set `FILEKOSH_CONFIRM_BODY_TEMPLATE` to the **exact documented confirmation
+   JSON**, replacing video-ID values with the literal string `{{id}}`. Replacement
+   is structural, so IDs are not interpolated into raw JSON. No guessed example is
+   supplied. The final readiness check independently GETs `/videos/{id}` and requires
+   matching ID, slug, MIME, byte size, `platform=WEB`, `status=READY`, and a valid
+   returned `embedUrl` on `https://filekosh.com` before publication.
+6. Verify provider/storage access from the deployed server and actual browser PUT
+   from the staging origin. Storage CORS must allow that origin, PUT and documented
+   headers. Browser developer tools must show the **File bytes going to the storage
+   host**, never `/api/*`. There is no server relay fallback. Set
+   `FILEKOSH_CONTRACT_VERIFIED=true` and `FILEKOSH_BROWSER_UPLOAD_VERIFIED=true` only
+   after obtaining that evidence. Defaults are false and create fails closed.
+   Optional `FILEKOSH_UPLOAD_CONCURRENCY` defaults to 2, clamped to 1–3.
+7. Deploy the updated app. Sign in as an active administrator, open
+   `/admin/videos/upload`, select a category and drag/drop several small authorized
+   test videos. Edit titles before starting. Verify local thumbnails, per-file
+   measured byte progress, Confirming, and Completed. Completion includes database
+   persistence, not just 100% transferred bytes.
+8. Check Supabase videos/jobs: provider `filekosh`, verified provider ID/slug,
+   size/MIME/duration, persisted thumbnail, returned embed and published state.
+   `playable_url` stays NULL: FileKosh's `url` is not documented as direct media.
+   Presigned URLs exist only in the private service-role recovery table until
+   completion, then are cleared; never copy them into public video fields.
+9. Open each public watch page and test play/pause/seek/fullscreen on desktop and
+   mobile. The iframe uses the returned URL with no popup or top-navigation
+   permissions. Sandbox compatibility has **not** been live-tested. It cannot
+   remove ads inside a cross-origin player; do not promise ad-free playback or
+   loosen navigation permissions without documented need and security review.
 
-### Thumbnails
+### Thumbnail and recovery behavior
 
-Each video has its own thumbnail picker. A custom thumbnail is uploaded to the
-public `video-thumbnails` bucket through the existing signed-upload flow
-(`POST /api/videos/storage-token` → browser `PUT`).
+Local `<video>` decoding and canvas capture sample three interior timestamps,
+reject near-black frames, encode a compressed JPEG and release object URLs/media.
+A decoding failure is a separate warning and does not block the video. When a
+thumbnail was generated but storage fails, the queue retains it for retry; video
+bytes are not re-uploaded. The existing signed Supabase `video-thumbnails` PUT
+mechanism stores images. Local thumbnail capture does not require ffmpeg. Existing
+library frame-generation for direct legacy sources still uses ffmpeg.
 
-Three further sources fill in a video that has none, in this order:
+Private sessions reserve a UUID before create, and confirmation finalization locks
+that session and atomically inserts one video/job. A duplicate request cannot
+create a second row. GET retry uses bounded jittered backoff on 429/5xx and honors
+Retry-After; long delays are returned to the administrator rather than holding a
+serverless function open. Create is not automatically retried after an ambiguous
+network/5xx outcome. Definitive rejection can release the reservation. Confirmation
+is atomically attempted once; uncertain outcomes reconcile using GET, never blindly
+repeat the undocumented POST. A definite rejection permits another confirmation.
 
-1. **A frame from the video itself** — `POST /api/admin/videos/thumbnails` runs
-   ffmpeg over the direct URL and stores a captured frame.
-2. **The Streamtape file manager** — see the next section. This is the automatic
-   fallback at publish time for both direct-URL and embed publishing.
-3. **A manual pick** from `/admin/videos` → *Add thumbnail*.
+Do not close the tab while uploading. Browser `File` objects are not persisted.
+After reload, **Recover interrupted sessions** can check/finish known provider IDs
+without another upload. If creation outcome is unknown, a transfer was partial or
+its URL expired, reconcile with FileKosh support; no URL-renewal/resumable/cancel API
+is invented. Cancel stops the current XHR, not a provider record deletion. Known
+orphan media may require provider-side cleanup. Completed videos are not republished
+by retries after later moderation changes.
 
-### Thumbnails from the Streamtape file manager
+### Troubleshooting and remaining acceptance
 
-If the thumbnail images live in the Streamtape file manager — one image per
-video in a folder such as `home/thumbnails`, each named after its video —
-Erobabe can attach them itself.
+- Unauthorized/Forbidden: verify logged-in active admin profile and server Supabase credentials.
+- Configuration blocked: verify every required contract/transport setting and migration;
+  System Health reports configuration only, not live availability.
+- Unsupported/oversized: verify account-supported MIME types and chosen site policy;
+  browsers unable to identify a MIME type fail validation rather than guessing.
+- Network/CORS: inspect browser network/preflight in staging. A status-zero XHR cannot
+  distinguish CORS from a dropped connection. Ask the provider to enable documented
+  browser uploads; never proxy video bytes through Vercel.
+- Authentication/rate limits: rotate/check the server key privately; wait the displayed
+  Retry-After. The approximate provider rate is 120 requests/minute **per key**;
+  conservative concurrency does not coordinate rate budgets across multiple admins.
+- Confirmation/persistence: retry the same session. A READY-but-database-failed upload
+  remains recoverable; no new video transfer is necessary. Uncertain POST outcomes
+  need safe read reconciliation or provider support.
+- Library deletion removes the catalog record/thumbnail as before, not the remote
+  FileKosh media. Explicit provider retention/cleanup is an operator responsibility.
 
-- `STREAMTAPE_LOGIN` and `STREAMTAPE_API_KEY` (server-only; Streamtape panel →
-  *Account Settings*) authorise a read of the file manager. Both are required;
-  without them the importer answers `503` with an actionable message and
-  publishing continues with whatever thumbnail it already has.
-- `STREAMTAPE_THUMBNAIL_FOLDER_NAME` (default `thumbnails`) names the folder to
-  look for; the file manager is searched breadth-first to a shallow depth, and
-  common spellings (`thumbs`, `thumnails`) are recognised. Set
-  `STREAMTAPE_THUMBNAIL_FOLDER_ID` to skip the search entirely.
-- Matching is by name: the image name is compared against the video's title,
-  slug, source file name and upload name, lower-cased and stripped of
-  separators, brackets, extensions and resolution tags. An exact match always
-  wins; below that a token-overlap score with a floor of 0.68 decides. A near
-  miss is reported as *unmatched* rather than attached — a wrong thumbnail is
-  worse than a missing one.
-- A matched image is **copied** into the public `video-thumbnails` bucket and
-  the stored URL is Erobabe's own. Streamtape download links are ticketed and
-  expire, so they are never written to a video row.
+No credentials or live Supabase connection were available here. The sandbox's
+application outbound allowlist excludes FileKosh/storage hosts. Real upload, CORS,
+thumbnail storage and iframe acceptance **have not been proved**. Unit tests mock
+third-party responses; embedded PostgreSQL tests verify the new migration/finalizer
+on a schema fixture, not a live production schema. Do not enable production until
+an authorized staging upload-to-public-playback test succeeds.
 
-Admin surface (all admin-only, `/api/admin/videos/streamtape-thumbnails`):
+### Legacy preservation
 
-| Action | Request | Effect |
-| --- | --- | --- |
-| Check folder | `GET` | Dry run: reports the folder found, how many images it holds, and which video each one would match. Downloads and writes nothing. |
-| Import | `POST { ids?: string[]; overwrite?: boolean }` | Copies the matched images into storage and writes the public URLs. Without `ids`, fills every video still missing a thumbnail (25 per request). `overwrite: true` is required to replace an existing thumbnail. |
-
-In `/admin/videos` the **Streamtape thumbnails** panel runs the dry run with
-*Check folder* and the import with *Import missing thumbnails* (or
-*Import for selection* when rows are ticked). Each row without a thumbnail also
-has a *Streamtape thumb* action.
-
-### Legacy videos and retired upload instructions
-
-Existing Streamtape, UFOLOAD, Uqload and embed records are not migrated or
-relabelled. Preserve their stored identifiers, metadata, thumbnails and URLs.
-
-Streamtape **uploads** are retired, but playback is not: `VideoPlayer` uses
-`/api/videos/[id]/prepare` and `/api/videos/[id]/playback` to resolve and consume
-IP-bound tickets server-side. Retain server-only `STREAMTAPE_LOGIN` and
-`STREAMTAPE_API_KEY`, outbound access and streaming-capable hosting for those
-videos. See `docs/AD_FREE_PLAYBACK.md`. UFOLOAD/Uqload retain stored playback
-without status reconciliation against their retired APIs.
-
-The old upload-session, relay and conversion-polling instructions are historical,
-not deployable steps for this checkout. They have been removed from this setup
-guide; `docs/STREAMTAPE_MIGRATION.md` preserves that history. No current upload
-route uses `STREAMTAPE_RELAY_*` or `STREAMTAPE_ADULT_CONTENT_ALLOWED` to enable
-local-file hosting.
-
-### Filekosh — blocked, no runtime enablement yet
-
-Official documentation exists at https://filekosh.com/docs, backed by
-https://filekosh.com/api/v1/openapi.json. It documents a Dashboard → API bearer
-key, `POST /videos` → presigned PUT → `POST /videos/confirm`, and WEB video
-`embedUrl` responses. **The confirmation request body is missing**, and upload
-headers/CORS, response envelopes and lifecycle/error details require provider
-clarification. See `docs/FILEKOSH_API_RESEARCH.md` for exact confirmed facts,
-source links and the message to send to support.
-
-There is **no Filekosh environment variable consumed by the application**, no
-local-video upload UI/API, and no Filekosh migration in this change. Keep
-`VIDEO_PROVIDER` unset or `direct_url`; setting `filekosh` does not create an
-integration. Never place a provider key in `NEXT_PUBLIC_*`, a player URL, source
-control, browser bundles, logs or public database fields.
-
-Before implementation/enablement:
-
-1. Obtain an authorized complete create/PUT/confirm/status specification and
-   sanitized examples, including safe retry/cancellation behavior and supported
-   formats/limits. The linked research report lists every missing detail.
-2. Obtain written permission for the intended lawful adult catalog, commercial
-   API use and third-party embedding. The public terms do not explicitly grant
-   this use. Preserve existing rights/moderation gates.
-3. Provision a staging key privately using the documented Dashboard → API
-   mechanism, an active staging administrator/category and rights-cleared test
-   media. Do not paste secrets into chat or issues. Runtime configuration names
-   will be documented with the real implementation, not invented now.
-4. Verify Filekosh/storage reachability and browser PUT CORS from staging.
-   Presigned PUT does not by itself prove browser support, resumability or
-   unlimited technical object size. If a streaming worker is required, verify
-   that host's body, time, memory and egress limits; never buffer whole videos
-   inside a typical Next.js function.
-5. Implement the actual App Router workflow and a forward-only migration (next
-   number at the audit: `00000000000011`; recheck before use), preserving every
-   historical provider value and record. Apply that future migration before
-   enabling hosted jobs; no migration or data relabel is needed now.
-6. Validate genuine transfer, completion/readiness, stored IDs and returned
-   HTTPS Filekosh embed URLs, desktop/mobile playback, failure/cancel/retry and
-   duplicate handling. Only then enable Filekosh for **new hosted uploads**.
-
-Troubleshooting now: a missing video-file selector is expected, not a credential
-error. `/api/videos/upload-url` publishes existing links; `/storage-token` signs
-images only; `/status` reads history, not Filekosh processing. A passing build or
-mocked response is not a live upload. See `docs/FILEKOSH_REPOSITORY_AUDIT.md` for
-the current call graph and actual test results.
-
-### Supabase Storage
-
-1. Go to **Storage** → **New bucket** → `ad-creatives` (public, for advertiser creatives)
-2. Create bucket `video-thumbnails` (public, for admin-selected video thumbnails). `lib/video/storage.ts` also creates it on first use so a missed migration does not block thumbnail uploads.
-3. Optionally create bucket `videos` (private, only if you later implement an internal provider)
-4. Set policies: allow authenticated advertisers to upload/delete only within their own `ad-creatives/<user-id>/` folder; public read is needed for creative and thumbnail display.
-
-> **Legacy**: `video-incoming` comes from migration `00000000000004_video_transit_storage.sql`. Current routes do not upload videos there or to a Streamtape relay. Preserve any objects required by older deployments until their ownership/retention is checked. Its historical 2 GB limit is not a Filekosh limit. If a migration fails due to project storage limits, resolve it explicitly; do not silently mark it applied or edit historical SQL.
-5. The campaign and publisher flows now fail clearly if their required bucket is missing. Verify both bucket names before accepting uploads.
-
----
+Active Streamtape API, ticket streaming, thumbnail import and relay helpers have
+been removed. Remove their old deployment secrets. Historic Streamtape rows remain
+in the database but are explicitly unsupported rather than making active API calls.
+Other direct-media and stored generic-embed legacy playback remains. The old URL
+publisher/embed-ingestion APIs are removed, not hidden. Historical migrations stay
+unchanged. `video-incoming` is not used; retain old objects until ownership/retention
+is reviewed rather than deleting them automatically.
 
 ## D2. Video admin tools (migration 00000000000010)
 
@@ -544,7 +519,7 @@ this release. It adds:
 thumbnail, the server captures a frame with a bundled ffmpeg
 (`@ffmpeg-installer/ffmpeg`, linux-x64 binary, ~68 MB) and stores a 1280×720
 JPEG in the `video-thumbnails` bucket. The binary is included in the
-`/api/videos/upload-url` and `/api/admin/videos/thumbnails` functions via
+`/api/admin/videos/thumbnails` function via
 `outputFileTracingIncludes` in `next.config.mjs`. Set `FFMPEG_PATH` to use another
 binary. Embed (player-page) links cannot be framed; add those thumbnails by hand.
 Existing videos can be filled in from /admin/videos (“Generate thumb” or bulk
@@ -726,11 +701,7 @@ fly deploy
 | `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional pin for the IPN callback URL the app sends with every payment (must be an absolute URL ending in `/api/nowpayments/ipn`) | No | Your domain | Hosting env | prod (optional) | Admin → System Health shows `URL source`: `NOWPAYMENTS_IPN_CALLBACK_URL`; an invalid value is reported as a config warning and ignored | Yes |
 | `NOWPAYMENTS_DEFAULT_PAY_CURRENCY` | Default NOWPayments asset identifier | No | One of: usdterc20, usdttrc20, usdtbsc, usdtsol, btc, eth, trx, bnbbsc, sol | Hosting env | prod | Must be enabled in the NOWPayments dashboard; checkout validates every selection server-side | Yes |
 | `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key for `x-nowpayments-sig` verification | No | NOWPayments Dashboard → Store Settings → IPN Secret Key | Hosting secrets | prod | Admin → System Health shows IPN secret set; every IPN is rejected without it | Yes |
-| `VIDEO_PROVIDER` | Non-hosting provider factory selection; active URL/embed routes select their provider explicitly | No | Leave unset (`direct_url`); `filekosh` is not implemented | Hosting env | optional | Current System Health label is not a live hosting/upload test | Yes |
-| `STREAMTAPE_LOGIN` | Legacy playback and optional thumbnail file-manager API login | No | https://streamtape.com/accpanel → Account Settings | Hosting secrets | if retaining those workflows | Validate legacy playback and Admin → Videos → Check folder | Yes |
-| `STREAMTAPE_API_KEY` | Legacy playback and optional thumbnail API key | No | Streamtape Account Settings | Hosting secrets | if retaining those workflows | Validate legacy playback and read-only folder scan; never print key | Yes |
-| `STREAMTAPE_THUMBNAIL_FOLDER_NAME` | Optional image-folder name | No | Streamtape file manager; default `thumbnails` | Hosting env | optional | Admin → Videos → Check folder | Yes |
-| `STREAMTAPE_THUMBNAIL_FOLDER_ID` | Optional explicit image-folder ID | No | Streamtape file manager | Hosting env | optional | Skips folder-name search; verify scan | Yes |
+| `FILEKOSH_API_KEY` | FileKosh server bearer key | No | Dashboard → API (official specification) | Hosting secrets | uploads | Section D staging upload test | Yes |
 | `OPENROUTER_API_KEY` | OpenRouter API key for AI metadata suggestions | No | https://openrouter.ai/keys → Create key | Hosting secrets | prod (optional) | Test via System Health → Test OpenRouter, or `/api/metadata/suggest` as admin | Yes |
 | `OPENROUTER_MODEL` | OpenRouter model slug | No | `deepseek/deepseek-v3.2` (default) | Hosting env | prod (optional) | Check https://openrouter.ai/models for the slug | No |
 | `OPENROUTER_MAX_OUTPUT_TOKENS` | Output-token budget for one metadata suggestion | No | `2048` (default) | Hosting env | prod (optional) | Raise it if suggestions are truncated | No |
@@ -738,7 +709,7 @@ fly deploy
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |
 
-**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY`, any future Filekosh bearer key, `OPENROUTER_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
+**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `FILEKOSH_API_KEY`, `OPENROUTER_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
 
 ---
 
@@ -767,9 +738,9 @@ npx playwright test
 
 **Admin:**
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
-- [ ] Video publisher at `/admin/videos/upload` → publish direct-video URLs or player/iframe links with optional thumbnail images. No local video transfer is available yet.
-- [ ] Choose only a category and optional thumbnail; title, description, and tags are generated server-side by DeepSeek V3.2 via OpenRouter (`/api/metadata/suggest` contract: title, description, tags, category) before publishing
-- [ ] Publish action sets status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]` after successful URL/embed publishing. Future hosted uploads must remain private until provider readiness is verified; that flow is not implemented yet.
+- [ ] Device uploads at `/admin/videos/upload` → multiple local files, real progress, local thumbnails and verified completion.
+- [ ] Choose a category, review editable filename-derived titles and generated thumbnails before upload. Existing metadata suggestion tools remain independent.
+- [ ] Confirmed READY metadata plus atomic finalization sets published/public/cleared/approved and appears on public listings. Unconfirmed sessions never appear publicly.
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
 - [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject
@@ -819,10 +790,10 @@ npx playwright test
 
 **Video hosting:**
 - [ ] Direct-URL and generic embed publishing, category/metadata/duplicate handling and optional thumbnails work with an active staging administrator
-- [ ] Legacy Streamtape native playback, seeking, retry and ticket warm-up still work with server-only credentials
-- [ ] Filekosh remains disabled until its contract/policy/setup gates in section D are resolved
+- [ ] Historic retired-provider records remain intact and show an unsupported message; no API calls occur
+- [ ] FileKosh gates are enabled only after section D verification and authorized live acceptance
 - [ ] Before future enablement: genuine device upload, accurate byte progress, verified completion/readiness, stable embed playback and failure/cancellation/idempotency tests all pass
-- [ ] Future Filekosh jobs do not call Streamtape thumbnail or media APIs and never expose provider keys or upload authorization publicly
+- [ ] FileKosh jobs never expose keys or upload authorization publicly
 
 **Email:**
 - [ ] Resend domain verified (check Resend dashboard)
@@ -882,15 +853,15 @@ update invoices set status='paid', paid_at=now() where number='...';
 
 **Video hosting outage:**
 1. Check provider status page
-2. If Streamtape is unavailable (or returns 509 bandwidth-exceeded), the admin page reports it as a note on the row and pauses publishing; do **not** switch `VIDEO_PROVIDER` to an unknown value (the factory fails closed). `VIDEO_PROVIDER=internal` disables new uploads and is for embed-only deployments.
+2. If FileKosh is unavailable, keep failed sessions for reconciliation. Do not create a duplicate or proxy video bytes through the app server.
 3. Existing published videos remain accessible because their stored embed/watch URLs do not expire
 
 ---
 
 ## Unresolved Provider Approvals and Blockers
 
-1. **Filekosh API and content/use approval**: its official API specification is incomplete for upload confirmation. Obtain the clarification and written content/use permission listed in `docs/FILEKOSH_API_RESEARCH.md`. No Filekosh upload integration is enabled.
-2. **Hosted-upload implementation and live acceptance**: a future implementation needs authorized staging credentials, documented browser/streaming transport, forward migration, and real upload → readiness → publish → desktop/mobile iframe playback evidence. Current passing unit tests/build do not prove Filekosh functionality.
+1. **Filekosh API and content/use approval**: its official API specification is incomplete for upload confirmation. Obtain the clarification and written content/use permission listed in `docs/FILEKOSH_API_RESEARCH.md`. The implemented upload integration remains gated until verification.
+2. **Hosted-upload implementation and live acceptance**: enablement needs authorized staging credentials, documented browser PUT transport, the new forward migration, and real upload → readiness → publish → desktop/mobile iframe playback evidence. Current passing unit tests/build do not prove Filekosh functionality.
 3. **Vercel Hobby**: Not suitable for commercial adult site. Hosting decision required — see `GO_LIVE_CHECKLIST.md`.
 4. **Age assurance**: Frontend gate alone not robust. Legal review required for jurisdiction-specific verification.
 5. **Legal identity**: Owner must provide real business details before publishing Terms/Privacy.

@@ -4,22 +4,16 @@ import type { ServiceClient } from "@/lib/video/publishing";
 /**
  * Thumbnail storage only.
  *
- * Video files are published from direct URLs and never stored in Supabase.
+ * Video bytes upload directly to FileKosh, never Supabase or the application server.
  * Thumbnails are small enough for a signed upload URL.
  */
 
-export const VIDEO_INCOMING_BUCKET = "video-incoming";
 export const THUMBNAIL_BUCKET = "video-thumbnails";
 
-export const MAX_VIDEO_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
 export const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024; // 10 MB
 export const THUMBNAIL_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
-/** Long enough for a provider's remote importer to fetch a queued file. */
-export const TRANSIT_DOWNLOAD_TTL_SECONDS = 6 * 60 * 60;
-
 const SAFE_EXTENSION = /^[a-z0-9]{1,10}$/;
-const FALLBACK_VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "m4v", "mkv", "avi", "wmv", "flv", "ts", "mpg", "mpeg", "3gp"]);
 
 export function safeFileExtension(fileName: string, mimeType: string, allowed: Set<string>, fallback: string): string {
   const fromName = fileName.split(".").pop()?.toLowerCase() || "";
@@ -28,10 +22,6 @@ export function safeFileExtension(fileName: string, mimeType: string, allowed: S
   const fromMime = mimeType.split("/")[1]?.toLowerCase().replace(/[^a-z0-9]/g, "") || "";
   if (fromMime && allowed.has(fromMime)) return fromMime;
   return fallback;
-}
-
-export function videoExtension(fileName: string, mimeType: string): string {
-  return safeFileExtension(fileName, mimeType, FALLBACK_VIDEO_EXTENSIONS, "mp4");
 }
 
 export function thumbnailExtension(fileName: string, mimeType: string): string {
@@ -82,27 +72,6 @@ export function resetStorageBucketCache(): void {
   bucketsChecked = false;
 }
 
-export function transitPrefix(userId: string): string {
-  return `incoming/${userId}`;
-}
-
-/**
- * Rejects anything that is not `<userId>/<uuid>.<ext>` inside the transit
- * prefix. Admins must not be able to point a publish request at another
- * account's object or escape the bucket with `..`.
- */
-export function assertOwnTransitPath(userId: string, path: string): string {
-  const normalized = String(path || "").trim().replace(/^\/+/, "");
-  const prefix = `${transitPrefix(userId)}/`;
-  const valid =
-    normalized.startsWith(prefix) &&
-    !normalized.includes("..") &&
-    /^[a-zA-Z0-9/_-]+\.[a-z0-9]{1,10}$/.test(normalized) &&
-    normalized.slice(prefix.length).split("/").length === 1;
-  if (!valid) throw new Error("That storage path is not a valid upload for this account");
-  return normalized;
-}
-
 export interface UploadTarget {
   uploadUrl: string;
   storagePath: string;
@@ -136,13 +105,6 @@ export async function createThumbnailUploadTarget({
 
   const { data: publicData } = bucket.getPublicUrl(storagePath);
   return { uploadUrl: data.signedUrl, storagePath, bucket: THUMBNAIL_BUCKET, publicUrl: publicData?.publicUrl };
-}
-
-/** A temporary, publicly fetchable URL for a file already sitting in the transit bucket. */
-export async function createTransitDownloadUrl(service: ServiceClient, storagePath: string, expiresIn = TRANSIT_DOWNLOAD_TTL_SECONDS): Promise<string> {
-  const { data, error } = await service.storage.from(VIDEO_INCOMING_BUCKET).createSignedUrl(storagePath, expiresIn);
-  if (error || !data?.signedUrl) throw new Error(`Could not create a download URL: ${error?.message || "unknown storage error"}`);
-  return data.signedUrl;
 }
 
 /** Confirms a thumbnail path belongs to this admin and returns its public URL. */
@@ -228,37 +190,5 @@ export async function removeThumbnailObject(service: ServiceClient, publicUrlOrP
     await service.storage.from(THUMBNAIL_BUCKET).remove([decodeURIComponent(path)]);
   } catch {
     // Cleanup is best effort — the row no longer references the object.
-  }
-}
-
-export async function removeTransitObject(service: ServiceClient, storagePath: string): Promise<void> {
-  if (!storagePath) return;
-  try {
-    await service.storage.from(VIDEO_INCOMING_BUCKET).remove([storagePath]);
-  } catch {
-    // Cleanup is best effort; a stale transit file is not a correctness problem.
-  }
-}
-
-/** Deletes this admin's transit files older than `maxAgeMs` — best effort. */
-export async function cleanupTransitObjects(service: ServiceClient, userId: string, maxAgeMs = 24 * 60 * 60 * 1000): Promise<number> {
-  try {
-    const prefix = transitPrefix(userId);
-    const { data, error } = await service.storage.from(VIDEO_INCOMING_BUCKET).list(prefix, { limit: 200 });
-    if (error || !data?.length) return 0;
-
-    const cutoff = Date.now() - maxAgeMs;
-    const stale = data
-      .filter((entry: any) => {
-        const created = Date.parse(entry.created_at || entry.updated_at || "");
-        return Number.isFinite(created) && created < cutoff;
-      })
-      .map((entry: any) => `${prefix}/${entry.name}`.replace(/\/{2,}/g, "/"));
-    if (!stale.length) return 0;
-
-    await service.storage.from(VIDEO_INCOMING_BUCKET).remove(stale);
-    return stale.length;
-  } catch {
-    return 0;
   }
 }

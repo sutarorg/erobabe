@@ -55,9 +55,7 @@ export async function GET(req: NextRequest) {
       providerState = "ready";
       note = "This video plays directly from the source URL — no provider conversion needed.";
     } else if (video.provider === "streamtape") {
-      providerState = "ready";
-      note =
-        "This video was uploaded through the retired Streamtape integration. Its stored playback data is kept as-is and is not refreshed.";
+      note = "Unsupported legacy provider. Records are preserved; provider APIs are no longer contacted.";
     } else if (video.provider === "ufoload") {
       note =
         "This video was uploaded through the retired UFOLOAD integration. Its stored playback data is kept as-is and is not refreshed.";

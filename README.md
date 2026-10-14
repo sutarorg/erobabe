@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, direct MP4 video publishing, Resend email, AI metadata (DeepSeek V3.2 via OpenRouter), and SEO optimization.
+Production-ready Next.js application with Supabase backend, NOWPayments crypto payments, gated FileKosh device uploads, Resend email, AI metadata (DeepSeek V3.2 via OpenRouter), and SEO optimization.
 
 ## Quick Start
 
@@ -19,7 +19,6 @@ Open http://localhost:3000
 - `DEPLOYMENT.md` — click-by-click production setup
 - `GO_LIVE_CHECKLIST.md` — operational requirements and blockers
 - `IMPLEMENTATION_REPORT.md` — what changed, tests, blockers
-- `docs/STREAMTAPE_MIGRATION.md` — historical record of the retired Streamtape integration
 - `.env.example` — env vars reference (no secrets)
 
 ## Stack
@@ -29,56 +28,30 @@ Open http://localhost:3000
 - NOWPayments (crypto payments)
 - Resend (transactional email)
 - OpenRouter API, DeepSeek V3.2 (server-generated video metadata)
-- Direct MP4 URL publishing (no video hosting API needed)
+- FileKosh presigned browser PUT uploads (provider verification required)
 - Tailwind CSS 4
 
-## Video Publishing
+## Video Uploads
 
-**Filekosh migration status (2026-10-14): blocked, not implemented.** Official
-[API documentation](https://filekosh.com/docs) was found, but its OpenAPI
-specification omits the required upload-confirmation request body and other
-transport/lifecycle details. No live Filekosh upload or playback has been
-verified. Do not set `VIDEO_PROVIDER=filekosh` or relabel existing records.
-See [the API research and provider clarification request](docs/FILEKOSH_API_RESEARCH.md)
-and [the current-main architecture audit and actual test results](docs/FILEKOSH_REPOSITORY_AUDIT.md).
-Local video-file uploads are not available in the active admin route; its file
-picker uploads optional thumbnail images only. Existing URL/embed publishing
-and legacy playback are unchanged.
+`/admin/videos/upload` accepts multiple local video files through drag-and-drop or
+**Choose videos**. There is no URL-import method. Videos PUT directly from the
+browser to FileKosh storage, with measured per-file progress and bounded concurrency.
+Actual local frames are captured into JPEG thumbnails and PUT to Supabase Storage.
+A video becomes public only after verified `READY` metadata and atomic database persistence.
+Existing direct-media and generic-embed records keep stored playback. Retired
+Streamtape records are retained but explicitly unsupported; no provider API or relay remains.
 
-Videos are published by pasting direct MP4 URLs into the admin panel
-(`/admin/videos/upload`). Erobabe saves the link and plays the video straight
-from the original host — it does not copy or host the full video file. Only
-frame samples are fetched when generating a thumbnail. No hosting-provider
-credentials, relay, or video-upload service is needed for direct MP4 sources.
-Legacy Streamtape entries use a same-origin streaming endpoint so IP-bound
-server-generated tickets are not handed to visitors' browsers. This requires
-server-only Streamtape credentials and streaming-capable hosting; see
-`docs/AD_FREE_PLAYBACK.md` for bandwidth, egress and request-duration requirements.
+**Not yet live-verified:** The official FileKosh docs still omit the confirmation
+body, accepted format matrix and upload headers/CORS details. The implementation
+fails closed until the operator supplies a verified contract and browser-upload
+configuration. A key alone does not enable uploads. See [deployment section D](DEPLOYMENT.md#d-filekosh-device-uploads)
+and [the API research](docs/FILEKOSH_API_RESEARCH.md). Do not fabricate configuration
+or treat passing mocks as a successful provider upload.
 
-### Thumbnails, metadata, and video grids
-
-- If no image is uploaded for a direct video link, ffmpeg automatically samples
-  frames, rejects blank/dark/washed-out candidates, scores detail, contrast,
-  colour, and exposure, and saves a vibrant 1280×720 JPEG. Uploaded images
-  take priority; bulk generation also preserves images uploaded during capture.
-- Capture needs a Node.js host that can execute the bundled ffmpeg binary (or
-  `FFMPEG_PATH`), reach the media URL, and write to Supabase's public
-  `video-thumbnails` bucket. Unreachable or unusable footage produces an admin
-  warning, not a fabricated image. Embed-only player pages need a supplied
-  image or a direct video-file link; they do not expose frames to this app.
-- AI titles are descriptive, search-friendly, and non-graphic, up to 160
-  characters. Generated descriptions **must contain 30–40 words**. Invalid AI
-  descriptions are retried with feedback; prepared metadata and deterministic
-  fallbacks obey the same limit. AI failure notices remain in the admin UI,
-  not the public description. These rules apply to newly generated metadata,
-  not a retroactive rewrite of existing records.
-- “More like this”, Featured, and Latest sections share a responsive four-row
-  grid with at most four columns (16 cards). At narrower widths the visible
-  count follows the column count, preventing a fifth row. The legacy
-  five-column video mode has been removed.
-
-Visual-quality scoring is a thumbnail heuristic, not a guarantee of increased
-click-through or conversion rates. Review generated metadata and images.
+Apply migration `00000000000011_filekosh_uploads.sql` forward, without editing old
+migrations. The generated thumbnail uses `video-thumbnails`; videos never pass
+through Next.js or Supabase. Existing manual thumbnail/category/carousel tools,
+authentication, advertiser and payment features remain.
 
 ## Routes
 

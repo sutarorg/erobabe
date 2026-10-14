@@ -1,3 +1,5 @@
+> **Historical implementation record, not current deployment instructions.** Provider setup here is obsolete. See DEPLOYMENT.md for the current gated FileKosh workflow.
+
 # IMPLEMENTATION_REPORT.md — Erobabe Production Transformation
 
 **Date**: October 10, 2026  

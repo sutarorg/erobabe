@@ -1,3 +1,5 @@
+> **Historical research, rechecked 2026-10-14.** The official confirmation schema remains incomplete. A fail-closed implementation now exists; claims below about code being unchanged refer to the original research revision. See [DEPLOYMENT.md](../DEPLOYMENT.md#d-filekosh-device-uploads).
+
 # Filekosh API research — integration blocked on incomplete contract
 
 **Researched:** 2026-10-14 (UTC)

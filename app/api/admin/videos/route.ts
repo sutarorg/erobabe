@@ -6,8 +6,8 @@ import { revalidatePublicTag } from "@/lib/public/revalidate";
 /**
  * Admin video maintenance: change/remove a thumbnail, or delete a video.
  *
- * Nothing here touches the video bytes — direct-link videos are played from the
- * original host, so deleting the row only forgets the URL. The thumbnail, which
+ * Nothing here touches provider video bytes. Deleting removes the catalog row,
+ * not remote FileKosh media; provider-side retention/cleanup is separate. The thumbnail, which
  * *is* uploaded to Supabase Storage, is removed from the bucket as well (best
  * effort: a missing object never fails the database change).
  */

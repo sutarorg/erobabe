@@ -1,3 +1,5 @@
+> **Historical pre-implementation audit.** Its call graph and baseline results describe the starting revision, not the current application. See [DEPLOYMENT.md](../DEPLOYMENT.md#d-filekosh-device-uploads) for the gated implementation and remaining verification.
+
 # Filekosh migration: current repository audit and verification
 
 **Audit date:** 2026-10-14 (UTC)

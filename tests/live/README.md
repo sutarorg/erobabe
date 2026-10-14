@@ -34,23 +34,6 @@ The same check is available to admins at runtime: **Admin → System Health →
 - Keys issued by OpenRouter start with `sk-or-`. Create one at openrouter.ai/keys.
 - Never paste real production keys into an issue, a commit, or a bug report.
 
-## Streamtape file manager — `streamtape-thumbnails.live.test.ts`
+## FileKosh
 
-Proves the configured Streamtape credentials can read the thumbnails folder and
-that the name matcher finds an image for a video of the same name. Outbound
-HTTPS to `api.streamtape.com` is required (CI sandboxes usually block it).
-
-```bash
-STREAMTAPE_LOGIN=… STREAMTAPE_API_KEY=… npm run test:live
-```
-
-Strictly read-only — nothing is uploaded, renamed, or deleted. It asserts 1) the
-account answers, 2) the thumbnails folder is found and holds at least one image,
-3) a video named after an image matches that image, and 4) the dry-run scan
-completes without an error.
-
-Useful environment variables: `STREAMTAPE_THUMBNAIL_FOLDER_ID` (skip the folder
-search) and `STREAMTAPE_THUMBNAIL_FOLDER_NAME` (default `thumbnails`).
-
-The same check is available to admins at runtime: **Admin → Videos → Streamtape
-thumbnails → “Check folder”**.
+No live FileKosh test has run. Follow DEPLOYMENT.md section D after obtaining the missing contract, staging credentials and browser CORS verification. Mocked tests are not integration evidence.

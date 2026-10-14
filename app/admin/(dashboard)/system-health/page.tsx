@@ -1,6 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { inspectNowpaymentsSetup } from "@/lib/nowpayments/client";
 import { getSiteUrl } from "@/lib/site";
+import { uploadConfiguration } from "@/lib/video/filekosh";
 import { openRouterDiagnostics } from "@/lib/metadata/openrouter";
 import NowpaymentsCheck from "./NowpaymentsCheck";
 import OpenRouterCheck from "./OpenRouterCheck";
@@ -47,15 +48,18 @@ export default async function SystemHealthAdmin() {
   const ai = openRouterDiagnostics();
   const aiStatus = ai.configured ? "Configured" : "Not configured";
 
+  let videoStatus = "Configuration blocked";
+  try { uploadConfiguration(); videoStatus = "Configured (not live-tested)"; } catch { /* Fail closed, no secrets. */ }
+
   const checks = [
     { name: "Database", status: dbStatus, latency: dbLatency, desc: "Supabase PostgreSQL" },
     { name: "Auth", status: "Operational", latency: "—", desc: "Supabase Auth" },
     { name: "NOWPayments API", status: payStatus, latency: "—", desc: payDetail },
     {
       name: "Video Provider",
-      status: "direct_url",
+      status: videoStatus,
       latency: "—",
-      desc: "Videos play directly from admin-supplied URLs. No hosting-provider API or relay is needed.",
+      desc: "FileKosh device uploads. This is a configuration check only; validate a real direct upload and embed on staging.",
     },
     { name: "Resend", status: process.env.RESEND_API_KEY ? "Configured" : "Not configured", latency: "—", desc: "Transactional email" },
     {
@@ -91,7 +95,7 @@ export default async function SystemHealthAdmin() {
       <OpenRouterCheck />
 
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
-        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the NOWPayments API. The video provider uses direct URLs and requires no external API check. Use “Test OpenRouter” to prove the AI metadata key with a live call.</p>
+        <p className="text-[11px] text-ink-3">Last checked: {new Date().toLocaleString()} — real diagnostic requests performed for Database and the NOWPayments API. FileKosh configuration is checked without making provider requests. Use “Test OpenRouter” to prove the AI metadata key with a live call.</p>
       </div>
     </div>
   );

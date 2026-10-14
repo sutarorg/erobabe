@@ -3,8 +3,6 @@
 import { ChangeEvent, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  CloudDownload,
-  FolderSearch,
   ImagePlus,
   ImageOff,
   LoaderCircle,
@@ -41,23 +39,10 @@ const MAX_THUMBNAIL_SIZE = 10 * 1024 * 1024;
 const CAROUSEL_SLOTS = [1, 2, 3];
 const DELETE_CHUNK = 200;
 const THUMBNAIL_CHUNK = 10;
-/** Mirrored per Streamtape import request — matches the route's cap. */
-const STREAMTAPE_CHUNK = 25;
-
 type RowState = {
-  busy?: "thumbnail" | "remove" | "delete" | "generate" | "carousel" | "streamtape";
+  busy?: "thumbnail" | "remove" | "delete" | "generate" | "carousel";
   error?: string;
   notice?: string;
-};
-
-/** Result of the read-only “check folder” call against the Streamtape file manager. */
-type StreamtapeScan = {
-  configured: boolean;
-  folder: { id: string; name: string; path: string } | null;
-  folderName: string;
-  fileCount: number;
-  matches: Array<{ id: string; title: string; hasThumbnail: boolean; matchedFile: string | null; score: number | null }>;
-  error?: string;
 };
 
 /**
@@ -80,10 +65,9 @@ export default function VideoManager({
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [bulkBusy, setBulkBusy] = useState<"" | "delete" | "generate" | "streamtape" | "scan">("");
+  const [bulkBusy, setBulkBusy] = useState<"" | "delete" | "generate">("");
   const [bulkNotice, setBulkNotice] = useState("");
   const [bulkError, setBulkError] = useState("");
-  const [scan, setScan] = useState<StreamtapeScan | null>(null);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -228,87 +212,7 @@ export default function VideoManager({
     setBulkNotice(`Generated ${generated} thumbnail${generated === 1 ? "" : "s"} from video frames.${failed ? ` ${failed} failed — see the row messages.` : ""}`);
   }
 
-  /**
-   * Dry run: ask the server which Streamtape file-manager folder it found and
-   * which videos it can match. Nothing is downloaded, so a wrong folder name
-   * costs one request instead of a slow batch of failures.
-   */
-  async function checkStreamtapeFolder() {
-    setBulkBusy("scan");
-    setBulkError("");
-    setBulkNotice("");
-    try {
-      const response = await fetch("/api/admin/videos/streamtape-thumbnails", { cache: "no-store" });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload?.error || "Could not read the Streamtape file manager");
-      setScan(payload as StreamtapeScan);
-      const matched = (payload.matches || []).filter((entry: StreamtapeScan["matches"][number]) => entry.matchedFile).length;
-      if (payload.error) setBulkError(payload.error);
-      else if (!matched) setBulkNotice("The folder was read, but no image name matches a video in the library.");
-      else setBulkNotice(`Found a matching image for ${matched} of ${payload.matches?.length ?? 0} video(s).`);
-    } catch (error: any) {
-      setBulkError(error?.message || "Could not read the Streamtape file manager");
-    } finally {
-      setBulkBusy("");
-    }
-  }
 
-  /**
-   * Copies the matching images out of the Streamtape thumbnails folder.
-   *
-   * With a selection it imports for those videos (replacing what is there when
-   * `overwrite` is set); with no selection it fills every video that is still
-   * missing a thumbnail.
-   */
-  async function importFromStreamtape(targets: AdminVideo[], overwrite = false) {
-    if (!targets.length) return;
-    setBulkBusy("streamtape");
-    setBulkError("");
-    setBulkNotice("");
-    for (const video of targets) patchRow(video.id, { busy: "streamtape", error: undefined, notice: undefined });
-
-    const notes: string[] = [];
-    try {
-      // The route mirrors a chunk at a time — every image is a download — so a
-      // large selection goes up in batches instead of one oversized request.
-      for (let index = 0; index < targets.length; index += STREAMTAPE_CHUNK) {
-        const chunk = targets.slice(index, index + STREAMTAPE_CHUNK);
-        const payload = await postJson<{
-          results: Array<{ id: string; status: string; thumbnailUrl?: string; matchedFile?: string; error?: string }>;
-          note?: string;
-        }>("/api/admin/videos/streamtape-thumbnails", {
-          ids: chunk.map((video) => video.id),
-          overwrite,
-        });
-
-        for (const result of payload.results || []) {
-          if (result.status === "imported" && result.thumbnailUrl) {
-            const url = result.thumbnailUrl;
-            setVideos((current) => current.map((item) => (item.id === result.id ? { ...item, thumbnail_url: url } : item)));
-            patchRow(result.id, {
-              busy: undefined,
-              notice: result.matchedFile ? `Thumbnail imported from Streamtape (${result.matchedFile}).` : "Thumbnail imported from Streamtape.",
-            });
-          } else if (result.status === "skipped") {
-            patchRow(result.id, { busy: undefined, notice: result.error });
-          } else {
-            patchRow(result.id, { busy: undefined, error: result.error || "No matching image in the Streamtape folder" });
-          }
-        }
-        if (payload.note) notes.push(payload.note);
-      }
-      if (notes.length) setBulkNotice(notes[notes.length - 1]);
-    } catch (error: any) {
-      const message = error?.message || "Could not import thumbnails from Streamtape";
-      setBulkError(message);
-      for (const video of targets) patchRow(video.id, { busy: undefined, error: message });
-    } finally {
-      setBulkBusy("");
-    }
-  }
-
-  /** Videos the Streamtape import should try: the selection, or everything missing a thumbnail. */
-  const streamtapeTargets = selectedVideos.length ? selectedVideos : videos.filter((video) => !video.thumbnail_url);
 
   async function removeThumbnail(video: AdminVideo) {
     if (!video.thumbnail_url) return;
@@ -485,64 +389,6 @@ export default function VideoManager({
               </div>
             );
           })}
-        </div>
-      </section>
-
-      {/* ---- Streamtape thumbnails ---- */}
-      <section aria-label="Streamtape thumbnails" className="mt-5 rounded-lg border border-line bg-pcard p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="flex items-center gap-1.5 text-[13px] font-semibold">
-              <CloudDownload aria-hidden="true" className="h-3.5 w-3.5 text-accent" />
-              Streamtape thumbnails
-            </h2>
-            <p className="mt-0.5 max-w-[620px] text-[11px] leading-relaxed text-ink-3">
-              Images kept in the Streamtape file manager are attached to the video whose name they share, then copied
-              into Erobabe&apos;s own storage so a card never depends on an expiring Streamtape link.
-            </p>
-            <p className="mt-1 text-[11px] text-ink-3">
-              {scan
-                ? scan.folder
-                  ? `Folder “${scan.folder.path || scan.folder.name}” · ${scan.fileCount} image${scan.fileCount === 1 ? "" : "s"} found`
-                  : "No thumbnails folder found — the file-manager root was searched instead"
-                : "Folder is found by name in the Streamtape file manager (STREAMTAPE_THUMBNAIL_FOLDER_NAME)."}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={checkStreamtapeFolder}
-              disabled={Boolean(bulkBusy)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line px-2.5 text-[11.5px] text-ink-2 hover:bg-white/5 hover:text-ink disabled:opacity-40"
-            >
-              {bulkBusy === "scan" ? (
-                <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <FolderSearch aria-hidden="true" className="h-3.5 w-3.5" />
-              )}
-              Check folder
-            </button>
-            <button
-              type="button"
-              onClick={() => importFromStreamtape(streamtapeTargets)}
-              disabled={Boolean(bulkBusy) || !streamtapeTargets.length}
-              title={
-                selectedVideos.length
-                  ? "Import a matching image for the selected videos"
-                  : "Import a matching image for every video that is still missing one"
-              }
-              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-[11.5px] font-semibold text-white hover:bg-accent-soft disabled:opacity-40"
-            >
-              {bulkBusy === "streamtape" ? (
-                <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <CloudDownload aria-hidden="true" className="h-3.5 w-3.5" />
-              )}
-              {selectedVideos.length
-                ? `Import for selection (${selectedVideos.length})`
-                : `Import missing thumbnails${streamtapeTargets.length ? ` (${streamtapeTargets.length})` : ""}`}
-            </button>
-          </div>
         </div>
       </section>
 
@@ -755,22 +601,6 @@ export default function VideoManager({
                         <Link href={`/video/${video.slug}`} target="_blank" className="text-[11px] text-accent hover:underline">
                           View
                         </Link>
-                        {!video.thumbnail_url && (
-                          <button
-                            type="button"
-                            onClick={() => importFromStreamtape([video])}
-                            disabled={busy}
-                            title="Attach the matching image from the Streamtape thumbnails folder"
-                            className="inline-flex h-7 items-center gap-1 rounded-md border border-line px-2 text-[10.5px] text-ink-2 hover:bg-white/5 hover:text-ink disabled:opacity-40"
-                          >
-                            {state.busy === "streamtape" ? (
-                              <LoaderCircle aria-hidden="true" className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <CloudDownload aria-hidden="true" className="h-3 w-3" />
-                            )}
-                            Streamtape thumb
-                          </button>
-                        )}
                         {!video.thumbnail_url && video.playable_url && (
                           <button
                             type="button"
