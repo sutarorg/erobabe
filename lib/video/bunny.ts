@@ -31,6 +31,16 @@ export function bunnyConfiguration() {
 }
 export function uploadConfiguration(): { policy: UploadPolicy } {
   bunnyConfiguration();
+  const configuredLimit = process.env.BUNNY_UPLOAD_MAX_BYTES;
+  const maxBytes = configuredLimit ? Number(configuredLimit) : undefined;
+  if (
+    maxBytes !== undefined &&
+    (!Number.isSafeInteger(maxBytes) || maxBytes <= 0)
+  )
+    throw new BunnyError(
+      "BUNNY_UPLOAD_MAX_BYTES must be a positive safe integer",
+      503,
+    );
   return {
     policy: {
       mimeTypes: [
@@ -41,6 +51,7 @@ export function uploadConfiguration(): { policy: UploadPolicy } {
         "video/x-msvideo",
         "video/mpeg",
       ],
+      ...(maxBytes ? { maxBytes } : {}),
       concurrency: 4,
       headers: {},
       visionRanking: thumbnailVisionEnabled(),

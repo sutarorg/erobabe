@@ -1,21 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/resend/client";
+import {
+  boundedJson,
+  escapeHtml,
+  limitRequest,
+  RequestError,
+} from "@/lib/http/safety";
 import { z } from "zod";
 
-const schema = z.object({
-  url: z.string().url(),
-  email: z.string().email(),
-  reason: z.string(),
-  details: z.string().optional(),
-  type: z.string().default("video"),
-});
+const schema = z
+  .object({
+    url: z
+      .string()
+      .url()
+      .max(2048)
+      .refine((value) => /^https?:\/\//i.test(value)),
+    email: z.string().email().max(254),
+    reason: z.string().trim().min(2).max(200),
+    details: z.string().max(5000).optional(),
+    type: z
+      .enum(["video", "advertisement", "copyright", "other"])
+      .default("video"),
+  })
+  .strict();
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    const body = await boundedJson(req);
+    await limitRequest(req, "reports", 3);
     const parsed = schema.safeParse(body);
-    if (!parsed.success) return NextResponse.json({ error: "Invalid", details: parsed.error.flatten() }, { status: 400 });
+    if (!parsed.success)
+      return NextResponse.json(
+        { error: "Invalid", details: parsed.error.flatten() },
+        { status: 400 },
+      );
 
     const { url, email, reason, details, type } = parsed.data;
     const service = createServiceClient();
@@ -27,7 +46,11 @@ export async function POST(req: NextRequest) {
       const match = u.pathname.match(/\/video\/([^/]+)/);
       if (match) {
         const slug = match[1];
-        const { data: video } = await service.from("videos").select("id").eq("slug", slug).single();
+        const { data: video } = await service
+          .from("videos")
+          .select("id")
+          .eq("slug", slug)
+          .single();
         videoId = video?.id || null;
       }
     } catch {}
@@ -55,14 +78,22 @@ export async function POST(req: NextRequest) {
       await sendEmail({
         to: email,
         subject: "Content removal request received",
-        html: `<p>We received your report for ${url} with reason: ${reason}. We will review within 24–48 hours.</p><p>Case ID: ${report.id}</p>`,
+        html: `<p>We received your report for ${escapeHtml(url)} with reason: ${escapeHtml(reason)}. We will review within 24–48 hours.</p><p>Case ID: ${report.id}</p>`,
       });
     } catch (e) {
-      console.warn("Resend failed for report ack", e);
+      console.warn("Resend failed for report acknowledgement", {
+        reportId: report.id,
+      });
     }
 
     return NextResponse.json({ ok: true, reportId: report.id });
   } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 500 });
+    return NextResponse.json(
+      {
+        error:
+          e instanceof RequestError ? e.message : "Unable to submit report",
+      },
+      { status: e instanceof RequestError ? e.status : 503 },
+    );
   }
 }

@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Resolve metadata/notFound before streaming so missing videos return HTTP 404.
+  htmlLimitedBots: /.*/,
   allowedDevOrigins: ["*.e2b.app"],
   poweredByHeader: false,
   compress: true,

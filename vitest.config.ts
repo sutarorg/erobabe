@@ -3,7 +3,7 @@ import path from "path";
 
 export default defineConfig({
   // tsconfig sets jsx: "preserve" for Next.js; component tests need real JSX.
-  esbuild: { jsx: "automatic" },
+  oxc: { jsx: { runtime: "automatic" } },
   test: {
     environment: "jsdom",
     globals: true,
@@ -13,9 +13,9 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./"),
-      "@/lib": path.resolve(__dirname, "./lib"),
-      "@/src": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./"),
+      "@/lib": path.resolve(import.meta.dirname, "./lib"),
+      "@/src": path.resolve(import.meta.dirname, "./src"),
     },
   },
 });

@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import {
-  compareCryptoAmounts,
   getNowpaymentsPayment,
-  isSuccessfulNowpaymentsStatus,
-  isTerminalNowpaymentsStatus,
-  mapNowpaymentsStatus,
   payCurrencyChoice,
 } from "@/lib/nowpayments/client";
-import { confirmNowpaymentsPayment } from "@/lib/nowpayments/verify";
+import {
+  confirmNowpaymentsPayment,
+  verifyAndProcessNowpaymentsIpn,
+} from "@/lib/nowpayments/verify";
 import { z } from "zod";
 
 /**
@@ -28,7 +27,14 @@ const querySchema = z.object({
 /** Minimum gap between verified provider refreshes for one payment. */
 const REFRESH_THROTTLE_MS = 30 * 1000;
 
-const TERMINAL_INTERNAL = new Set(["confirmed", "failed", "expired", "refunded", "underpaid", "overpaid"]);
+const TERMINAL_INTERNAL = new Set([
+  "confirmed",
+  "failed",
+  "expired",
+  "refunded",
+  "underpaid",
+  "overpaid",
+]);
 
 function displayState(payment: Record<string, unknown>): string {
   const status = String(payment.status || "pending");
@@ -59,11 +65,17 @@ export async function GET(req: NextRequest) {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!user)
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const parsed = querySchema.safeParse({ paymentId: req.nextUrl.searchParams.get("paymentId") });
+    const parsed = querySchema.safeParse({
+      paymentId: req.nextUrl.searchParams.get("paymentId"),
+    });
     if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid request", details: parsed.error.flatten() },
+        { status: 400 },
+      );
     }
 
     const service = createServiceClient();
@@ -73,14 +85,20 @@ export async function GET(req: NextRequest) {
       .eq("id", parsed.data.paymentId)
       .single();
     if (error) throw error;
-    if (!payment) return NextResponse.json({ error: "Payment not found" }, { status: 404 });
+    if (!payment)
+      return NextResponse.json({ error: "Payment not found" }, { status: 404 });
 
-    // Owners and admins only — never leak another advertiser's payment.
-    if (payment.advertiser_id !== user.id) {
-      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
-      if (!profile || profile.role !== "admin") {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      }
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role, status")
+      .eq("id", user.id)
+      .single();
+    if (
+      !profile ||
+      profile.status !== "active" ||
+      (payment.advertiser_id !== user.id && profile.role !== "admin")
+    ) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     let current = payment as Record<string, unknown>;
@@ -89,60 +107,43 @@ export async function GET(req: NextRequest) {
 
     // Refresh pending NOWPayments payments from the verified API, throttled
     // so polling cannot hammer the provider.
-    if (isNowpayments && providerPaymentId && !TERMINAL_INTERNAL.has(String(current.status))) {
-      const response = (current.provider_response as Record<string, unknown> | null) || null;
-      const lastRefresh = Number(response?._refreshed_at || 0);
-      if (!Number.isFinite(lastRefresh) || Date.now() - lastRefresh >= REFRESH_THROTTLE_MS) {
+    if (
+      isNowpayments &&
+      providerPaymentId &&
+      !["refunded", "failed", "expired"].includes(String(current.status))
+    ) {
+      const response =
+        (current.provider_response as Record<string, unknown> | null) || null;
+      const lastRefresh = new Date(
+        String(current.updated_at || current.created_at),
+      ).getTime();
+      if (
+        !Number.isFinite(lastRefresh) ||
+        Date.now() - lastRefresh >= REFRESH_THROTTLE_MS
+      ) {
         const lookup = await getNowpaymentsPayment(providerPaymentId);
         if (lookup.ok) {
-          const providerStatus = String(lookup.payment.providerStatus || "").toLowerCase();
-          const mapped = mapNowpaymentsStatus(providerStatus);
-          const stamped = { ...(response || {}), _refreshed_at: Date.now() };
-
-          if (isSuccessfulNowpaymentsStatus(providerStatus)) {
-            // Same bar as the IPN path: corroborated `finished` plus a
-            // verified crypto amount, otherwise manual review.
-            const received = lookup.payment.actuallyPaid ?? lookup.payment.payAmount;
-            const expected = (current.expected_amount as string | null) ?? lookup.payment.payAmount;
-            const verdict = compareCryptoAmounts(received, expected);
-            if (verdict === "match") {
-              await confirmNowpaymentsPayment(String(current.id), providerPaymentId);
-              const { data: refreshed } = await service.from("payments").select("*").eq("id", current.id).single();
-              if (refreshed) current = refreshed as Record<string, unknown>;
-            } else if (verdict === "underpaid" || verdict === "overpaid") {
-              await service
-                .from("payments")
-                .update({ status: verdict, provider_status: providerStatus, provider_response: stamped })
-                .eq("id", current.id);
-              await service.from("payment_events").insert({
-                payment_id: current.id,
-                event_type: "amount_mismatch",
-                payload: { source: "status_refresh", verdict, received, expected },
-              });
-              current = { ...current, status: verdict, provider_status: providerStatus, provider_response: stamped };
-            } else {
-              await service
-                .from("payments")
-                .update({ provider_status: providerStatus, provider_response: stamped })
-                .eq("id", current.id);
-              current = { ...current, provider_status: providerStatus, provider_response: stamped };
-            }
-          } else if (mapped && !isTerminalNowpaymentsStatus(providerStatus)) {
-            await service
-              .from("payments")
-              .update({ status: mapped, provider_status: providerStatus, provider_response: stamped })
-              .eq("id", current.id);
-            current = { ...current, status: mapped, provider_status: providerStatus, provider_response: stamped };
-          } else if (mapped) {
-            // Terminal provider state (failed / expired / refunded): persist
-            // the provider truth; the IPN path applies the side effects, but
-            // the status must not keep showing as pending if the IPN is late.
-            await service
-              .from("payments")
-              .update({ status: mapped, provider_status: providerStatus, provider_response: stamped })
-              .eq("id", current.id);
-            current = { ...current, status: mapped, provider_status: providerStatus, provider_response: stamped };
+          const result = await verifyAndProcessNowpaymentsIpn(
+            lookup.payment.raw,
+          );
+          if (
+            result.ok &&
+            result.verified &&
+            result.status === "confirmed" &&
+            result.payment
+          ) {
+            await confirmNowpaymentsPayment(
+              result.payment.id,
+              providerPaymentId,
+            );
           }
+          const { data: refreshed, error: refreshError } = await service
+            .from("payments")
+            .select("*")
+            .eq("id", current.id)
+            .single();
+          if (refreshError) throw refreshError;
+          if (refreshed) current = refreshed;
         }
         // A failed refresh never fails the status read — the persisted state
         // below is still the honest answer.
@@ -170,6 +171,9 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("nowpayments/status error", message);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 },
+    );
   }
 }

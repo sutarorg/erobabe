@@ -1,3 +1,5 @@
+import { boundedJson, RequestError } from "@/lib/http/safety";
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import {
@@ -19,11 +21,17 @@ const schema = z
     slotIds: z.array(z.number().int().min(1).max(10)).min(1).max(10).optional(),
     durationMonths: z.number().int().min(1).max(12).default(1),
     paymentCurrency: z.string().trim().min(2).max(16).default("USDT"),
-    chain: z.enum(["bitcoin", "binance", "ethereum", "tron", "solana"]).default("ethereum"),
+    chain: z
+      .enum(["bitcoin", "binance", "ethereum", "tron", "solana"])
+      .default("ethereum"),
   })
   .superRefine((value, ctx) => {
     if (!value.campaignId && !value.campaignIds?.length) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["campaignIds"], message: "At least one campaign is required" });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["campaignIds"],
+        message: "At least one campaign is required",
+      });
     }
   });
 
@@ -37,20 +45,28 @@ export async function POST(req: NextRequest) {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!user)
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { data: profile } = await supabase
       .from("profiles")
       .select("role, status")
       .eq("id", user.id)
       .single();
-    if (!profile || profile.role !== "advertiser" || profile.status !== "active") {
+    if (
+      !profile ||
+      profile.role !== "advertiser" ||
+      profile.status !== "active"
+    ) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const parsed = schema.safeParse(await req.json());
+    const parsed = schema.safeParse(await boundedJson(req));
     if (!parsed.success) {
-      return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
+      return NextResponse.json(
+        { error: "Invalid request", details: parsed.error.flatten() },
+        { status: 400 },
+      );
     }
 
     const { durationMonths, paymentCurrency, chain } = parsed.data;
@@ -84,20 +100,36 @@ export async function POST(req: NextRequest) {
 
     if (campaignsError) throw campaignsError;
     if (!campaigns || campaigns.length !== campaignIds.length) {
-      return NextResponse.json({ error: "One or more campaigns were not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "One or more campaigns were not found" },
+        { status: 404 },
+      );
     }
-    if (campaigns.some((campaign: { payment_id: string | null }) => campaign.payment_id)) {
-      return NextResponse.json({ error: "A selected campaign already has a payment request" }, { status: 409 });
+    if (
+      campaigns.some(
+        (campaign: { payment_id: string | null }) => campaign.payment_id,
+      )
+    ) {
+      return NextResponse.json(
+        { error: "A selected campaign already has a payment request" },
+        { status: 409 },
+      );
     }
 
-    const slotIds: number[] = unique<number>(campaigns.map((campaign: { slot_id: number }) => Number(campaign.slot_id))).sort(
-      (a, b) => a - b
-    );
+    const slotIds: number[] = unique<number>(
+      campaigns.map((campaign: { slot_id: number }) =>
+        Number(campaign.slot_id),
+      ),
+    ).sort((a, b) => a - b);
     if (
       requestedSlotIds.length &&
-      (requestedSlotIds.length !== slotIds.length || requestedSlotIds.some((slotId) => !slotIds.includes(slotId)))
+      (requestedSlotIds.length !== slotIds.length ||
+        requestedSlotIds.some((slotId) => !slotIds.includes(slotId)))
     ) {
-      return NextResponse.json({ error: "Campaign slots do not match the requested slots" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Campaign slots do not match the requested slots" },
+        { status: 400 },
+      );
     }
 
     const startDate = new Date();
@@ -110,19 +142,30 @@ export async function POST(req: NextRequest) {
     // exclude this checkout's own campaigns from the overlap check.
     const { data: overlapping, error: overlappingError } = await service
       .from("campaigns")
-      .select("id, slot_id")
+      .select("id, slot_id, status, hold_expires_at")
       .in("slot_id", slotIds)
-      .in("status", ["active", "pending_review", "pending_payment"])
+      .in("status", ["active", "paused", "pending_review", "pending_payment"])
       .lte("start_date", endDay)
       .gte("end_date", startDay);
     if (overlappingError) throw overlappingError;
 
     const conflicts = (overlapping || []).filter(
-      (campaign: { id: string }) => !campaignIds.includes(campaign.id)
+      (campaign: { id: string; status: string; hold_expires_at?: string }) =>
+        !campaignIds.includes(campaign.id) &&
+        (campaign.status !== "pending_payment" ||
+          !campaign.hold_expires_at ||
+          new Date(campaign.hold_expires_at).getTime() > Date.now()),
     );
     if (conflicts.length) {
-      const conflictingSlots = unique(conflicts.map((campaign: { slot_id: number }) => campaign.slot_id)).join(", ");
-      return NextResponse.json({ error: `Slot${conflicts.length > 1 ? "s" : ""} ${conflictingSlots} are no longer available` }, { status: 409 });
+      const conflictingSlots = unique(
+        conflicts.map((campaign: { slot_id: number }) => campaign.slot_id),
+      ).join(", ");
+      return NextResponse.json(
+        {
+          error: `Slot${conflicts.length > 1 ? "s" : ""} ${conflictingSlots} are no longer available`,
+        },
+        { status: 409 },
+      );
     }
 
     const { data: slots, error: slotsError } = await service
@@ -131,34 +174,54 @@ export async function POST(req: NextRequest) {
       .in("id", slotIds);
     if (slotsError) throw slotsError;
     if (!slots || slots.length !== slotIds.length) {
-      return NextResponse.json({ error: "One or more selected slots were not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "One or more selected slots were not found" },
+        { status: 404 },
+      );
     }
 
     const priceBySlot = new Map<number, number>(
-      slots.map((slot: { id: number; price_cents: number }) => [Number(slot.id), Number(slot.price_cents)])
+      slots.map((slot: { id: number; price_cents: number }) => [
+        Number(slot.id),
+        Number(slot.price_cents),
+      ]),
     );
-    const priceCents: number = slotIds.reduce<number>((sum, slotId) => sum + (priceBySlot.get(slotId) || 0) * durationMonths, 0);
-    if (!priceCents) return NextResponse.json({ error: "Unable to calculate a price for the selected slots" }, { status: 400 });
+    const priceCents: number = slotIds.reduce<number>(
+      (sum, slotId) => sum + (priceBySlot.get(slotId) || 0) * durationMonths,
+      0,
+    );
+    if (!priceCents)
+      return NextResponse.json(
+        { error: "Unable to calculate a price for the selected slots" },
+        { status: 400 },
+      );
 
     if (!process.env.NOWPAYMENTS_API_KEY) {
       return NextResponse.json(
-        { error: "Crypto payments are not configured", details: "The NOWPayments API key is missing on the server." },
-        { status: 503 }
+        {
+          error: "Crypto payments are not configured",
+          details: "The NOWPayments API key is missing on the server.",
+        },
+        { status: 503 },
       );
     }
 
     const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-    let payment: Record<string, unknown> & { id: string; expires_at: string } | null = null;
+    let payment:
+      | (Record<string, unknown> & { id: string; expires_at: string })
+      | null = null;
 
     // Invoice numbers are unique; retrying an extremely unlikely collision
     // keeps the database and NOWPayments in sync without duplicates.
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const candidate = attempt === 0 ? invoiceNumber : `${invoiceNumber}-${attempt}`;
+      const candidate =
+        attempt === 0 ? invoiceNumber : `${invoiceNumber}-${attempt}`;
       const { data, error } = await service
         .from("payments")
         .insert({
           advertiser_id: user.id,
           invoice_number: candidate,
+          external_id: `nowpayments:${randomUUID()}`,
           provider: "nowpayments",
           amount_cents: priceCents,
           currency: "USD",
@@ -172,14 +235,38 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (!error) {
-        payment = data as Record<string, unknown> & { id: string; expires_at: string };
+        payment = data as Record<string, unknown> & {
+          id: string;
+          expires_at: string;
+        };
         break;
       }
-      if ((error as { code?: string }).code !== "23505" || attempt === 2) throw error;
+      if ((error as { code?: string }).code !== "23505" || attempt === 2)
+        throw error;
     }
 
     if (!payment) throw new Error("Could not create payment record");
     const orderId = String(payment.invoice_number);
+
+    const { error: claimError } = await service.rpc("claim_checkout", {
+      p_payment: payment.id,
+      p_campaigns: campaignIds,
+      p_advertiser: user.id,
+      p_months: durationMonths,
+    });
+    if (claimError) {
+      await service
+        .from("payments")
+        .update({ status: "failed" })
+        .eq("id", payment.id);
+      return NextResponse.json(
+        {
+          error:
+            "Inventory or price changed. No provider request was made; refresh availability.",
+        },
+        { status: 409 },
+      );
+    }
 
     const originAmount = (priceCents / 100).toFixed(2);
     let providerPayment;
@@ -192,18 +279,48 @@ export async function POST(req: NextRequest) {
         orderDescription: `Erobabe advertising slots ${slotIds.join(", ")} — ${durationMonths} month${durationMonths > 1 ? "s" : ""}`,
         ipnCallbackUrl: nowpaymentsIpnUrl(getSiteUrl()),
       });
+      if (
+        providerPayment.orderId !== orderId ||
+        providerPayment.payCurrency?.toLowerCase() !== choice.payCurrency ||
+        providerPayment.priceCurrency?.toLowerCase() !== "usd" ||
+        !providerPayment.priceAmount ||
+        Math.round(Number(providerPayment.priceAmount) * 100) !== priceCents ||
+        !providerPayment.payAmount ||
+        !Number.isFinite(Number(providerPayment.payAmount)) ||
+        Number(providerPayment.payAmount) <= 0
+      ) {
+        throw new Error(
+          "Provider quote does not match the reserved order; reconciliation required",
+        );
+      }
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Provider request failed";
+      const message =
+        error instanceof Error ? error.message : "Provider request failed";
       await service
         .from("payments")
-        .update({ status: "failed", provider_response: { error: message.slice(0, 300) } })
+        .update({
+          provider_response: {
+            reconciliation_required: true,
+            error: message.slice(0, 300),
+          },
+        })
         .eq("id", payment.id);
       await service.from("payment_events").insert({
         payment_id: payment.id,
         event_type: "creation_failed",
-        payload: { error: message.slice(0, 300), pay_currency: choice.payCurrency },
+        payload: {
+          error: message.slice(0, 300),
+          pay_currency: choice.payCurrency,
+        },
       });
-      return NextResponse.json({ error: "Failed to create payment address", details: message }, { status: 502 });
+      return NextResponse.json(
+        {
+          error:
+            "Provider outcome is uncertain. Do not retry or send funds. Contact support with this payment reference.",
+          paymentId: payment.id,
+        },
+        { status: 502 },
+      );
     }
 
     const { error: paymentUpdateError } = await service
@@ -218,43 +335,6 @@ export async function POST(req: NextRequest) {
       })
       .eq("id", payment.id);
     if (paymentUpdateError) throw paymentUpdateError;
-
-    const { data: invoice, error: invoiceError } = await service
-      .from("invoices")
-      .insert({
-        number: orderId,
-        advertiser_id: user.id,
-        payment_id: payment.id,
-        amount_cents: priceCents,
-        description: `Slots ${slotIds.join(", ")} reservation — ${durationMonths} month${durationMonths > 1 ? "s" : ""}`,
-        status: "pending",
-        due_date: endDay,
-      })
-      .select()
-      .single();
-    if (invoiceError) throw invoiceError;
-
-    // Race-safe claim: only campaigns still without a payment are attached.
-    // If a concurrent checkout grabbed one first, this payment cannot be
-    // fulfilled for it, so fail loudly instead of double-charging a slot.
-    const { data: claimed, error: campaignUpdateError } = await service
-      .from("campaigns")
-      .update({ payment_id: payment.id, invoice_id: (invoice as { id: string } | null)?.id })
-      .in("id", campaignIds)
-      .eq("advertiser_id", user.id)
-      .is("payment_id", null)
-      .select("id");
-    if (campaignUpdateError) throw campaignUpdateError;
-    if (!claimed || claimed.length !== campaignIds.length) {
-      await service
-        .from("payments")
-        .update({ status: "failed", provider_response: { ...providerPayment.raw, claim_error: "campaigns already claimed" } })
-        .eq("id", payment.id);
-      return NextResponse.json(
-        { error: "One or more campaigns were already claimed by another checkout. No charge was completed — please start again." },
-        { status: 409 }
-      );
-    }
 
     const { error: eventError } = await service.from("payment_events").insert({
       payment_id: payment.id,
@@ -277,7 +357,14 @@ export async function POST(req: NextRequest) {
       target_type: "payment",
       target_id: payment.id,
       level: "info",
-      metadata: { provider: "nowpayments", slotIds, campaignIds, durationMonths, priceCents, pay_currency: choice.payCurrency },
+      metadata: {
+        provider: "nowpayments",
+        slotIds,
+        campaignIds,
+        durationMonths,
+        priceCents,
+        pay_currency: choice.payCurrency,
+      },
     });
 
     return NextResponse.json({
@@ -299,8 +386,19 @@ export async function POST(req: NextRequest) {
       campaignIds,
     });
   } catch (error: unknown) {
+    if (error instanceof RequestError)
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status },
+      );
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error("nowpayments/create error", message);
-    return NextResponse.json({ error: "Internal server error", details: message }, { status: 500 });
+    return NextResponse.json(
+      {
+        error:
+          "Checkout could not complete. Check Billing before retrying; contact support if a payment is pending.",
+      },
+      { status: 500 },
+    );
   }
 }

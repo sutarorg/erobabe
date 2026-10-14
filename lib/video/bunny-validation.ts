@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export type UploadPolicy = {
   mimeTypes: string[];
+  maxBytes?: number;
   concurrency: number;
   headers: Record<string, string>;
   visionRanking?: boolean;
@@ -32,5 +33,7 @@ export function validateVideo(
     return "Unsupported video type. Choose one of the configured accepted formats.";
   if (!Number.isSafeInteger(file.size) || file.size <= 0)
     return "The video file is empty or has an invalid size.";
+  if (policy.maxBytes && file.size > policy.maxBytes)
+    return "Video exceeds the configured upload size limit.";
   return null;
 }

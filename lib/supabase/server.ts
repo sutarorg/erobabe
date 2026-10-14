@@ -1,3 +1,4 @@
+import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
@@ -46,16 +47,39 @@ type MockResult = {
   statusText: string;
 };
 
-const EMPTY_LIST: MockResult = { data: [], error: null, count: 0, status: 200, statusText: "OK" };
-const EMPTY_ROW: MockResult = { data: null, error: null, count: null, status: 200, statusText: "OK" };
+const EMPTY_LIST: MockResult = {
+  data: [],
+  error: null,
+  count: 0,
+  status: 200,
+  statusText: "OK",
+};
+const EMPTY_ROW: MockResult = {
+  data: null,
+  error: null,
+  count: null,
+  status: 200,
+  statusText: "OK",
+};
 
 /**
  * A chainable, awaitable stand-in for a PostgREST query builder. Every method
  * returns another builder and every `await` resolves to an empty result, so no
  * call site can crash when Supabase is not configured.
  */
-function createMockQuery(row = false): any {
-  const result = row ? EMPTY_ROW : EMPTY_LIST;
+function createMockQuery(row = false, mutation = false): any {
+  const result = mutation
+    ? {
+        data: null,
+        error: {
+          message: "Supabase is not configured",
+          code: "CONFIG_MISSING",
+        },
+        status: 503,
+      }
+    : row
+      ? EMPTY_ROW
+      : EMPTY_LIST;
 
   return new Proxy(
     {},
@@ -66,30 +90,49 @@ function createMockQuery(row = false): any {
             Promise.resolve(result).then(onFulfilled, onRejected);
         }
         if (prop === "catch") {
-          return (onRejected?: any) => Promise.resolve(result).catch(onRejected);
+          return (onRejected?: any) =>
+            Promise.resolve(result).catch(onRejected);
         }
         if (prop === "finally") {
-          return (onFinally?: any) => Promise.resolve(result).finally(onFinally);
+          return (onFinally?: any) =>
+            Promise.resolve(result).finally(onFinally);
         }
-        if (prop === "single" || prop === "maybeSingle") return () => createMockQuery(true);
+        if (prop === "single" || prop === "maybeSingle")
+          return () => createMockQuery(true, mutation);
         if (prop === "csv" || prop === "geojson" || prop === "explain") {
           return () => Promise.resolve(result);
         }
         if (typeof prop !== "string") return undefined;
         // Any other builder method simply continues the chain.
-        return () => createMockQuery(row);
+        return () =>
+          createMockQuery(
+            row,
+            mutation || ["insert", "update", "upsert", "delete"].includes(prop),
+          );
       },
-    }
+    },
   );
 }
 
 function createMockStorageBucket() {
   return {
-    upload: async () => ({ data: null, error: null }),
-    update: async () => ({ data: null, error: null }),
-    remove: async () => ({ data: [], error: null }),
+    upload: async () => ({
+      data: null,
+      error: { message: "Supabase is not configured" },
+    }),
+    update: async () => ({
+      data: null,
+      error: { message: "Supabase is not configured" },
+    }),
+    remove: async () => ({
+      data: null,
+      error: { message: "Supabase is not configured" },
+    }),
     list: async () => ({ data: [], error: null }),
-    createSignedUrl: async () => ({ data: null, error: null }),
+    createSignedUrl: async () => ({
+      data: null,
+      error: { message: "Supabase is not configured" },
+    }),
     getPublicUrl: () => ({ data: { publicUrl: "" } }),
   };
 }
@@ -101,6 +144,10 @@ function createMockClient() {
     auth: {
       getUser: async () => ({ data: { user: null }, error: null }),
       getSession: async () => ({ data: { session: null }, error: null }),
+      exchangeCodeForSession: async () => ({
+        data: null,
+        error: { message: "Supabase is not configured" },
+      }),
       signInWithPassword: async () => ({
         data: { user: null, session: null },
         error: { message: "Supabase is not configured" },
@@ -121,7 +168,7 @@ function createMockClient() {
       onAuthStateChange: () => noOpSubscription,
     },
     from: () => createMockQuery(),
-    rpc: () => createMockQuery(),
+    rpc: () => createMockQuery(false, true),
     storage: { from: () => createMockStorageBucket() },
     channel: () => ({
       on() {
@@ -154,7 +201,7 @@ export async function createClient() {
 
   if (!isValidSupabaseUrl(url) || !isValidSupabaseKey(key)) {
     warnOnce(
-      "[supabase] Missing or placeholder NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY — serving empty data. Set real values in the Vercel project environment variables."
+      "[supabase] Missing or placeholder NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY — serving empty data. Set real values in the Vercel project environment variables.",
     );
     return createMockClient();
   }
@@ -168,7 +215,7 @@ export async function createClient() {
         setAll(cookiesToSet: any[]) {
           try {
             cookiesToSet.forEach(({ name, value, options }: any) =>
-              cookieStore.set(name, value, options)
+              cookieStore.set(name, value, options),
             );
           } catch {}
         },
@@ -176,7 +223,9 @@ export async function createClient() {
     });
   } catch (error) {
     // Never let a bad configuration take a page down.
-    warnOnce(`[supabase] Failed to create server client — serving empty data. ${String(error)}`);
+    warnOnce(
+      `[supabase] Failed to create server client — serving empty data. ${String(error)}`,
+    );
     return createMockClient();
   }
 }
@@ -184,11 +233,12 @@ export async function createClient() {
 // Service role client for server-only operations (payments, callbacks, admin tasks)
 export function createServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceKey =
+    process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   if (!isValidSupabaseUrl(url) || !isValidSupabaseKey(serviceKey)) {
     throw new Error(
-      "Missing or invalid SUPABASE_SECRET_KEY / SERVICE_ROLE_KEY or NEXT_PUBLIC_SUPABASE_URL"
+      "Missing or invalid SUPABASE_SECRET_KEY / SERVICE_ROLE_KEY or NEXT_PUBLIC_SUPABASE_URL",
     );
   }
 

@@ -30,7 +30,11 @@ type Filter =
   | { kind: "like"; column: string; value: string }
   | { kind: "not_is"; column: string; value: any };
 
-function matchesFilters(row: Row, filters: Filter[], contains: Array<[string, any]>): boolean {
+function matchesFilters(
+  row: Row,
+  filters: Filter[],
+  contains: Array<[string, any]>,
+): boolean {
   for (const filter of filters) {
     const actual = row[filter.column];
     switch (filter.kind) {
@@ -57,11 +61,17 @@ function matchesFilters(row: Row, filters: Filter[], contains: Array<[string, an
         if (actual < filter.value) return false;
         break;
       case "ilike":
-        if (String(actual ?? "").toLowerCase() !== filter.value.toLowerCase()) return false;
+        if (String(actual ?? "").toLowerCase() !== filter.value.toLowerCase())
+          return false;
         break;
       case "like": {
         // Supports the `%` wildcard only, which is all the app uses.
-        const pattern = new RegExp(`^${filter.value.split("%").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+        const pattern = new RegExp(
+          `^${filter.value
+            .split("%")
+            .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join(".*")}$`,
+        );
         if (typeof actual !== "string" || !pattern.test(actual)) return false;
         break;
       }
@@ -80,7 +90,9 @@ function matchesFilters(row: Row, filters: Filter[], contains: Array<[string, an
   return true;
 }
 
-class Query implements PromiseLike<{ data: any; error: any; count?: number | null }> {
+class Query
+  implements PromiseLike<{ data: any; error: any; count?: number | null }>
+{
   private filters: Filter[] = [];
   private containsFilters: Array<[string, any]> = [];
   private limitCount: number | null = null;
@@ -88,7 +100,10 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
   private action: "select" | "insert" | "update" | "delete" = "select";
   private payload: Row | Row[] | null = null;
 
-  constructor(private db: FakeDb, private table: string) {}
+  constructor(
+    private db: FakeDb,
+    private table: string,
+  ) {}
 
   select(_columns?: string) {
     return this;
@@ -189,8 +204,10 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
   }
 
   then<TResult1 = { data: any; error: any }, TResult2 = never>(
-    onfulfilled?: ((value: { data: any; error: any }) => TResult1 | PromiseLike<TResult1>) | null,
-    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null
+    onfulfilled?:
+      | ((value: { data: any; error: any }) => TResult1 | PromiseLike<TResult1>)
+      | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
   ): PromiseLike<TResult1 | TResult2> {
     return Promise.resolve(this.execute()).then(onfulfilled, onrejected);
   }
@@ -199,9 +216,15 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
     const rows = (this.db[this.table] ||= []);
 
     if (this.action === "insert") {
-      const payloads = Array.isArray(this.payload) ? this.payload : [this.payload || {}];
+      const payloads = Array.isArray(this.payload)
+        ? this.payload
+        : [this.payload || {}];
       const inserted = payloads.map((entry) => {
-        const row = { id: `fake-${this.table}-${rows.length + 1}`, created_at: new Date().toISOString(), ...entry };
+        const row = {
+          id: `fake-${this.table}-${rows.length + 1}`,
+          created_at: new Date().toISOString(),
+          ...entry,
+        };
         rows.push(row);
         return row;
       });
@@ -209,7 +232,9 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
       return { data: inserted, error: null };
     }
 
-    const matching = rows.filter((row) => matchesFilters(row, this.filters, this.containsFilters));
+    const matching = rows.filter((row) =>
+      matchesFilters(row, this.filters, this.containsFilters),
+    );
 
     if (this.action === "update") {
       for (const row of matching) Object.assign(row, this.payload || {});
@@ -218,12 +243,15 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
     }
 
     if (this.action === "delete") {
-      const remaining = rows.filter((row) => !matchesFilters(row, this.filters, this.containsFilters));
+      const remaining = rows.filter(
+        (row) => !matchesFilters(row, this.filters, this.containsFilters),
+      );
       this.db[this.table] = remaining;
       return { data: matching, error: null };
     }
 
-    const limited = this.limitCount === null ? matching : matching.slice(0, this.limitCount);
+    const limited =
+      this.limitCount === null ? matching : matching.slice(0, this.limitCount);
     if (this.singleRow) return { data: limited[0] ?? null, error: null };
     return { data: limited, error: null };
   }
@@ -244,6 +272,87 @@ export function createFakeSupabase(seed: Partial<FakeDb> = {}) {
     db,
     client: {
       from: (table: string) => new Query(db, table),
+      // Route-test boundary only. Real SQL/role/transaction behavior is tested
+      // independently in launch-integrity-schema.test.ts using all migrations.
+      rpc: async (name: string, args: Row) => {
+        const p = db.payments.find((p) => p.id === args.p_payment);
+        if (!p) return { data: null, error: new Error("Payment not found") };
+        if (name === "claim_checkout") {
+          const campaigns = db.campaigns.filter((c) =>
+            args.p_campaigns.includes(c.id),
+          );
+          if (
+            campaigns.length !== args.p_campaigns.length ||
+            campaigns.some((c) => c.payment_id)
+          )
+            return { error: new Error("Claim failed") };
+          const invoice = {
+            id: `invoice-${db.invoices.length + 1}`,
+            payment_id: p.id,
+            number: p.invoice_number,
+            status: "pending",
+            amount_cents: p.amount_cents,
+          };
+          db.invoices.push(invoice);
+          campaigns.forEach((c) => {
+            c.payment_id = p.id;
+            c.invoice_id = invoice.id;
+          });
+        } else if (name === "settle_nowpayment") {
+          if (p.provider_payment_id !== args.p_provider)
+            return { error: new Error("Identity mismatch") };
+          if (
+            ["refunded", "failed", "expired"].includes(p.status) ||
+            (p.status === "confirmed" && args.p_status !== "refunded")
+          )
+            return { data: null, error: null };
+          if (
+            args.p_status === "confirmed" &&
+            !args.p_evidence?.amount_verified
+          )
+            return { error: new Error("Verification required") };
+          p.status = args.p_status;
+          p.provider_response = args.p_evidence;
+          p.provider_status = args.p_evidence.provider_status;
+          if (p.status === "confirmed")
+            p.confirmed_at = new Date().toISOString();
+          for (const i of db.invoices.filter(
+            (i) => i.payment_id === p.id || i.number === p.invoice_number,
+          )) {
+            i.status =
+              p.status === "confirmed"
+                ? "paid"
+                : ["underpaid", "overpaid"].includes(p.status)
+                  ? "pending"
+                  : p.status;
+            if (p.status === "confirmed") i.paid_at = p.confirmed_at;
+          }
+          for (const c of db.campaigns.filter((c) => c.payment_id === p.id)) {
+            if (p.status === "confirmed" && c.status === "pending_payment")
+              c.status =
+                db.ad_creatives.find((a) => a.id === c.creative_id)?.status ===
+                "approved"
+                  ? "active"
+                  : "pending_review";
+            else if (
+              ["failed", "expired"].includes(p.status) &&
+              c.status === "pending_payment"
+            )
+              c.status = "cancelled";
+            else if (
+              ["refunded", "underpaid", "overpaid"].includes(p.status) &&
+              ["active", "pending_review"].includes(c.status)
+            )
+              c.status = "paused";
+          }
+          db.payment_events.push({
+            payment_id: p.id,
+            event_type: p.status,
+            payload: args.p_evidence,
+          });
+        } else return { error: new Error(`Unknown RPC ${name}`) };
+        return { data: null, error: null };
+      },
     },
   };
 }

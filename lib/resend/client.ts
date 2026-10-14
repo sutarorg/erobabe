@@ -1,3 +1,4 @@
+import { escapeHtml } from "@/lib/http/safety";
 import { Resend } from "resend";
 
 let resendClient: Resend | null = null;
@@ -25,7 +26,8 @@ export async function sendEmail(params: EmailParams) {
     throw new Error("Resend not configured — missing RESEND_API_KEY");
   }
 
-  const from = params.from || process.env.RESEND_FROM_EMAIL || "noreply@erobabe.com";
+  const from =
+    params.from || process.env.RESEND_FROM_EMAIL || "noreply@erobabe.com";
 
   const { data, error } = await client.emails.send({
     from,
@@ -51,14 +53,18 @@ export function templateCampaignSubmitted(email: string, campaignName: string) {
       <div style="background:#0a0a0c;color:#f5f5f7;font-family:Inter,sans-serif;padding:32px">
         <img src="https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png" alt="erobabe" style="height:24px" />
         <h1 style="color:#f5f5f7;font-size:20px;margin-top:16px">Campaign received</h1>
-        <p style="color:#a1a1aa;font-size:14px">Your campaign <strong style="color:#f5f5f7">${campaignName}</strong> has been submitted and is awaiting payment and moderation.</p>
+        <p style="color:#a1a1aa;font-size:14px">Your campaign <strong style="color:#f5f5f7">${escapeHtml(campaignName)}</strong> has been submitted and is awaiting payment and moderation.</p>
         <p style="color:#71717a;font-size:12px;margin-top:24px">This is an automated message from erobabe.</p>
       </div>
     `,
   };
 }
 
-export function templatePaymentConfirmed(email: string, campaignName: string, amount: string) {
+export function templatePaymentConfirmed(
+  email: string,
+  campaignName: string,
+  amount: string,
+) {
   return {
     to: email,
     subject: `Payment confirmed for "${campaignName}"`,
@@ -66,7 +72,7 @@ export function templatePaymentConfirmed(email: string, campaignName: string, am
       <div style="background:#0a0a0c;color:#f5f5f7;font-family:Inter,sans-serif;padding:32px">
         <img src="https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png" alt="erobabe" style="height:24px" />
         <h1 style="color:#f5f5f7;font-size:20px;margin-top:16px">Payment confirmed</h1>
-        <p style="color:#a1a1aa;font-size:14px">We received ${amount} for campaign <strong style="color:#f5f5f7">${campaignName}</strong>. It will go live after creative approval.</p>
+        <p style="color:#a1a1aa;font-size:14px">We received ${escapeHtml(amount)} for campaign <strong style="color:#f5f5f7">${escapeHtml(campaignName)}</strong>. It will go live after creative approval.</p>
       </div>
     `,
   };
@@ -79,21 +85,25 @@ export function templateCampaignApproved(email: string, campaignName: string) {
     html: `
       <div style="background:#0a0a0c;color:#f5f5f7;font-family:Inter,sans-serif;padding:32px">
         <h1 style="color:#f5f5f7">Campaign approved</h1>
-        <p style="color:#a1a1aa">Your campaign <strong>${campaignName}</strong> is now active and delivering impressions.</p>
+        <p style="color:#a1a1aa">Your campaign <strong>${escapeHtml(campaignName)}</strong> is now active and delivering impressions.</p>
       </div>
     `,
   };
 }
 
-export function templateCampaignRejected(email: string, campaignName: string, reason: string) {
+export function templateCampaignRejected(
+  email: string,
+  campaignName: string,
+  reason: string,
+) {
   return {
     to: email,
     subject: `Campaign "${campaignName}" requires changes`,
     html: `
       <div style="background:#0a0a0c;color:#f5f5f7;font-family:Inter,sans-serif;padding:32px">
         <h1 style="color:#f5f5f7">Campaign needs attention</h1>
-        <p style="color:#a1a1aa">Your campaign <strong>${campaignName}</strong> was not approved.</p>
-        <p style="color:#a1a1aa">Reason: ${reason}</p>
+        <p style="color:#a1a1aa">Your campaign <strong>${escapeHtml(campaignName)}</strong> was not approved.</p>
+        <p style="color:#a1a1aa">Reason: ${escapeHtml(reason)}</p>
       </div>
     `,
   };
