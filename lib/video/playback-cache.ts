@@ -30,6 +30,13 @@
  * in this process's memory — on the instance that consumes them — and are
  * never written to the database, a shared cache, a log line, or a response.
  * Only links that pass {@link safeStreamtapeMediaUrl} are cached.
+ *
+ * Logs
+ * ----
+ * Every handshake and every refused link writes one `[playback]` line (file
+ * ID, duration or age, HTTP status, error code), so the hosting logs show
+ * whether links are really reused and how long Streamtape takes. Links,
+ * tickets, credentials and provider messages are never logged.
  */
 
 import { safeStreamtapeMediaUrl } from "@/lib/video/playback";
@@ -45,6 +52,9 @@ export const ACCESS_TTL_MS = 60_000;
 const MAX_ENTRIES = 1_000;
 
 export type StreamtapeLink = { fileId: string; url: string; resolvedAt: number };
+
+/** What started a handshake: the page preparing, a media request, or a background refresh. */
+type HandshakeReason = "prepare" | "request" | "refresh";
 
 type Store = {
   links: Map<string, StreamtapeLink>;
@@ -78,20 +88,38 @@ function ageOf(link: StreamtapeLink): number {
   return Date.now() - link.resolvedAt;
 }
 
+function duration(ms: number): string {
+  return ms < 60_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 60_000)} min`;
+}
+
+/** A fixed error code only: provider messages can contain links or credentials. */
+function failureCode(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return error instanceof Error && error.name === "StreamtapeError" && typeof code === "string" ? code : "untrusted_link";
+}
+
 /** Runs (or joins) the ticket → wait → link handshake for one file. */
-function handshake(fileId: string): Promise<StreamtapeLink> {
+function handshake(fileId: string, reason: HandshakeReason): Promise<StreamtapeLink> {
   const cache = store();
   const running = cache.inflight.get(fileId);
   if (running) return running;
 
   const generation = cache.generation;
+  const startedAt = Date.now();
   const task: Promise<StreamtapeLink> = Promise.resolve()
     .then(() => createDownloadUrl(fileId))
     .then((raw) => {
       // Never cache (or later fetch) something that is not a Streamtape media URL.
       const link = { fileId, url: safeStreamtapeMediaUrl(raw), resolvedAt: Date.now() };
       if (store().generation === generation) remember(store().links, fileId, link);
+      console.info(`[playback] Streamtape link ready in ${duration(Date.now() - startedAt)} (file ${fileId}, ${reason})`);
       return link;
+    })
+    .catch((error: unknown) => {
+      console.warn(
+        `[playback] Streamtape link failed after ${duration(Date.now() - startedAt)} (file ${fileId}, ${reason}): ${failureCode(error)}`
+      );
+      throw error;
     })
     .finally(() => {
       if (store().inflight.get(fileId) === task) store().inflight.delete(fileId);
@@ -113,11 +141,11 @@ export async function getStreamtapeLink(fileId: string): Promise<{ link: Streamt
     remember(cache.links, fileId, link);
     if (ageOf(link) >= LINK_REFRESH_AFTER_MS) {
       // Serve the current link now; the replacement is picked up by later requests.
-      handshake(fileId).catch(() => undefined);
+      handshake(fileId, "refresh").catch(() => undefined);
     }
     return { link, cached: true };
   }
-  return { link: await handshake(fileId), cached: false };
+  return { link: await handshake(fileId, "request"), cached: false };
 }
 
 /**
@@ -127,13 +155,25 @@ export async function getStreamtapeLink(fileId: string): Promise<{ link: Streamt
 export async function prepareStreamtapeLink(fileId: string): Promise<void> {
   const link = store().links.get(fileId);
   if (link && ageOf(link) < LINK_REFRESH_AFTER_MS) return;
-  await handshake(fileId);
+  await handshake(fileId, "prepare");
 }
 
-/** Drops a link the media host rejected — unless a newer one already replaced it. */
-export function invalidateStreamtapeLink(link: StreamtapeLink): void {
+/**
+ * Drops a link the media host rejected — unless a newer one already replaced
+ * it — and logs it: the HTTP status and the link's age show how long Streamtape
+ * links really last.
+ */
+export function invalidateStreamtapeLink(
+  link: StreamtapeLink,
+  { status = null, retrying = false }: { status?: number | null; retrying?: boolean } = {}
+): void {
   const { links } = store();
   if (links.get(link.fileId) === link) links.delete(link.fileId);
+  console.warn(
+    `[playback] Media host did not serve video for a Streamtape link (file ${link.fileId}, ` +
+    `${status === null ? "connection failed" : `HTTP ${status}`}, ${duration(ageOf(link))} old)` +
+    (retrying ? "; retrying with a fresh link" : "")
+  );
 }
 
 /** Records that `videoId` passed the published/public/cleared/approved checks. */

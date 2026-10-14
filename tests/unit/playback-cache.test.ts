@@ -12,9 +12,15 @@ import {
 const A = "https://node.tapecontent.net/a.mp4?token=1";
 const B = "https://node.tapecontent.net/a.mp4?token=2";
 
+const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+const logged = () => [...info.mock.calls, ...warn.mock.calls].map((args) => args.join(" ")).join("\n");
+
 beforeEach(() => {
   resetPlaybackCache();
   download.mockReset().mockResolvedValueOnce(A).mockResolvedValueOnce(B);
+  info.mockClear();
+  warn.mockClear();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -102,6 +108,62 @@ describe("Streamtape link cache", () => {
     finish(A);
     await pending;
     expect(await getStreamtapeLink("f1")).toMatchObject({ cached: false, link: { url: B } });
+  });
+});
+
+describe("logs", () => {
+  it("records how long each new link took and what asked for it, never the link", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-14T12:00:00.000Z"));
+    let finish!: (url: string) => void;
+    download.mockReset().mockImplementationOnce(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const pending = prepareStreamtapeLink("f1");
+    await vi.waitFor(() => expect(download).toHaveBeenCalledTimes(1));
+    vi.setSystemTime(new Date("2026-10-14T12:00:10.300Z"));
+    finish(A);
+    await pending;
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info.mock.calls[0][0]).toBe("[playback] Streamtape link ready in 10.3 s (file f1, prepare)");
+    // A cached link needs no handshake, so it writes nothing.
+    await getStreamtapeLink("f1");
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(logged()).not.toContain("token");
+  });
+
+  it("names the cause of a background refresh", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await getStreamtapeLink("f1");
+    vi.setSystemTime(Date.now() + LINK_REFRESH_AFTER_MS);
+    await getStreamtapeLink("f1");
+    await vi.waitFor(() => expect(info).toHaveBeenCalledTimes(2));
+    expect(info.mock.calls.map(([line]) => /\(file f1, (\w+)\)/.exec(line)?.[1])).toEqual(["request", "refresh"]);
+  });
+
+  it("logs only a fixed error code when Streamtape fails", async () => {
+    const providerError = Object.assign(new Error("Denied for login=y7bh key=dq6h at https://node.tapecontent.net/a.mp4?token=9"), {
+      name: "StreamtapeError", code: "unauthorized",
+    });
+    download.mockReset().mockRejectedValueOnce(providerError).mockResolvedValueOnce("https://evil.example/a.mp4?token=7");
+    await expect(getStreamtapeLink("f1")).rejects.toThrow();
+    await expect(getStreamtapeLink("f1")).rejects.toThrow();
+    expect(warn.mock.calls.map(([line]) => line.replace(/after [\d.]+ s/, "after N s"))).toEqual([
+      "[playback] Streamtape link failed after N s (file f1, request): unauthorized",
+      "[playback] Streamtape link failed after N s (file f1, request): untrusted_link",
+    ]);
+    expect(logged()).not.toMatch(/token|login=|key=|evil/);
+  });
+
+  it("logs a refused link's status and age, never the link", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { link } = await getStreamtapeLink("f1");
+    vi.setSystemTime(Date.now() + 25 * 60_000);
+    invalidateStreamtapeLink(link, { status: 403, retrying: true });
+    invalidateStreamtapeLink(link);
+    expect(warn.mock.calls.map(([line]) => line)).toEqual([
+      "[playback] Media host did not serve video for a Streamtape link (file f1, HTTP 403, 25 min old); retrying with a fresh link",
+      "[playback] Media host did not serve video for a Streamtape link (file f1, connection failed, 25 min old)",
+    ]);
+    expect(logged()).not.toContain("token");
   });
 });
 

@@ -123,7 +123,10 @@ Streamtape setup in `docs/AD_FREE_PLAYBACK.md`.
   links can be bound to the IP address that requested them.
 - **Link lifetime:** Streamtape does not publish how long a `/file/dl` link
   lasts. Refreshing after 20 minutes and stopping at 2 hours are deliberate
-  choices, and a rejected link heals itself with one retry.
+  choices, and a rejected link heals itself with one retry. The production logs
+  (below) show the age at which links are really refused; if that is regularly
+  under 20 minutes, lower `LINK_REFRESH_AFTER_MS` in
+  `lib/video/playback-cache.ts`.
 - **Bandwidth:** relayed media is not fetched before the visitor shows intent,
   so a page view that never plays costs no relayed bandwidth and no
   long-running server request. Direct files load their metadata from their own
@@ -165,3 +168,21 @@ On the deployed site: open a video page, wait about 10 seconds, then press
 Play. Playback should begin within about a second, and so should seeks. The
 browser's network log should show only same-origin `/playback` requests, never
 a provider URL.
+
+### Production logs
+
+Each new link and each link the media host stops serving writes one line to
+the hosting logs (on Vercel: the project's **Logs** tab, search `[playback]`):
+
+```text
+[playback] Streamtape link ready in 10.2 s (file wg8ad12d3QiJRXG, prepare)
+[playback] Streamtape link failed after 0.3 s (file wg8ad12d3QiJRXG, prepare): unauthorized
+[playback] Media host did not serve video for a Streamtape link (file wg8ad12d3QiJRXG, HTTP 403, 25 min old); retrying with a fresh link
+```
+
+The cause in brackets is `prepare` (the page opened), `request` (a media
+request found no link) or `refresh` (background renewal). Mostly `prepare`
+lines, few `request` lines and rare refusals mean links are prepared ahead and
+reused. A failure shows only a fixed code such as `not_configured`,
+`unauthorized`, `not_found` or `bandwidth`. Links, tickets, credentials and
+provider messages are never logged.

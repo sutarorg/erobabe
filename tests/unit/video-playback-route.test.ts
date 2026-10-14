@@ -21,6 +21,8 @@ function setup(overrides = {}) {
   return harness;
 }
 const upstream = vi.fn();
+const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 function request(id = ID, headers: Record<string, string> = {}, method = "GET") {
   const req = new NextRequest(`http://localhost/api/videos/${id}/playback?file=untrusted&url=https://evil.test/a.mp4`, { headers, method });
   const handler = method === "HEAD" ? HEAD : method === "POST" ? POST : GET;
@@ -29,6 +31,8 @@ function request(id = ID, headers: Record<string, string> = {}, method = "GET") 
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 beforeEach(() => {
   resetPlaybackCache();
+  info.mockClear();
+  warn.mockClear();
   setup();
   download.mockReset().mockResolvedValue(MEDIA);
   upstream.mockReset().mockImplementation(async () => new Response("video bytes", {
@@ -198,6 +202,24 @@ describe("instant start: the Streamtape handshake is not repeated per request", 
     await (await request(ID, { Range: "bytes=900-" })).text();
     expect(download).toHaveBeenCalledTimes(2);
     expect(upstream.mock.calls.at(-1)?.[0]).toBe(FRESH);
+  });
+
+  it("logs the refusal and the retry so link lifetimes show up in the hosting logs", async () => {
+    const FRESH = "https://node.tapecontent.net/video.mp4?token=fresh";
+    download.mockResolvedValueOnce(MEDIA).mockResolvedValueOnce(FRESH);
+    await (await request(ID, { Range: "bytes=0-" })).text();
+    upstream.mockImplementation(async (url: string) => url === MEDIA
+      ? new Response("expired", { status: 410, headers: { "Content-Type": "text/html" } })
+      : media("ok"));
+    await (await request(ID, { Range: "bytes=500-" })).text();
+    expect(warn.mock.calls.map(([line]) => line.replace(/[\d.]+ s old/, "N s old"))).toEqual([
+      "[playback] Media host did not serve video for a Streamtape link (file Ab123, HTTP 410, N s old); retrying with a fresh link",
+    ]);
+    expect(info.mock.calls.map(([line]) => line.replace(/in [\d.]+ s/, "in N s"))).toEqual([
+      "[playback] Streamtape link ready in N s (file Ab123, request)",
+      "[playback] Streamtape link ready in N s (file Ab123, request)",
+    ]);
+    expect([...info.mock.calls, ...warn.mock.calls].flat().join(" ")).not.toContain("token");
   });
 
   it("does not repeat a handshake it has only just made, and does not reuse the rejected link", async () => {

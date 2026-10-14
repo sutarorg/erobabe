@@ -13,11 +13,14 @@ const CONNECT_TIMEOUT_MS = 30_000;
  */
 export class StreamtapeMediaError extends Error {
   readonly retryable: boolean;
+  /** HTTP status of the media host's last answer, or `null` if none arrived. Never a URL or body. */
+  readonly status: number | null;
 
-  constructor(retryable: boolean) {
+  constructor(retryable: boolean, status: number | null = null) {
     super("Video media unavailable");
     this.name = "StreamtapeMediaError";
     this.retryable = retryable;
+    this.status = status;
   }
 }
 
@@ -51,6 +54,7 @@ export async function streamStreamtapeMedia(
     request.signal.removeEventListener("abort", abort);
   };
   let upstream: Response | undefined;
+  let status: number | null = null;
 
   try {
     const headers = new Headers({ "Accept-Encoding": "identity" });
@@ -61,10 +65,12 @@ export async function streamStreamtapeMedia(
     }
     let url = safeStreamtapeMediaUrl(rawUrl);
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      status = null;
       upstream = await fetch(url, {
         method: request.method === "HEAD" ? "HEAD" : "GET",
         headers, signal: controller.signal, redirect: "manual", cache: "no-store",
       });
+      status = upstream.status;
       if (![301, 302, 303, 307, 308].includes(upstream.status)) break;
       await upstream.body?.cancel();
       const location = upstream.headers.get("location");
@@ -134,6 +140,6 @@ export async function streamStreamtapeMedia(
     controller.abort();
     await upstream?.body?.cancel().catch(() => undefined);
     cleanup();
-    throw new StreamtapeMediaError(!request.signal.aborted && !timedOut);
+    throw new StreamtapeMediaError(!request.signal.aborted && !timedOut, status);
   }
 }

@@ -141,7 +141,8 @@ Live acceptance must be run on the deployed site with a real authorised file:
   should resume within about a second too, with no new provider ticket, and a
   second visit to the same video should be equally quick.
 - Confirm `POST /api/videos/{id}/playback` answers an empty `204` (never a
-  URL) once the page has opened.
+  URL) once the page has opened, and that the hosting logs show
+  `[playback] Streamtape link ready …` lines (see `docs/INSTANT_PLAYBACK.md`).
 - Confirm `/api/videos/{id}/playback` returns media bytes (not JSON, HTML or a
   redirect), and the browser successfully receives 200/206, plays, pauses and
   seeks. Test a long video and seek near the end. Signed provider URLs and API

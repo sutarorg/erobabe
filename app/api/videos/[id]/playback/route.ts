@@ -64,12 +64,13 @@ async function relay(fileId: string, req: NextRequest): Promise<Response> {
     try {
       return await streamStreamtapeMedia(link.url, req);
     } catch (error) {
-      const rejected = error instanceof StreamtapeMediaError && error.retryable;
-      // Never hand a rejected link to the next request.
-      if (rejected) invalidateStreamtapeLink(link);
+      if (!(error instanceof StreamtapeMediaError) || !error.retryable) throw error;
       // Only a link resolved before this request can have expired; retrying a
       // brand-new one would just repeat the handshake and fail the same way.
-      if (!rejected || !cached || attempt > 0 || req.signal.aborted) throw error;
+      const retrying = cached && attempt === 0 && !req.signal.aborted;
+      // Never hand a rejected link to the next request.
+      invalidateStreamtapeLink(link, { status: error.status, retrying });
+      if (!retrying) throw error;
     }
   }
 }

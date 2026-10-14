@@ -112,16 +112,25 @@ describe("telling an expired link apart from a visitor who left", () => {
     (error: unknown) => error as StreamtapeMediaError,
   );
   it.each([
-    ["a 403 refusal", () => new Response("expired", { status: 403, headers: { "Content-Type": "text/html" } })],
-    ["a 404", () => new Response(null, { status: 404 })],
-    ["an HTML page on HTTP 200", () => new Response("<html>", { headers: { "Content-Type": "text/html" } })],
-  ])("marks %s as retryable with a fresh link", async (_label, make) => {
+    ["a 403 refusal", () => new Response("expired", { status: 403, headers: { "Content-Type": "text/html" } }), 403],
+    ["a 404", () => new Response(null, { status: 404 }), 404],
+    ["an HTML page on HTTP 200", () => new Response("<html>", { headers: { "Content-Type": "text/html" } }), 200],
+  ])("marks %s as retryable with a fresh link", async (_label, make, status) => {
     vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => make()));
     const error = await failure(streamStreamtapeMedia(URL, request()));
     expect(error).toBeInstanceOf(StreamtapeMediaError);
     expect(error.retryable).toBe(true);
+    expect(error.status).toBe(status);
     expect(error.message).toBe("Video media unavailable");
     expect(error.message).not.toContain("token");
+  });
+  it("reports the status of the hop that failed, not of an earlier redirect", async () => {
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: "https://node2.tapecontent.net/v.mp4" } }))
+      .mockRejectedValueOnce(new TypeError("fetch failed")));
+    const error = await failure(streamStreamtapeMedia(URL, request()));
+    expect(error.retryable).toBe(true);
+    expect(error.status).toBeNull();
   });
   it("does not retry when the visitor cancelled", async () => {
     const controller = new AbortController();
@@ -130,7 +139,9 @@ describe("telling an expired link apart from a visitor who left", () => {
     })));
     const pending = failure(streamStreamtapeMedia(URL, request({ signal: controller.signal })));
     controller.abort();
-    expect((await pending).retryable).toBe(false);
+    const error = await pending;
+    expect(error.retryable).toBe(false);
+    expect(error.status).toBeNull();
   });
   it("does not retry when the media host never answered", async () => {
     vi.useFakeTimers();
