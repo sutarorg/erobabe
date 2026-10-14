@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import VideoPlayer, { formatClock } from "@/src/components/VideoPlayer";
+import { renderToString } from "react-dom/server";
+import VideoPlayer, { earlyPrepareScript, formatClock } from "@/src/components/VideoPlayer";
 
 const props = { id: "22222222-2222-4222-8222-222222222222", title: "Test clip", poster: "https://cdn.example.com/poster.jpg" };
 const embed = "https://streamtape.com/e/abc123";
@@ -37,7 +38,11 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  delete (window as Window & { __erobabePrepared?: unknown }).__erobabePrepared;
 });
+
+/** Runs the inline script the way the browser does while parsing the server's HTML. */
+const runInlineScript = (source: string) => new Function(source)();
 
 const videoOf = (container: HTMLElement) => container.querySelector("video")!;
 const playerOf = () => screen.getByRole("region", { name: /Video player/ });
@@ -92,6 +97,65 @@ describe("instant start", () => {
     const video = videoOf(container);
     expect(video).toHaveAttribute("preload", "metadata");
     expect(screen.queryByRole("status")).toBeNull(); // no "Preparing video…" before the visitor asks
+  });
+
+  it("asks the relay to prepare from the server-rendered HTML, before hydration", () => {
+    const html = renderToString(<VideoPlayer {...props} embedUrl={embed} />);
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    expect(script).toBe(earlyPrepareScript(media));
+    // Emitted ahead of the player markup, so it runs as soon as the parser gets there.
+    expect(html.indexOf("<script>")).toBeLessThan(html.indexOf("<video"));
+    // Direct files have no handshake, and other embeds are never prepared.
+    expect(renderToString(<VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" embedUrl={embed} />)).not.toContain("<script");
+    expect(renderToString(<VideoPlayer {...props} embedUrl="https://example.com/embed/abc" />)).not.toContain("<script");
+  });
+
+  it("sends one prepare request from the inline script and the player does not repeat it", () => {
+    runInlineScript(earlyPrepareScript(media));
+    runInlineScript(earlyPrepareScript(media)); // a repeated script must not ask twice
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(media, { method: "POST", cache: "no-store", credentials: "same-origin" });
+
+    render(<VideoPlayer {...props} embedUrl={embed} />);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The marker is consumed: coming back to the video later in the tab asks again.
+    cleanup();
+    render(<VideoPlayer {...props} embedUrl={embed} />);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("still prepares on client-side navigation, where inline scripts never run", () => {
+    const { container } = render(<VideoPlayer {...props} embedUrl={embed} />);
+    expect(container.querySelector("script")).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(media, expect.objectContaining({ method: "POST" }));
+  });
+
+  it("keeps a crafted URL from closing the inline script", () => {
+    const hostile = "/api/videos/x</script><script>alert(1)</script>/playback";
+    const source = earlyPrepareScript(hostile);
+    expect(source).not.toMatch(/<\/?script/i);
+    runInlineScript(source);
+    expect(fetchMock).toHaveBeenCalledWith(hostile, expect.objectContaining({ method: "POST" }));
+  });
+
+  it("never lets the inline script break the page, and falls back to the player's request", async () => {
+    fetchMock.mockImplementationOnce(() => { throw new Error("blocked"); });
+    expect(() => runInlineScript(earlyPrepareScript(media))).not.toThrow();
+    // Nothing was sent, so the player must not assume it was.
+    render(<VideoPlayer {...props} embedUrl={embed} />);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenLastCalledWith(media, expect.objectContaining({ method: "POST" }));
+
+    // A request that fails on the network is swallowed instead of surfacing as an error.
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    fetchMock.mockImplementationOnce(async () => { throw new TypeError("Failed to fetch"); });
+    expect(() => runInlineScript(earlyPrepareScript(`${media}?again`))).not.toThrow();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    process.off("unhandledRejection", unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
   });
 
   it("fetches no relayed media bytes until the visitor shows intent", () => {

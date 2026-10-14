@@ -28,6 +28,32 @@ const VOLUME_KEY = "erobabe:player-volume";
 /** `HTMLMediaElement.HAVE_FUTURE_DATA`: enough is buffered to start playing. */
 const HAVE_FUTURE_DATA = 3;
 
+/** Where the page's inline script records the relay links it already asked to prepare. */
+const EARLY_PREPARE_KEY = "__erobabePrepared";
+type EarlyPrepareWindow = Window & { [EARLY_PREPARE_KEY]?: Record<string, number> };
+
+/**
+ * Inline script rendered with the player's HTML: it asks the relay to prepare
+ * its link while the page is still being parsed, before the JavaScript bundle
+ * has downloaded and hydrated. On a full page load that starts Streamtape's
+ * ~10 s ticket wait earlier than the player's mount effect could: 0.4–0.8 s
+ * in throttled phone tests (more on slow networks), ~0.1 s on desktop.
+ *
+ * Client-side navigations never execute it (React inserts inert `<script>`
+ * elements), so the player's effect still covers those; the marker it leaves
+ * keeps the two from sending the same request twice.
+ */
+export function earlyPrepareScript(src: string): string {
+  // JSON string literal with `<` escaped, so the URL can never close the tag.
+  const url = JSON.stringify(src).replace(/</g, "\\u003c");
+  // The marker is set only once the request is on its way, so if `fetch` throws
+  // the player's effect still sends it.
+  return (
+    `(function(){try{var w=window,u=${url},p=w.${EARLY_PREPARE_KEY}||(w.${EARLY_PREPARE_KEY}={});if(p[u])return;` +
+    `fetch(u,{method:"POST",cache:"no-store",credentials:"same-origin"}).catch(function(){});p[u]=Date.now()}catch(e){}})();`
+  );
+}
+
 /** `75` → `1:15`, `3725` → `1:02:05`. */
 export function formatClock(value: number): string {
   const total = Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -285,9 +311,10 @@ function SitePlayer({ src, title, poster, durationSeconds, quality, relayed = fa
   quality?: string | null;
   /**
    * Bytes come through this site's relay (legacy Streamtape). The server-side
-   * link is prepared as soon as the player mounts; media bytes are fetched
-   * only once the visitor shows intent (pointer, focus or Play), so a page
-   * view that never plays costs no video bandwidth.
+   * link is prepared as soon as the page is parsed (see `earlyPrepareScript`)
+   * or, after a client-side navigation, when the player mounts; media bytes
+   * are fetched only once the visitor shows intent (pointer, focus or Play),
+   * so a page view that never plays costs no video bandwidth.
    */
   relayed?: boolean;
 }) {
@@ -327,6 +354,13 @@ function SitePlayer({ src, title, poster, durationSeconds, quality, relayed = fa
   // Streamtape makes every new link wait ~10 s before it is issued.
   useEffect(() => {
     if (!relayed) return;
+    const early = (window as EarlyPrepareWindow)[EARLY_PREPARE_KEY];
+    if (early?.[src]) {
+      // The server-rendered page already asked (see `earlyPrepareScript`).
+      // Consume the marker so a later visit to this video in the tab asks again.
+      delete early[src];
+      return;
+    }
     fetch(src, { method: "POST", cache: "no-store", credentials: "same-origin" }).catch(() => undefined);
   }, [relayed, src]);
 
@@ -784,6 +818,7 @@ function SitePlayer({ src, title, poster, durationSeconds, quality, relayed = fa
 
 export default function VideoPlayer(props: Props) {
   const source = selectPlaybackSource(props.playableUrl, props.embedUrl);
+  const relaySrc = `/api/videos/${encodeURIComponent(props.id)}/playback`;
   const player = {
     title: props.title,
     poster: props.poster,
@@ -797,12 +832,10 @@ export default function VideoPlayer(props: Props) {
       ) : source.kind === "streamtape" ? (
         // Same-origin relay: the server resolves and consumes the IP-bound link,
         // so neither the provider's ad player nor a signed URL reaches the browser.
-        <SitePlayer
-          key={`${props.id}:${source.fileId}`}
-          src={`/api/videos/${encodeURIComponent(props.id)}/playback`}
-          relayed
-          {...player}
-        />
+        <>
+          <script dangerouslySetInnerHTML={{ __html: earlyPrepareScript(relaySrc) }} />
+          <SitePlayer key={`${props.id}:${source.fileId}`} src={relaySrc} relayed {...player} />
+        </>
       ) : source.kind === "embed" ? (
         <iframe
           src={source.url}

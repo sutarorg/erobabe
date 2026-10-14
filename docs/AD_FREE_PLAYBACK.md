@@ -70,11 +70,20 @@ The player also only created its `<video>` element after the click.
   resolved link in the memory of the server process that resolved it.
   Concurrent requests for the same file share a single in-flight handshake.
   Range, seek and HEAD requests reuse the link, so they start streaming at once.
-- **Prepared before Play.** The player's `POST` on page open runs the handshake
-  while the visitor is still reading, so pressing Play normally finds the link
-  ready. The `POST` goes to the playback route itself (not the page render) so
-  the prepared link lands in the same server function that streams it, also on
-  platforms that deploy pages and API routes as separate functions.
+- **Prepared before Play.** A `POST` on page open runs the handshake while the
+  visitor is still reading, so pressing Play normally finds the link ready. On
+  a full page load a tiny inline script in the player's HTML sends it while the
+  page is still being parsed, before the JavaScript bundle has loaded and
+  hydrated: in local measurements with mobile CPU/network throttling that was
+  0.4–0.8 s earlier than the player's own request (about 0.1 s on desktop); on
+  real phone networks, where the bundle also has to download, the gap should be
+  larger. After a client-side navigation the player sends it when it mounts.
+  Either way a production page sends it once (React's development mode may add
+  a second, harmless one). The `POST` goes to the playback route itself (not
+  the page render) so the prepared link lands in the same server function that
+  streams it, also on platforms that deploy pages and API routes as separate
+  functions. Link prefetching never runs it, so a page full of video cards
+  prepares nothing.
 - **Ageing links refresh in the background.** After 20 minutes a link keeps
   serving while a replacement is resolved; after 2 hours it is never used.
 - **Self-healing.** If the media host rejects a cached link (expired,
@@ -170,8 +179,18 @@ connection timeouts, and preservation of other providers' sandbox restrictions.
 They also cover link reuse across range requests, shared in-flight handshakes,
 background refresh and maximum age, one transparent retry for a rejected cached
 link (and none for a fresh one), the access-decision TTL, the prepare endpoint,
-and the player's controls, intent-based preloading, keyboard/touch behaviour
-and error recovery.
+the inline prepare script (sent once, never twice, safe against markup
+injection, harmless when `fetch` fails), and the player's controls,
+intent-based preloading, keyboard/touch behaviour and error recovery.
+
+The real Streamtape behaviour the unit suite can only simulate — how long a new
+link really takes, and that one link serves the probe, the first frames and a
+seek — is checked by `tests/live/streamtape-playback.live.test.ts` with your
+own credentials and any file id (see `tests/live/README.md`):
+
+```bash
+STREAMTAPE_LOGIN=… STREAMTAPE_API_KEY=… STREAMTAPE_PLAYBACK_FILE_ID=… npm run test:live
+```
 
 Live acceptance must be run on the deployed site with a real authorised file:
 
