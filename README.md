@@ -52,7 +52,7 @@ credentials, relay, or video-upload service is needed.
   warning, not a fabricated image. Embed-only player pages need a supplied
   image or a direct video-file link; they do not expose frames to this app.
 - AI titles are descriptive, search-friendly, and non-graphic, up to 160
-  characters. Generated descriptions **must contain 25–30 words**. Invalid AI
+  characters. Generated descriptions **must contain 30–40 words**. Invalid AI
   descriptions are retried with feedback; prepared metadata and deterministic
   fallbacks obey the same limit. AI failure notices remain in the admin UI,
   not the public description. These rules apply to newly generated metadata,

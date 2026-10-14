@@ -427,7 +427,7 @@ export default function UploadPage() {
         <p className="mt-1 text-[12px] text-ink-3">
           Paste direct video URLs or player-page links below. Erobabe saves the link and plays the video straight from the
           original host — it does not copy or host the full video file. You control the category and each
-          video&apos;s optional thumbnail; AI (DeepSeek V3.2 via OpenRouter) generates a non-graphic title, a 25–30-word description, and tags.
+          video&apos;s optional thumbnail; AI (DeepSeek V3.2 via OpenRouter) generates a non-graphic title, a 30–40-word description, and tags.
         </p>
       </div>
 

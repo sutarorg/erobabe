@@ -257,7 +257,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
     });
     if (validation.ok) return validation.suggestion;
 
-    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object that meets every requirement: a one-clause tube-style title with no dash of any kind, a story-like description written for the selected category, and a description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
+    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object that meets every requirement: a distinct, non-graphic one-clause title without the category name or any dash, a neutral, non-graphic story-like description written for the selected category, and a description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
     const truncated = result.finishReason === "length" && !parseLooseJson(result.text);
     lastError = new MetadataError(
       truncated

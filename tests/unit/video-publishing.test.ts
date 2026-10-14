@@ -54,7 +54,7 @@ function seedDb() {
 function aiSuggestion(overrides: Partial<SuggestedMetadata> = {}): SuggestedMetadata {
   return {
     title: "Evening in Velvet",
-    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings.",
+    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings with similar settings and thoughtfully composed visual presentations.",
     tags: ["mature", "boudoir", "4k"],
     category: "Boudoir",
     reasoning: "AI-generated suggestion, requires human review",
@@ -156,7 +156,7 @@ describe("createGeneratedVideo metadata", () => {
 
     const prepared = {
       title: "Already Written",
-      description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings.",
+      description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings with similar settings and thoughtfully composed visual presentations.",
       tags: ["mature", "4k"],
       source: "ai" as const,
     };
@@ -248,5 +248,38 @@ describe("createGeneratedVideo metadata", () => {
 
     expect(metadata.source).toBe("fallback");
     expect(metadata.title.trim().length).toBeGreaterThan(0);
+  });
+});
+
+
+describe("distinct generated video titles", () => {
+  it("regenerates a case-insensitive duplicate title within the same category", async () => {
+    const fake = seedDb();
+    fake.db.videos.push({ id: "existing", title: "evening in velvet", category_id: CATEGORY_ID });
+    const prompts: any[] = [];
+    aiState.suggest = async (params) => {
+      prompts.push(params);
+      return aiSuggestion({ title: prompts.length === 1 ? "Evening In Velvet" : "A Quiet Evening By The Window" });
+    };
+    const { metadata } = await createGeneratedVideo({ service: dbState.client as never, userId: "admin-1", sourceName: "window.mp4", categoryId: CATEGORY_ID, provider: "embed" });
+    expect(metadata.title).toBe("A Quiet Evening By The Window");
+    expect(prompts[0].existingTitles).toContain("evening in velvet");
+    expect(aiState.calls).toBe(2);
+  });
+
+  it("disambiguates repeated replies instead of publishing the same title", async () => {
+    const fake = seedDb();
+    fake.db.videos.push({ id: "existing", title: "Evening in Velvet", category_id: CATEGORY_ID });
+    aiState.suggest = async () => aiSuggestion();
+    const { metadata } = await createGeneratedVideo({ service: dbState.client as never, userId: "admin-1", sourceName: "window.mp4", categoryId: CATEGORY_ID, provider: "embed" });
+    expect(metadata.title).not.toBe("Evening in Velvet");
+    expect(metadata.title.length).toBeLessThanOrEqual(160);
+    expect(metadata.warning).toContain("review");
+  });
+
+  it("strips the category from prepared metadata without another AI call", async () => {
+    const { metadata } = await createGeneratedVideo({ service: dbState.client as never, userId: "admin-1", sourceName: "window.mp4", categoryId: CATEGORY_ID, provider: "embed", prepared: { ...aiSuggestion({ title: "Boudoir Evening By The Window" }), source: "ai" } });
+    expect(metadata.title).toBe("Evening By The Window");
+    expect(aiState.calls).toBe(0);
   });
 });

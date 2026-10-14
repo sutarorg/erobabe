@@ -25,7 +25,7 @@ import {
 function modelOutput(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
     title: "Evening in Velvet",
-    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings.",
+    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings with similar settings and thoughtfully composed visual presentations.",
     tags: ["mature", "boudoir", "4k"],
     category: "Boudoir",
     ...overrides,
@@ -87,7 +87,7 @@ describe("validateSuggestionPayload", () => {
 });
 
 describe("description word limits and title prompt", () => {
-  it.each([25, 30])("accepts a description containing %i words", (count) => {
+  it.each([30, 40])("accepts a description containing %i words", (count) => {
     const description = Array(count).fill("word").join(" ");
     const result = validateSuggestionPayload(modelOutput({ description }));
     expect(result.ok).toBe(true);
@@ -97,10 +97,10 @@ describe("description word limits and title prompt", () => {
   it("rejects a fragment too thin to repair into a description", () => {
     const result = validateSuggestionPayload(modelOutput({ description: "A short catalog description." }));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toMatch(/description.*25-30 words/);
+    if (!result.ok) expect(result.message).toMatch(/description.*30-40 words/);
   });
 
-  it.each([24, 31, 100])("repairs a %i-word description into the published range instead of discarding it", (count) => {
+  it.each([29, 41, 100])("repairs a %i-word description into the published range instead of discarding it", (count) => {
     const result = validateSuggestionPayload(modelOutput({ description: Array(count).fill("word").join(" ") }), "Boudoir");
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -111,11 +111,11 @@ describe("description word limits and title prompt", () => {
   });
 
   it("keeps the model's own words when it trims an overlong description", () => {
-    const source = `${Array(20).fill("word").join(" ")}. ${Array(11).fill("extra").join(" ")}.`;
+    const source = `${Array(20).fill("word").join(" ")}. ${Array(31).fill("extra").join(" ")}.`;
     const result = validateSuggestionPayload(modelOutput({ description: source }), "Boudoir");
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(descriptionWordCount(result.suggestion.description)).toBe(30);
+      expect(descriptionWordCount(result.suggestion.description)).toBe(40);
       expect(result.suggestion.description.startsWith(Array(20).fill("word").join(" "))).toBe(true);
       // Trimming only ever removes model words; it never substitutes generated ones.
       expect(result.suggestion.description).not.toContain("unhurried");
@@ -148,19 +148,19 @@ describe("description word limits and title prompt", () => {
   it("counts irregular and Unicode whitespace consistently and normalizes output", () => {
     expect(descriptionWordCount("  one\n two\tthree\u00a0four  ")).toBe(4);
     expect(descriptionWordCount(" \n ")).toBe(0);
-    const result = validateSuggestionPayload(modelOutput({ description: Array(25).fill("word").join(" \n\t") }));
+    const result = validateSuggestionPayload(modelOutput({ description: Array(35).fill("word").join(" \n\t") }));
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.suggestion.description).toBe(Array(25).fill("word").join(" "));
+    if (result.ok) expect(result.suggestion.description).toBe(Array(35).fill("word").join(" "));
   });
 
-  it.each([...KNOWN_CATEGORIES])("keeps fallback descriptions within 25-30 words for %s", (category) => {
+  it.each([...KNOWN_CATEGORIES])("keeps fallback descriptions within 30-40 words for %s", (category) => {
     expect(isValidDescription(fallbackSuggestion("clip.mp4", category).description)).toBe(true);
   });
 
   it("asks for a tube-style one-clause title and pins the metadata to the admin's category", () => {
     const prompt = buildPrompt({ fileName: "evening_in_velvet.mp4", category: "Boudoir" });
     expect(prompt).toContain("search-friendly");
-    expect(prompt).toContain("25-30 words, not characters");
+    expect(prompt).toContain("30-40 words, not characters");
     expect(prompt).toContain("untrusted source data");
     // The title instruction is the point of the change: one clause, no dash.
     expect(prompt).toContain("ONE clause");
@@ -177,7 +177,7 @@ describe("description word limits and title prompt", () => {
     expect(prompt).toContain('The admin has already chosen the category "Massage"');
     expect(prompt).toContain('must be exactly "Massage"');
     expect(prompt).toContain("story-like description");
-    expect(prompt).toContain("hands that begin with nothing but patience");
+    expect(prompt).toContain("a quiet wellness session with a relaxed atmosphere");
     // The example the model is shown must itself be valid for that category.
     const example = prompt.split("Example JSON:\n")[1];
     const validated = validateSuggestionPayload(example, "Massage");
@@ -213,7 +213,7 @@ describe("description word limits and title prompt", () => {
     }
   });
 
-  it.each([...KNOWN_CATEGORIES])("writes a 25-30 word story blurb for %s", (category) => {
+  it.each([...KNOWN_CATEGORIES])("writes a 30-40 word story blurb for %s", (category) => {
     expect(isValidDescription(CATEGORY_STORIES[category].blurb)).toBe(true);
   });
 });
@@ -315,8 +315,8 @@ describe("fallbackSuggestion", () => {
     expect(suggestion.tags.length).toBeGreaterThan(0);
   });
 
-  it("drops long id runs and falls back to the category for empty names", () => {
-    expect(fallbackSuggestion("", "Solo").title).toBe("Solo Scene");
+  it("drops long id runs and uses a category-free placeholder for empty names", () => {
+    expect(fallbackSuggestion("", "Solo").title).toBe("Untitled Video Listing");
     expect(humanizeFileName("evening_in_velvet_20240512_1080p.mov")).toBe("Evening In Velvet 1080p");
   });
 
@@ -332,7 +332,7 @@ describe("fallbackSuggestion", () => {
 
 describe("normalizeDescription", () => {
   it("leaves an in-range description untouched", () => {
-    const description = Array(27).fill("word").join(" ");
+    const description = Array(35).fill("word").join(" ");
     expect(normalizeDescription(description, "Boudoir")).toEqual({ description, adjusted: null });
   });
 
@@ -355,7 +355,7 @@ describe("normalizeDescription", () => {
    * used to send an upload back to file-name metadata.
    */
   it.each([...KNOWN_CATEGORIES])(
-    "lands every repairable length inside 25-30 words for %s",
+    "lands every repairable length inside 30-40 words for %s",
     (category) => {
       for (let count = 8; count <= 60; count += 1) {
         const source = Array(count).fill("word").join(" ");
@@ -376,23 +376,23 @@ describe("normalizeDescription", () => {
   });
 
   it("cuts an overlong description on a sentence boundary when it can", () => {
-    const source = `${Array(26).fill("word").join(" ")}. ${Array(26).fill("tail").join(" ")}.`;
+    const source = `${Array(35).fill("word").join(" ")}. ${Array(35).fill("tail").join(" ")}.`;
     const result = normalizeDescription(source, "Romantic");
     expect(result).not.toBeNull();
-    expect(descriptionWordCount(result!.description)).toBe(26);
+    expect(descriptionWordCount(result!.description)).toBe(35);
     expect(result!.description).not.toContain("tail");
-    expect(result!.adjusted).toMatch(/^trimmed from 52 words/);
+    expect(result!.adjusted).toMatch(/^trimmed from 70 words/);
   });
 
   it("trims a single long run-on sentence without breaking a word", () => {
     const result = normalizeDescription(Array(48).fill("word").join(" "), "Romantic");
     expect(result).not.toBeNull();
-    expect(descriptionWordCount(result!.description)).toBe(30);
+    expect(descriptionWordCount(result!.description)).toBe(40);
     expect(result!.description.endsWith(".")).toBe(true);
   });
 
   it("drops a dangling connector left by a hard cut", () => {
-    const words = [...Array(29).fill("word"), "and"];
+    const words = [...Array(39).fill("word"), "and"];
     const result = normalizeDescription(words.join(" "), "Romantic");
     expect(result).not.toBeNull();
     expect(result!.description.endsWith("and.")).toBe(false);
@@ -431,5 +431,31 @@ describe("sanitizeTitle", () => {
     expect(sanitizeTitle("")).toBe("");
     expect(sanitizeTitle("---")).toBe("");
     expect(sanitizeTitle("\u{1F525}\u{1F525}")).toBe("");
+  });
+});
+
+
+describe("category-free generated titles", () => {
+  it.each([
+    ["Amateur", "Amateur Couple Share A Quiet Evening", "Couple Share A Quiet Evening"],
+    ["Amateur", "A Quiet amateur Evening On Camera", "A Quiet Evening On Camera"],
+    ["Mature 18+", "Mature 18+ Performer In Evening Light", "Performer In Evening Light"],
+    ["Solo", "Solomon Enjoys A Quiet Evening", "Solomon Enjoys A Quiet Evening"],
+  ])("removes only the whole category label %s", (category, title, expected) => {
+    const result = validateSuggestionPayload(modelOutput({ title }), category);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.suggestion.title).toBe(expected);
+  });
+
+  it.each([29, 41])("rejects %i words under strict validation", (count) => {
+    expect(validateSuggestionPayload(modelOutput({ description: Array(count).fill("word").join(" ") }), "Boudoir", { strictWordCount: true }).ok).toBe(false);
+  });
+
+  it("asks for source-specific titles and supplies titles to avoid", () => {
+    const prompt = buildPrompt({ fileName: "quiet_evening.mp4", category: "Amateur", existingTitles: ["A Quiet Evening On Camera"] });
+    expect(prompt).toContain("Never include the selected category name");
+    expect(prompt).toContain("do not copy the example or any existingTitles");
+    expect(prompt).toContain("A Quiet Evening On Camera");
+    expect(prompt).toContain("neutral, non-graphic");
   });
 });

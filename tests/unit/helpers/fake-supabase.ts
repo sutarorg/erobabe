@@ -26,6 +26,7 @@ type Filter =
   | { kind: "in"; column: string; value: any[] }
   | { kind: "lte"; column: string; value: any }
   | { kind: "gte"; column: string; value: any }
+  | { kind: "ilike"; column: string; value: string }
   | { kind: "like"; column: string; value: string }
   | { kind: "not_is"; column: string; value: any };
 
@@ -54,6 +55,9 @@ function matchesFilters(row: Row, filters: Filter[], contains: Array<[string, an
         break;
       case "gte":
         if (actual < filter.value) return false;
+        break;
+      case "ilike":
+        if (String(actual ?? "").toLowerCase() !== filter.value.toLowerCase()) return false;
         break;
       case "like": {
         // Supports the `%` wildcard only, which is all the app uses.
@@ -156,6 +160,12 @@ class Query implements PromiseLike<{ data: any; error: any; count?: number | nul
 
   contains(column: string, subset: any) {
     this.containsFilters.push([column, subset]);
+    return this;
+  }
+
+  ilike(column: string, pattern: string) {
+    const literal = pattern.replace(/\\(.)/g, "$1").toLowerCase();
+    this.filters.push({ kind: "ilike", column, value: literal });
     return this;
   }
 

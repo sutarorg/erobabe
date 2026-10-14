@@ -42,7 +42,7 @@ suite("OpenRouter live API", () => {
   }, 60_000);
 
   /**
-   * The regression this guards: a description outside 25-30 words used to
+   * The regression this guards: a description outside 30-40 words used to
    * discard the whole suggestion and drop the upload back onto file-name
    * metadata. Run this across every category the admin can pick.
    */

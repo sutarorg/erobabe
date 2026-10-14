@@ -11,7 +11,7 @@ interface CategoryInput {
   slug?: string;
   /** Lucide component (client-only data) or the icon name stored in Supabase. */
   icon?: LucideIcon | string;
-  /** Admin-uploaded card thumbnail URL. Replaces the icon when present. */
+  /** Admin-uploaded thumbnail URL. Not displayed in the homepage category row. */
   image?: string | null;
 }
 
@@ -72,22 +72,11 @@ export default function Categories({ activeCategory = null, onSelect, onMore, ca
           );
           const inner = (
             <>
-              {cat.image ? (
-                // Admin-uploaded category thumbnail (same box as the icon, so
-                // the eight-card row keeps its geometry).
-                <img
-                  src={cat.image}
-                  alt=""
-                  loading="lazy"
-                  className="h-4 w-4 shrink-0 rounded object-cover transition-transform duration-200 group-hover:scale-110 @sm:h-5 @sm:w-5"
-                />
-              ) : (
-                <Icon
-                  className="h-4 w-4 shrink-0 text-accent transition-transform duration-200 group-hover:scale-110 @sm:h-5 @sm:w-5"
-                  strokeWidth={1.8}
-                  aria-hidden
-                />
-              )}
+              <Icon
+                className="h-4 w-4 shrink-0 text-accent transition-transform duration-200 group-hover:scale-110 @sm:h-5 @sm:w-5"
+                strokeWidth={1.8}
+                aria-hidden
+              />
               <span
                 className="line-clamp-2 w-full break-words text-[8px] font-medium leading-[1.25] text-zinc-200 @sm:text-[9px] @md:text-[11px] @2xl:text-[12px]"
                 title={cat.label}
