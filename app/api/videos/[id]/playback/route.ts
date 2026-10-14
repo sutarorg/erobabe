@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createDownloadUrl } from "@/lib/video/streamtape";
 import { selectPlaybackSource } from "@/lib/video/playback";
+import { forgetStreamtapeTicket, resolveStreamtapeTicket } from "@/lib/video/streamtape-tickets";
 import { streamStreamtapeMedia, validMediaRange } from "@/lib/video/streamtape-media";
 
 export const runtime = "nodejs";
@@ -42,11 +42,26 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     // Download tickets can be bound to the issuing server's IP. Returning the
     // URL to a different browser IP produces a 403 / MEDIA_ERR_SRC_NOT_SUPPORTED.
-    // Resolve and consume it here, including fresh tickets for seek requests.
+    // Resolve and consume it here, for the initial request and for every seek.
+    //
+    // The link itself is cached for a few minutes (`streamtape-tickets`), so the
+    // click that follows the page's own preload — and every byte range after it
+    // — starts streaming immediately instead of paying two API round trips
+    // first. `POST /api/videos/{id}/prepare` warms that cache even earlier.
     if (req.signal.aborted) throw new Error("Request cancelled");
-    const url = await createDownloadUrl(source.fileId);
+    const ticket = await resolveStreamtapeTicket(source.fileId);
     if (req.signal.aborted) throw new Error("Request cancelled");
-    return await streamStreamtapeMedia(url, req);
+    try {
+      return await streamStreamtapeMedia(ticket.url, req);
+    } catch (error) {
+      // A cached link can be refused by the media host (expired, already
+      // consumed, revoked). Nothing has been sent yet at this point, so drop it
+      // and stream from one freshly issued link before failing the visitor.
+      if (!ticket.fromCache || req.signal.aborted) throw error;
+      forgetStreamtapeTicket(source.fileId);
+      const fresh = await resolveStreamtapeTicket(source.fileId);
+      return await streamStreamtapeMedia(fresh.url, req);
+    }
   } catch {
     // Upstream messages/URLs may contain secrets. Never echo them to visitors.
     return reply({ error: "Ad-free playback is unavailable from this host. Please try again later." }, 503);
