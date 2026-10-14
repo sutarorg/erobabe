@@ -38,7 +38,11 @@ Videos are published by pasting direct MP4 URLs into the admin panel
 (`/admin/videos/upload`). Erobabe saves the link and plays the video straight
 from the original host — it does not copy or host the full video file. Only
 frame samples are fetched when generating a thumbnail. No hosting-provider
-credentials, relay, or video-upload service is needed.
+credentials, relay, or video-upload service is needed for direct MP4 sources.
+Legacy Streamtape entries use a same-origin streaming endpoint so IP-bound
+server-generated tickets are not handed to visitors' browsers. This requires
+server-only Streamtape credentials and streaming-capable hosting; see
+`docs/AD_FREE_PLAYBACK.md` for bandwidth, egress and request-duration requirements.
 
 ### Thumbnails, metadata, and video grids
 

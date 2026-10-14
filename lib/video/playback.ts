@@ -23,6 +23,11 @@ export function selectPlaybackSource(playableUrl?: string | null, embedUrl?: str
       const url = new URL(raw);
       if (!/^https?:$/.test(url.protocol) || url.username || url.password) continue;
       const fileId = streamtapeFileId(raw);
+      // Old records may contain an expired, IP-bound download URL alongside
+      // the durable embed ID. Refresh that source instead of replaying a ticket.
+      const legacyFileId = !fileId && kind === "direct" && /(^|\.)(tapecontent\.net|streamtape\.(com|net|to))$/i.test(url.hostname)
+        ? streamtapeFileId(embedUrl || "") : null;
+      if (legacyFileId) return { kind: "streamtape", fileId: legacyFileId };
       // Also catch legacy watch pages mistakenly saved in playable_url.
       if (fileId || (kind === "embed" && STREAMTAPE_HOST.test(url.hostname))) {
         return { kind: "streamtape", fileId };

@@ -1,11 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createHarness, getRequest } from "./helpers/video-route-harness";
+// @vitest-environment node
+import { NextRequest } from "next/server";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHarness } from "./helpers/video-route-harness";
 
 const state = vi.hoisted(() => ({ client: null as any }));
 const download = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => state.client }));
 vi.mock("@/lib/video/streamtape", () => ({ createDownloadUrl: download }));
-import { GET } from "@/app/api/videos/[id]/playback/route";
+import { GET, HEAD } from "@/app/api/videos/[id]/playback/route";
 
 const ID = "22222222-2222-4222-8222-222222222222";
 const MEDIA = "https://node.tapecontent.net/video.mp4?token=abc";
@@ -17,19 +19,28 @@ function setup(overrides = {}) {
   state.client = harness.auth;
   return harness;
 }
-function request(id = ID) {
-  return GET(getRequest(`/api/videos/${id}/playback?file=untrusted`), { params: Promise.resolve({ id }) });
+const upstream = vi.fn();
+function request(id = ID, headers: Record<string, string> = {}, method = "GET") {
+  const req = new NextRequest(`http://localhost/api/videos/${id}/playback?file=untrusted&url=https://evil.test/a.mp4`, { headers, method });
+  return (method === "HEAD" ? HEAD : GET)(req, { params: Promise.resolve({ id }) });
 }
+afterEach(() => vi.unstubAllGlobals());
 beforeEach(() => {
   setup();
   download.mockReset().mockResolvedValue(MEDIA);
+  upstream.mockReset().mockImplementation(async () => new Response("video bytes", {
+    headers: { "Content-Type": "video/mp4", "Accept-Ranges": "bytes", "Content-Length": "11" },
+  }));
+  vi.stubGlobal("fetch", upstream);
 });
 
 describe("public playback resolution", () => {
-  it("uses only the catalog file ID and returns non-cacheable media JSON, not a redirect", async () => {
+  it("consumes the server-issued ticket on the server and streams non-cacheable media, not a URL", async () => {
     const response = await request();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ url: MEDIA });
+    expect(await response.text()).toBe("video bytes");
+    expect(response.headers.get("content-type")).toBe("video/mp4");
+    expect(upstream).toHaveBeenCalledWith(MEDIA, expect.objectContaining({ redirect: "manual", cache: "no-store" }));
     expect(download).toHaveBeenCalledWith("Ab123");
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("location")).toBeNull();
@@ -41,10 +52,12 @@ describe("public playback resolution", () => {
     setup(overrides);
     expect((await request()).status).toBe(404);
     expect(download).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
   });
   it("rejects arbitrary IDs", async () => {
     expect((await request("Ab123")).status).toBe(400);
     expect(download).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
   });
   it.each([
     { playable_url: "https://cdn.example.com/video.mp4" },
@@ -54,6 +67,43 @@ describe("public playback resolution", () => {
     setup(overrides);
     expect((await request()).status).toBe(422);
     expect(download).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
+  });
+  it("forwards byte ranges and preserves partial response headers for seeking", async () => {
+    upstream.mockResolvedValue(new Response("part", { status: 206, headers: {
+      "Content-Type": "video/mp4", "Content-Range": "bytes 10-13/100", "Content-Length": "4", "Accept-Ranges": "bytes",
+      "Set-Cookie": "upstream=secret", "Location": MEDIA,
+    } }));
+    const response = await request(ID, { Range: "bytes=10-13", Cookie: "session=private", Authorization: "Bearer secret" });
+    expect(response.status).toBe(206);
+    expect(await response.text()).toBe("part");
+    expect(response.headers.get("content-range")).toBe("bytes 10-13/100");
+    expect(response.headers.get("content-length")).toBe("4");
+    expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(response.headers.get("location")).toBeNull();
+    const headers = upstream.mock.calls[0][1].headers as Headers;
+    expect(headers.get("range")).toBe("bytes=10-13");
+    expect(headers.get("cookie")).toBeNull();
+    expect(headers.get("authorization")).toBeNull();
+  });
+  it("answers HEAD metadata probes without a media body", async () => {
+    const response = await request(ID, {}, "HEAD");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("");
+    expect(response.headers.get("content-length")).toBe("11");
+    expect(upstream.mock.calls[0][1].method).toBe("HEAD");
+  });
+  it("rejects malformed/multipart ranges before calling the provider", async () => {
+    expect((await request(ID, { Range: "bytes=0-1,10-20" })).status).toBe(400);
+    expect(download).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
+  });
+  it("does not expose upstream HTML errors as playable media", async () => {
+    upstream.mockResolvedValue(new Response("provider secret error", { status: 403, headers: { "Content-Type": "text/html" } }));
+    const response = await request();
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toMatch(/secret|token=abc/);
   });
   it("resolves legacy watch pages stored as playable URLs", async () => {
     setup({ playable_url: "https://streamtape.com/v/Legacy123/name.mp4" });
