@@ -47,3 +47,7 @@ Only proved-obsolete SPA roots and their unreferenced StaticPages orphan were re
 ## Evidence interpretation
 
 Existing tests were not removed/skipped. Changed expectations reflect explicit behavior corrections: uncertain provider creation now preserves pre-provider claims; encoded video waits for review; admin sign-in is `/admin/signin`; an empty sitemap is valid. Populated sitemap fixtures and missing-video HTTP status assertions remain explicit. External acceptance and security review are release gates even when every local command passes.
+
+### Final request-boundary correction
+
+A final review found middleware previously checked session identity but left current role/suspension to layouts. Layouts can stay mounted across client/RSC navigation while service-backed pages query independently. Middleware now rechecks profile role/status on **every protected request**, fails closed on missing/failed profile reads, routes active admins to their own portal, and preserves refreshed session cookies on redirects. Ten new route-boundary regressions pass; final full suite: **47 files / 536 tests**. Private pending-review video rows also no longer offer public watch links that necessarily 404. Genuine authenticated staging verification remains required.

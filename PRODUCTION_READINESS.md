@@ -15,7 +15,7 @@ Environment: Linux sandbox, Node **22.22.3**, npm **10.9.8**. Final resolved ver
 | `npm ci` | PASS, exit 0. Reports the five known high development-tooling advisories below. |
 | `npm run type-check` | PASS, exit 0. Includes TSX tests now, not only `.ts` tests. |
 | `npm run lint` | PASS, exit 0; **0 errors, 24 warnings** (existing image optimization / JSX guidance). Supported `eslint app lib src middleware.ts --ext .ts,.tsx` replaces deprecated `next lint`. |
-| `npm run test` | PASS, exit 0; **46 files, 526 tests passed**, no unit-test files skipped. |
+| `npm run test` | PASS, exit 0; **47 files, 536 tests passed**, no unit-test files skipped. |
 | `npm run build` | PASS, exit 0; production App Router output generated. No live DB/provider credentials. Expected missing-Supabase warnings/empty public prerender do not prove integration health. |
 | `npm run test:e2e -- --workers=2 --reporter=line` | PASS, exit 0; **26 passed**. Local Next dev server and Chromium 153.0.8010.0; public/API boundaries, actual local frame extraction, mocked TUS protocol, desktop/mobile production sidebar components with isolated router, every real portal URL's anonymous redirect. Not authenticated staging page-content acceptance. |
 | `npm run test:live` | Exit 0, but **15 skipped / 1 skipped file** under the existing credential gate. **NOT VERIFIED**, not a live-integration PASS. |
@@ -40,6 +40,8 @@ Before implementation: `npm ci`, type-check, lint, build and **40 files / 489 un
 ### Database evidence (local, not staging)
 
 `launch-integrity-schema.test.ts` applies every checked-in migration with Supabase-managed auth/storage fixture schemas and exercises actual SQL roles, protected-field attempts, DB pricing, two-advertiser reservation conflicts, required external_id, pre-provider claim, transactional rollback on invoice failure, idempotence, refund behavior, delivery eligibility, rate budgets and stored counters. `bunny-schema.test.ts` proves private completion, explicit review/publication, view deduplication and durable deletion retention. PGlite is a local PostgreSQL-compatible engine, **not actual Supabase, network PostgREST/Storage or two concurrent independent connections**.
+
+Ten middleware regressions additionally verify active-role access, wrong-role rejection, fresh suspension checks on RSC navigation, fail-closed profile reads and refreshed cookies. Portal layout caching is not used as the request authorization boundary.
 
 Route tests use mocked providers/in-memory adapters separately. Browser thumbnail tests decode a genuine generated local clip; TUS tests use a deterministic protocol fixture, **not Bunny's real service**. Visibility tests prove loaded/50%/1s behavior, not anti-fraud certification.
 
