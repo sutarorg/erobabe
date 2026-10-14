@@ -71,7 +71,9 @@ separate endpoint and not the page render:
 - The page render cannot do it either: pages run in other functions, and the
   video cards prefetch watch pages, so preparing during render would start a
   provider handshake for every card on screen. Prefetching never executes the
-  inline script, so a page full of cards prepares nothing.
+  inline script, so a page full of cards prepares nothing. Search engines that
+  render pages (Googlebot, Bingbot) skip it too, because `robots.txt` disallows
+  `/api/`.
 
 ## The site's player
 

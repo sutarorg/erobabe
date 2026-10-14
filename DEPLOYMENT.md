@@ -1,8 +1,9 @@
 # DEPLOYMENT.md — Erobabe Production Setup (Click-by-Click)
 
-This document gives complete, verified steps to deploy Erobabe from zero to production. It covers Supabase, NOWPayments, video hosting, OpenRouter, Resend, GitHub, hosting, domain, env vars, testing, and rollback.
+Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWPayments, video publishing, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. Filekosh hosted uploads are not implemented or enabled; section D documents the research blockers and required staging verification.
 
-**Date**: October 12, 2026  
+**Video-provider guidance audited**: October 14, 2026
+
 **Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, OpenRouter (DeepSeek V3.2), direct MP4 URL video publishing, Tailwind CSS 4.
 
 ---
@@ -26,7 +27,7 @@ This document gives complete, verified steps to deploy Erobabe from zero to prod
 - Playwright browsers: `npx playwright install`
 
 ### Decisions requiring owner authorization before production
-1. **Video hosting provider**: Streamtape's Terms (https://streamtape.com/terms-and-conditions) neither permit nor ban lawful adult content explicitly, so the owner MUST verify the terms, copyright policy and account content settings (and ideally get Streamtape's written answer) before setting `STREAMTAPE_ADULT_CONTENT_ALLOWED=true`. The upload relay (`relay/streamtape-relay.mjs`) must also be deployed on an always-on Node host. Without both, production video hosting is BLOCKED. See section D.
+1. **Video hosting provider**: Current publishing saves direct URLs or generic embed links; local video-file uploads are unavailable. Filekosh integration is blocked on missing details in its official API contract, content/use approval and live staging verification. Do not deploy the retired Streamtape upload relay or enable Filekosh by changing a provider label. See section D and `docs/FILEKOSH_API_RESEARCH.md`.
 2. **Hosting provider**: Vercel Hobby is limited to personal non-commercial use and its Acceptable Use Policy restricts objectionable content. Do NOT deploy commercial Erobabe to Vercel Hobby. Choose a host whose terms explicitly permit adult content and commercial use. Document approval.
 3. **Legal identity**: Operator must provide real legal name, business address, registration, contact emails, age-verification procedures. Do not publish fictional identity.
 4. **Age assurance**: Evaluate jurisdiction-specific requirements (e.g., UK, EU, US state laws). Frontend age gate alone is not robust assurance. Implement required verification integration where legally required.
@@ -88,7 +89,8 @@ This document gives complete, verified steps to deploy Erobabe from zero to prod
 2. Open `supabase/migrations/00000000000000_initial_schema.sql` in your editor, copy entire content, paste into SQL Editor, click **Run**
 3. Repeat for `00000000000001_rls_policies.sql`
 4. Repeat for `00000000000002_seed_fixed_data.sql`
-5. Verify in **Table Editor** that tables exist: `profiles`, `categories`, `videos`, `ad_slots` (should have 10 rows), `site_settings` (1 row), etc.
+5. Apply the remaining checked-in migrations in order through `00000000000010_admin_video_tools.sql`; do not re-run or edit migrations already recorded as applied. No Filekosh migration is included in this research-only change.
+6. Verify in **Table Editor** that tables exist: `profiles`, `categories`, `videos`, `ad_slots` (should have 10 rows), `site_settings` (1 row), etc.
 
 **Option B — via Supabase CLI**
 ```bash
@@ -125,7 +127,7 @@ In Supabase Dashboard → **Edge Functions** → **Secrets**, add:
 - `OPENROUTER_API_KEY`
 - `NOWPAYMENTS_API_KEY`
 - `NOWPAYMENTS_IPN_SECRET`
-- `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY`, `STREAMTAPE_RELAY_SECRET` (server-only; see the policy gate in section D)
+- `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY` only for retained legacy playback and optional file-manager thumbnails (server-only; see section D). No upload relay secret is used by the current routes.
 - `SITE_URL`
 
 ### 10. Create initial administrator using secure documented process
@@ -374,20 +376,21 @@ shows `finished` for that address and amount) — see "Rollback and recovery".
 
 ---
 
-## D. Video Hosting — Direct MP4 URLs
+## D. Video Publishing — URLs, embeds, and Filekosh readiness
 
 ### How it works
 
 Videos are published by pasting direct MP4 URLs into the admin panel
 (`/admin/videos/upload`). Erobabe saves the URL in `videos.playable_url` and
-the browser plays the video straight from the original host. No video bytes
-are downloaded, transferred, re-encoded, or stored by Erobabe.
+the browser plays the video straight from the original host. Erobabe may fetch
+frame samples for thumbnails, but does not copy or host the full source video.
+Player-page links and iframe sources use the separate generic embed publisher.
 
 - **Provider:** `direct_url` (the default — no `VIDEO_PROVIDER` variable needed)
 - **Playback:** Native `<video>` element with `playable_url`
 - **Thumbnail:** Uploaded to Supabase Storage (signed upload URL)
 - **Metadata:** Generated by DeepSeek V3.2 via OpenRouter (with file-name fallback)
-- **No hosting-provider API, relay, or credentials needed**
+- **No hosting-provider upload API or relay needed** for these link workflows; optional Streamtape thumbnail fallback and legacy playback still use its API.
 
 ### Setup steps
 
@@ -450,191 +453,71 @@ In `/admin/videos` the **Streamtape thumbnails** panel runs the dry run with
 *Import for selection* when rows are ticked). Each row without a thumbnail also
 has a *Streamtape thumb* action.
 
-### Legacy videos
+### Legacy videos and retired upload instructions
 
-Existing videos from Streamtape, UFOLOAD, Uqload, and embed-only records are
-**not affected**. Their stored `playable_url` and `embed_url` values are
-preserved and the public player continues to render them correctly.
+Existing Streamtape, UFOLOAD, Uqload and embed records are not migrated or
+relabelled. Preserve their stored identifiers, metadata, thumbnails and URLs.
 
-### Historical: retired Streamtape integration
+Streamtape **uploads** are retired, but playback is not: `VideoPlayer` streams
+those videos through `/api/videos/[id]/playback`, which resolves and consumes
+IP-bound tickets server-side (a `POST` to the same route prepares the link
+before Play). Retain server-only `STREAMTAPE_LOGIN` and `STREAMTAPE_API_KEY`,
+outbound access and streaming-capable hosting for those videos. See
+`docs/AD_FREE_PLAYBACK.md` and `docs/INSTANT_PLAYBACK.md`. UFOLOAD/Uqload retain
+stored playback without status reconciliation against their retired APIs.
 
-The Streamtape integration (upload relay, session endpoints, conversion polling)
-was removed in October 2026 and replaced with direct MP4 URL publishing. See
-`docs/STREAMTAPE_MIGRATION.md` for the historical record. Legacy rows with
-`provider='streamtape'`, `'ufoload'`, or `'uqload'` keep their stored playback
-data and remain viewable without contacting the retired APIs.
+The old upload-session, relay and conversion-polling instructions are historical,
+not deployable steps for this checkout. They have been removed from this setup
+guide; `docs/STREAMTAPE_MIGRATION.md` preserves that history. No current upload
+route uses `STREAMTAPE_RELAY_*` or `STREAMTAPE_ADULT_CONTENT_ALLOWED` to enable
+local-file hosting.
 
-### Active provider: Streamtape (UFOLOAD is retired)
+### Filekosh — blocked, no runtime enablement yet
 
-Videos are uploaded **browser → streaming relay → Streamtape upload node**. The
-bytes never pass through a Vercel/Next.js function (request bodies above 4.5 MB
-are rejected) and never touch Supabase Storage. Supabase only stores thumbnails
-(existing signed-upload route) and metadata.
+Official documentation exists at https://filekosh.com/docs, backed by
+https://filekosh.com/api/v1/openapi.json. It documents a Dashboard → API bearer
+key, `POST /videos` → presigned PUT → `POST /videos/confirm`, and WEB video
+`embedUrl` responses. **The confirmation request body is missing**, and upload
+headers/CORS, response envelopes and lifecycle/error details require provider
+clarification. See `docs/FILEKOSH_API_RESEARCH.md` for exact confirmed facts,
+source links and the message to send to support.
 
-Why a relay instead of a direct browser upload: Streamtape documents
-`GET /file/ul` → multipart `POST` to the returned node URL, but does **not**
-document the node's CORS behaviour, response body, or limits, and none of that
-could be proven from the build environment (see `docs/STREAMTAPE_MIGRATION.md`
-§2–§3). A browser can only read the node's reply if the node sends CORS headers,
-so the relay removes that unknown instead of shipping a guess. If the live suite
-and the browser acceptance spec later prove direct upload works, the relay can be
-dropped without touching the data model.
+There is **no Filekosh environment variable consumed by the application**, no
+local-video upload UI/API, and no Filekosh migration in this change. Keep
+`VIDEO_PROVIDER` unset or `direct_url`; setting `filekosh` does not create an
+integration. Never place a provider key in `NEXT_PUBLIC_*`, a player URL, source
+control, browser bundles, logs or public database fields.
 
-Official documentation used by the implementation (fetched 2026-10-12):
+Before implementation/enablement:
 
-- API reference: https://streamtape.com/api
-- Terms: https://streamtape.com/terms-and-conditions · Copyright: https://streamtape.com/copyright
-- Credentials: https://streamtape.com/accpanel → *Account Settings*
+1. Obtain an authorized complete create/PUT/confirm/status specification and
+   sanitized examples, including safe retry/cancellation behavior and supported
+   formats/limits. The linked research report lists every missing detail.
+2. Obtain written permission for the intended lawful adult catalog, commercial
+   API use and third-party embedding. The public terms do not explicitly grant
+   this use. Preserve existing rights/moderation gates.
+3. Provision a staging key privately using the documented Dashboard → API
+   mechanism, an active staging administrator/category and rights-cleared test
+   media. Do not paste secrets into chat or issues. Runtime configuration names
+   will be documented with the real implementation, not invented now.
+4. Verify Filekosh/storage reachability and browser PUT CORS from staging.
+   Presigned PUT does not by itself prove browser support, resumability or
+   unlimited technical object size. If a streaming worker is required, verify
+   that host's body, time, memory and egress limits; never buffer whole videos
+   inside a typical Next.js function.
+5. Implement the actual App Router workflow and a forward-only migration (next
+   number at the audit: `00000000000011`; recheck before use), preserving every
+   historical provider value and record. Apply that future migration before
+   enabling hosted jobs; no migration or data relabel is needed now.
+6. Validate genuine transfer, completion/readiness, stored IDs and returned
+   HTTPS Filekosh embed URLs, desktop/mobile playback, failure/cancel/retry and
+   duplicate handling. Only then enable Filekosh for **new hosted uploads**.
 
-### Policy gate — owner verification is a launch blocker
-
-Streamtape's Terms prohibit sexual content involving minors and any content that
-violates third-party rights, require you to hold the rights/consent for what you
-publish, and reserve the right to remove content at any time. They contain **no
-explicit clause permitting or banning lawful adult content**, so being able to
-generate an API key does not mean your use is permitted.
-
-**Before enabling production uploads, the owner must:**
-
-1. Read the current Terms and Copyright Policy and, if in doubt, ask Streamtape
-   support in writing whether lawful adult content, commercial use, API uploads
-   and embedded playback are permitted for this account; keep the answer on file.
-2. Check the account panel for content/embedding settings that apply to the account.
-3. Confirm rights, consent and age documentation for the catalog.
-4. Only then set `STREAMTAPE_ADULT_CONTENT_ALLOWED=true`.
-
-**Fail-closed gate.** While `STREAMTAPE_ADULT_CONTENT_ALLOWED` is anything other
-than `"true"` — or credentials are missing — every upload/import route answers
-`503` with an actionable message naming the variable, and nothing is sent to
-Streamtape. `VIDEO_PROVIDER` accepts only `streamtape` and `internal` (embeds
-only); `ufoload`, `uqload` and any typo throw a configuration error instead of
-falling back.
-
-### Setup steps
-
-1. Create/sign in to the Streamtape account.
-2. User Panel → **Account Settings** → copy **API Login** and **API Key/Password**.
-   Keep them server-side. Optionally create a folder in the file manager and note
-   its id for `STREAMTAPE_FOLDER_ID`.
-3. Verify the account's real per-file size limit (not stated in the API docs; a
-   2021 community README claims 15 GB) and set `STREAMTAPE_MAX_UPLOAD_BYTES`
-   accordingly. The app enforces this limit before any bytes move.
-4. **Deploy the relay** (`relay/streamtape-relay.mjs`, zero dependencies, Node ≥ 18):
-   ```bash
-   STREAMTAPE_RELAY_SECRET=<same random >=16 chars as the app> \
-   STREAMTAPE_RELAY_ALLOWED_ORIGINS=https://erobabe.com \
-   RELAY_PORT=8787 node relay/streamtape-relay.mjs
-   ```
-   Requirements: an always-on host (VPS, Docker, Fly.io, Railway, Cloud Run with
-   request timeout ≥ the longest upload, …) with **HTTPS in front**; it must **not**
-   run as a Vercel/serverless function. It holds no Streamtape credentials — it only
-   accepts HMAC-signed, expiring, single-use tokens minted by the app, and refuses
-   upload hosts outside `tapecontent.net`/`streamtape.com`
-   (`STREAMTAPE_UPLOAD_HOST_SUFFIXES` extends the list). Run **one instance** (the
-   single-use cache is in memory) or replace `makeUsedTracker` with a shared store.
-   Health check: `GET /health`.
-5. Set the app's environment variables (see `.env.example`):
-   - `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY` — **server-only**; never `NEXT_PUBLIC_*`,
-     never in a browser response, commit, log or audit row.
-   - `STREAMTAPE_FOLDER_ID` (optional), `STREAMTAPE_MAX_UPLOAD_BYTES` (recommended).
-   - `STREAMTAPE_ADULT_CONTENT_ALLOWED=true` — only after the owner verification above.
-   - `STREAMTAPE_RELAY_URL`, `STREAMTAPE_RELAY_SECRET`.
-   - `VIDEO_PROVIDER=streamtape`.
-6. Run the database migration `supabase/migrations/00000000000007_streamtape_video_provider.sql`
-   (forward-only; allows `streamtape`, defaults new jobs to it, adds a processing
-   index). Older migrations are untouched; historical `ufoload`/`uqload` rows keep
-   playing from their stored URLs and are never contacted.
-7. Open Admin → **System Health**: *Video Provider* must read `streamtape · API
-   reachable` (it performs a real `GET /account/info`). Any other state names
-   what is missing; an environment flag alone is never reported as healthy.
-8. Upload one real test video from `/admin/videos/upload` and follow
-   `GO_LIVE_CHECKLIST.md` section D.
-
-**Rotating credentials.** Generate new credentials in the Streamtape panel, update
-`STREAMTAPE_LOGIN`/`STREAMTAPE_API_KEY` in the hosting secrets, redeploy, run System
-Health. To rotate the relay secret, change `STREAMTAPE_RELAY_SECRET` in the relay
-and the app **together** (in-flight sessions become invalid; admins just restart them).
-
-### Endpoints the code calls (verified against https://streamtape.com/api, 2026-10-12)
-
-Base `https://api.streamtape.com`, HTTPS only, `login` + `key` query parameters,
-envelope `{status, msg, result}` (the envelope `status` — not the HTTP status — decides
-success: 200 OK · 400 · 403 · 404 · 451 legal · 509 bandwidth · 50x).
-
-| Purpose | Request |
-| --- | --- |
-| Health check | `GET /account/info` |
-| Upload URL | `GET /file/ul[?folder=]` → `result {url, valid_until}` (upload node, e.g. `https://tapecontent.net/xfsupload/…`) |
-| Send bytes | `POST` multipart/form-data to that URL (field `file1` per the docs' curl example) — via the relay |
-| File state | `GET /file/info?file={id}` → `result {id: {id,name,size,type,converted,status}}` |
-| Folder listing | `GET /file/listfolder[?folder=]` → `{folders, files:[{name,size,linkid,created_at,convert,…}]}` |
-| Conversion queues | `GET /file/runningconverts` (`status new\|pending`, `progress` 0–1) · `GET /file/failedconverts` (`status error`) |
-| Thumbnail | `GET /file/getsplash?file={id}` → URL string |
-| Rename / delete | `GET /file/rename` · `GET /file/delete` |
-| Remote upload | `GET /remotedl/add?url&name&folder` → `{id, folderid}` · `GET /remotedl/status?id` → `{id: {status,bytes_loaded,bytes_total,extid,url,…}}` · `GET /remotedl/remove?id` (never `all`) |
-| Playback | iframe `https://streamtape.com/e/{fileId}` (stable; download links are ticketed/expiring and are never stored) |
-
-Not documented by Streamtape — and therefore **unverified until the live suite runs**:
-the upload node's response body, its multipart field-name tolerance, its CORS
-behaviour, the full `remotedl/status` status vocabulary, per-file/concurrency limits.
-The code never trusts a file id parsed from the node reply: it is confirmed with
-`/file/info` (name + size) or resolved from an unambiguous, unclaimed
-`/file/listfolder` match; otherwise the row stays private and `processing`.
-
-### Upload path — how files get in
-
-1. `POST /api/videos/streamtape-session` (admin, JSON) validates name/size/limit,
-   calls `GET /file/ul`, stores an `upload_jobs` row, and returns
-   `{ uploadUrl: "{STREAMTAPE_RELAY_URL}/upload/{signed-token}", uploadId, jobId }`.
-   The token carries the node URL, session id and expiry (≤ 30 min) — the API
-   credentials never leave the server.
-2. The browser sends one multipart `POST` (XHR: measured byte progress; abort =
-   real cancel) to the relay, which streams it to the node and passes the node's
-   reply back verbatim. Streamtape documents no chunk/resume protocol, so an
-   interrupted upload is restarted, not resumed.
-3. `POST /api/videos/upload` posts the *session* id (and the node reply for
-   server-side verification — never a file id the server must believe), confirms
-   the file, generates/reuses AI metadata and creates the video row **private**.
-4. The admin page polls `GET /api/videos/status?jobId=…`; the server checks
-   `/file/info`, `/file/runningconverts` and `/file/failedconverts` and publishes
-   only when the file is **converted**.
-5. Cancel aborts the XHR (the relay aborts upstream) and calls
-   `POST /api/videos/streamtape-cancel`, which marks the job cancelled, makes the
-   row private and — for imports — calls `remotedl/remove?id=<task>`.
-
-`/api/videos/upload-url` starts a **remote upload** (`remotedl/add`): it answers
-`queued` (never `published`), stores the task id in `upload_jobs.provider_import_id`,
-and `/api/videos/status` follows the task, then the created file, then conversion.
-Only public http(s) URLs are accepted (no localhost/private ranges/credentials).
-
-### Thumbnails
-
-Each video — local file, iframe embed or remote URL — has its own thumbnail
-picker. A custom thumbnail is uploaded to the public `video-thumbnails` bucket
-through the existing signed-upload flow (`POST /api/videos/storage-token` →
-browser `PUT`). When none is chosen, Streamtape's splash image
-(`/file/getsplash`) is stored once the file is converted.
-
-> `POST /api/videos/storage-token` answers `410` for `kind: "video"`: video bytes
-> must not transit Supabase or a function body.
-
-### Readiness rules
-
-- A video is published only when `/file/info` reports `converted: true` with entry
-  status 200. `new`/`pending`/not-listed rows stay private; a `failedconverts`
-  entry, a 451 or a vanished remote task mark the row failed with the reason in
-  `videos.provider_error`, and it stays private.
-- `provider_progress` mirrors `runningconverts.progress`.
-- A provider outage is reported as a note in the status response — never a 500, and it never publishes anything.
-- The public page additionally requires `status=published`, `visibility=public`,
-  `rights_status=cleared`, `moderation_status=approved`.
-
-### Legacy UFOLOAD / Uqload videos
-
-Rows with `provider='ufoload'` or `'uqload'` are left exactly as they are: stored
-`embed_url`/`playable_url` keep rendering; `/api/videos/status` answers them as
-history and contacts no retired API. Posters under `ufoload.com` remain allowed in
-`next.config.mjs`. They are never relabelled as Streamtape.
+Troubleshooting now: a missing video-file selector is expected, not a credential
+error. `/api/videos/upload-url` publishes existing links; `/storage-token` signs
+images only; `/status` reads history, not Filekosh processing. A passing build or
+mocked response is not a live upload. See `docs/FILEKOSH_REPOSITORY_AUDIT.md` for
+the current call graph and actual test results.
 
 ### Supabase Storage
 
@@ -643,8 +526,8 @@ history and contacts no retired API. Posters under `ufoload.com` remain allowed 
 3. Optionally create bucket `videos` (private, only if you later implement an internal provider)
 4. Set policies: allow authenticated advertisers to upload/delete only within their own `ad-creatives/<user-id>/` folder; public read is needed for creative and thumbnail display.
 
-> **Legacy**: `video-incoming` (from migration `00000000000004_video_transit_storage.sql`) is only used as a short-lived transit area if an older deployment still routes bytes there — video bytes now go through the streaming relay to Streamtape, so the bucket is not needed. On Supabase projects with a 50 MB global file limit the migration's 2 GB bucket insert can fail; skip/ignore that bucket and do not upload video bytes to Supabase.
-6. The campaign and publisher flows now fail clearly if their required bucket is missing. Verify both bucket names before accepting uploads.
+> **Legacy**: `video-incoming` comes from migration `00000000000004_video_transit_storage.sql`. Current routes do not upload videos there or to a Streamtape relay. Preserve any objects required by older deployments until their ownership/retention is checked. Its historical 2 GB limit is not a Filekosh limit. If a migration fails due to project storage limits, resolve it explicitly; do not silently mark it applied or edit historical SQL.
+5. The campaign and publisher flows now fail clearly if their required bucket is missing. Verify both bucket names before accepting uploads.
 
 ---
 
@@ -844,16 +727,11 @@ fly deploy
 | `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional pin for the IPN callback URL the app sends with every payment (must be an absolute URL ending in `/api/nowpayments/ipn`) | No | Your domain | Hosting env | prod (optional) | Admin → System Health shows `URL source`: `NOWPAYMENTS_IPN_CALLBACK_URL`; an invalid value is reported as a config warning and ignored | Yes |
 | `NOWPAYMENTS_DEFAULT_PAY_CURRENCY` | Default NOWPayments asset identifier | No | One of: usdterc20, usdttrc20, usdtbsc, usdtsol, btc, eth, trx, bnbbsc, sol | Hosting env | prod | Must be enabled in the NOWPayments dashboard; checkout validates every selection server-side | Yes |
 | `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key for `x-nowpayments-sig` verification | No | NOWPayments Dashboard → Store Settings → IPN Secret Key | Hosting secrets | prod | Admin → System Health shows IPN secret set; every IPN is rejected without it | Yes |
-| `VIDEO_PROVIDER` | Video hosting integration | Yes | `streamtape` (real uploads) or `internal` (embeds only); `ufoload`/unknown fail closed | Hosting env | prod | `streamtape` | Yes |
-| `STREAMTAPE_LOGIN` | Streamtape API Login | Yes (for uploads) | https://streamtape.com/accpanel → Account Settings | Hosting secrets | prod | Server-only; Admin → System Health performs a real `/account/info` check | Yes |
-| `STREAMTAPE_API_KEY` | Streamtape API Key/Password | Yes (for uploads) | https://streamtape.com/accpanel → Account Settings | Hosting secrets | prod | Server-only; redacted from every log/error/audit row | Yes |
-| `STREAMTAPE_FOLDER_ID` | Folder new uploads go into | No | Streamtape file manager | Hosting env | prod | Uploaded files appear in that folder | Yes |
-| `STREAMTAPE_ADULT_CONTENT_ALLOWED` | Content-policy gate | Yes (for uploads) | Set `true` only after the owner verified Streamtape's terms/copyright policy/account settings | Hosting env | prod | Uploads answer `503` naming this variable until it is `true` **and** credentials are set | Yes |
-| `STREAMTAPE_RELAY_URL` | Public URL of the upload relay | Yes (for uploads) | Where you deployed `relay/streamtape-relay.mjs` | Hosting env | prod | Session route answers `503 missing_relay` when unset | Yes |
-| `STREAMTAPE_RELAY_SECRET` | HMAC secret shared with the relay (≥ 16 chars) | Yes (for uploads) | Generate randomly; same value in the relay | Hosting secrets + relay env | prod | Relay answers 403 on a token it did not receive from this app | Yes |
-| `STREAMTAPE_MAX_UPLOAD_BYTES` | Largest accepted upload | Recommended | Verify the account's real limit | Hosting env | prod | Oversize files rejected with 413 before any bytes move | Yes |
-| `STREAMTAPE_UPLOAD_HOST_SUFFIXES` | Extra trusted upload-node host suffixes | No | Only if Streamtape moves its nodes | Hosting env + relay env | prod | Unexpected hosts are rejected | Yes |
-| `STREAMTAPE_MAX_ACTIVE_IMPORTS` | Cap on links per remote-upload batch | No | Default 10 | Hosting env | prod | Batches above it answer 400 | Yes |
+| `VIDEO_PROVIDER` | Non-hosting provider factory selection; active URL/embed routes select their provider explicitly | No | Leave unset (`direct_url`); `filekosh` is not implemented | Hosting env | optional | Current System Health label is not a live hosting/upload test | Yes |
+| `STREAMTAPE_LOGIN` | Legacy playback and optional thumbnail file-manager API login | No | https://streamtape.com/accpanel → Account Settings | Hosting secrets | if retaining those workflows | Validate legacy playback and Admin → Videos → Check folder | Yes |
+| `STREAMTAPE_API_KEY` | Legacy playback and optional thumbnail API key | No | Streamtape Account Settings | Hosting secrets | if retaining those workflows | Validate legacy playback and read-only folder scan; never print key | Yes |
+| `STREAMTAPE_THUMBNAIL_FOLDER_NAME` | Optional image-folder name | No | Streamtape file manager; default `thumbnails` | Hosting env | optional | Admin → Videos → Check folder | Yes |
+| `STREAMTAPE_THUMBNAIL_FOLDER_ID` | Optional explicit image-folder ID | No | Streamtape file manager | Hosting env | optional | Skips folder-name search; verify scan | Yes |
 | `OPENROUTER_API_KEY` | OpenRouter API key for AI metadata suggestions | No | https://openrouter.ai/keys → Create key | Hosting secrets | prod (optional) | Test via System Health → Test OpenRouter, or `/api/metadata/suggest` as admin | Yes |
 | `OPENROUTER_MODEL` | OpenRouter model slug | No | `deepseek/deepseek-v3.2` (default) | Hosting env | prod (optional) | Check https://openrouter.ai/models for the slug | No |
 | `OPENROUTER_MAX_OUTPUT_TOKENS` | Output-token budget for one metadata suggestion | No | `2048` (default) | Hosting env | prod (optional) | Raise it if suggestions are truncated | No |
@@ -861,7 +739,7 @@ fly deploy
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |
 
-**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY`, `STREAMTAPE_RELAY_SECRET`, `OPENROUTER_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
+**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `STREAMTAPE_LOGIN`, `STREAMTAPE_API_KEY`, any future Filekosh bearer key, `OPENROUTER_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
 
 ---
 
@@ -890,9 +768,9 @@ npx playwright test
 
 **Admin:**
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
-- [ ] Video publisher at `/admin/videos/upload` → upload multiple local files (streamed through the upload relay to Streamtape), paste a public iframe source, or import one or more public direct-video URLs
+- [ ] Video publisher at `/admin/videos/upload` → publish direct-video URLs or player/iframe links with optional thumbnail images. No local video transfer is available yet.
 - [ ] Choose only a category and optional thumbnail; title, description, and tags are generated server-side by DeepSeek V3.2 via OpenRouter (`/api/metadata/suggest` contract: title, description, tags, category) before publishing
-- [ ] Publish action sets status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]` **only after Streamtape reports the file converted** (rows still converting stay private)
+- [ ] Publish action sets status=published, visibility=public, rights_status=cleared, moderation_status=approved, published_at=now → appears on public `/` and `/video/[slug]` after successful URL/embed publishing. Future hosted uploads must remain private until provider readiness is verified; that flow is not implemented yet.
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
 - [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject
@@ -941,11 +819,11 @@ npx playwright test
 - [ ] No API key, secret or wallet material appears in `payment_events`, `audit_logs` or server logs
 
 **Video hosting:**
-- [ ] Provider adapter abstraction exists in `lib/video/provider.ts`
-- [ ] Streamtape adapter: upload URL, file info, conversion queues, splash, remote upload, rename and delete use the documented API (`lib/video/streamtape.ts`); upload bytes go through the relay (`relay/streamtape-relay.mjs`)
-- [ ] Upload errors do not lead to false Published status — a failed encode keeps the row private (`status=draft`) with `provider_error`
-- [ ] Large file uploads never transit a Vercel Function — the browser PUTs chunks to the node URL the provider returned
-- [ ] If the approval gate or the API key is missing, uploads return 503 with a clear blocker message
+- [ ] Direct-URL and generic embed publishing, category/metadata/duplicate handling and optional thumbnails work with an active staging administrator
+- [ ] Legacy Streamtape native playback, seeking, retry and ticket warm-up still work with server-only credentials
+- [ ] Filekosh remains disabled until its contract/policy/setup gates in section D are resolved
+- [ ] Before future enablement: genuine device upload, accurate byte progress, verified completion/readiness, stable embed playback and failure/cancellation/idempotency tests all pass
+- [ ] Future Filekosh jobs do not call Streamtape thumbnail or media APIs and never expose provider keys or upload authorization publicly
 
 **Email:**
 - [ ] Resend domain verified (check Resend dashboard)
@@ -1012,8 +890,8 @@ update invoices set status='paid', paid_at=now() where number='...';
 
 ## Unresolved Provider Approvals and Blockers
 
-1. **Streamtape content policy**: the Terms have no explicit adult-content clause (neither permitting nor banning), so production uploads stay disabled until the owner has verified the terms, copyright policy and account settings (ideally with Streamtape's written answer) — then set `STREAMTAPE_ADULT_CONTENT_ALLOWED=true`. Launch blocker — see `GO_LIVE_CHECKLIST.md`.
-2. **Upload relay + live acceptance**: the relay must be deployed, and a real upload → conversion → publish → playback run has to be performed on staging (`docs/STREAMTAPE_MIGRATION.md` §7, `tests/live/README.md`). Browser CORS toward Streamtape's node is unproven; the relay is the supported path.
+1. **Filekosh API and content/use approval**: its official API specification is incomplete for upload confirmation. Obtain the clarification and written content/use permission listed in `docs/FILEKOSH_API_RESEARCH.md`. No Filekosh upload integration is enabled.
+2. **Hosted-upload implementation and live acceptance**: a future implementation needs authorized staging credentials, documented browser/streaming transport, forward migration, and real upload → readiness → publish → desktop/mobile iframe playback evidence. Current passing unit tests/build do not prove Filekosh functionality.
 3. **Vercel Hobby**: Not suitable for commercial adult site. Hosting decision required — see `GO_LIVE_CHECKLIST.md`.
 4. **Age assurance**: Frontend gate alone not robust. Legal review required for jurisdiction-specific verification.
 5. **Legal identity**: Owner must provide real business details before publishing Terms/Privacy.
