@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { streamStreamtapeMedia, validMediaRange } from "@/lib/video/streamtape-media";
+import { StreamtapeMediaError, streamStreamtapeMedia, validMediaRange } from "@/lib/video/streamtape-media";
 
 const URL = "https://node.tapecontent.net/video.mp4?token=private";
 const request = (init?: RequestInit) => new Request("https://site.example/api/videos/id/playback", init);
@@ -105,3 +105,41 @@ describe("server-side Streamtape media streaming", () => {
     expect(await response.text()).toBe("video");
   });
 });
+
+describe("telling an expired link apart from a visitor who left", () => {
+  const failure = (promise: Promise<unknown>) => promise.then(
+    () => { throw new Error("expected a failure"); },
+    (error: unknown) => error as StreamtapeMediaError,
+  );
+  it.each([
+    ["a 403 refusal", () => new Response("expired", { status: 403, headers: { "Content-Type": "text/html" } })],
+    ["a 404", () => new Response(null, { status: 404 })],
+    ["an HTML page on HTTP 200", () => new Response("<html>", { headers: { "Content-Type": "text/html" } })],
+  ])("marks %s as retryable with a fresh link", async (_label, make) => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => make()));
+    const error = await failure(streamStreamtapeMedia(URL, request()));
+    expect(error).toBeInstanceOf(StreamtapeMediaError);
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("Video media unavailable");
+    expect(error.message).not.toContain("token");
+  });
+  it("does not retry when the visitor cancelled", async () => {
+    const controller = new AbortController();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    })));
+    const pending = failure(streamStreamtapeMedia(URL, request({ signal: controller.signal })));
+    controller.abort();
+    expect((await pending).retryable).toBe(false);
+  });
+  it("does not retry when the media host never answered", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new Error(URL)), { once: true });
+    })));
+    const pending = failure(streamStreamtapeMedia(URL, request()));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect((await pending).retryable).toBe(false);
+  });
+});
+

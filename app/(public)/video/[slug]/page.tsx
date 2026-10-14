@@ -125,6 +125,8 @@ export default async function VideoPage({ params }: { params: Promise<{ slug: st
         poster={video.thumbnail_url}
         playableUrl={video.playable_url}
         embedUrl={video.embed_url}
+        durationSeconds={video.duration_seconds}
+        quality={video.quality}
       />
 
       <h1 className="mt-4 text-[19px] font-semibold tracking-tight text-ink">{video.title}</h1>
