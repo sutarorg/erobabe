@@ -34,6 +34,17 @@ Open http://localhost:3000
 
 ## Video Publishing
 
+**Filekosh migration status (2026-10-14): blocked, not implemented.** Official
+[API documentation](https://filekosh.com/docs) was found, but its OpenAPI
+specification omits the required upload-confirmation request body and other
+transport/lifecycle details. No live Filekosh upload or playback has been
+verified. Do not set `VIDEO_PROVIDER=filekosh` or relabel existing records.
+See [the API research and provider clarification request](docs/FILEKOSH_API_RESEARCH.md)
+and [the current-main architecture audit and actual test results](docs/FILEKOSH_REPOSITORY_AUDIT.md).
+Local video-file uploads are not available in the active admin route; its file
+picker uploads optional thumbnail images only. Existing URL/embed publishing
+and legacy playback are unchanged.
+
 Videos are published by pasting direct MP4 URLs into the admin panel
 (`/admin/videos/upload`). Erobabe saves the link and plays the video straight
 from the original host — it does not copy or host the full video file. Only
