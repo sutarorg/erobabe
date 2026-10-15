@@ -8,6 +8,10 @@ export type BunnyUploadTarget = {
   transferred?: boolean;
   completed?: boolean;
   slug?: string;
+  /** Session the server used; differs when it resumed an earlier session for the same file. */
+  sessionId?: string;
+  alreadyUploaded?: boolean;
+  warning?: string;
 };
 /** Fingerprints bind resume URLs to one provider video, never merely a filename. */
 export async function uploadBunnyVideo(

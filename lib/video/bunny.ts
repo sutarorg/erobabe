@@ -10,6 +10,8 @@ export class BunnyError extends Error {
     public status = 502,
     public retryAfter?: number,
     public definitelyRejected = false,
+    /** HTTP status Bunny answered with, when it answered at all. */
+    public providerStatus?: number,
   ) {
     super(message);
   }
@@ -66,6 +68,19 @@ export const bunnyVideoSchema = z.object({
   encodeProgress: z.number().min(0).max(100),
 });
 export const createdVideoSchema = z.object({ guid: z.string().uuid() });
+/** `GET /videos?search=` — Bunny filters titles by case-insensitive substring. */
+export const bunnyVideoListSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        guid: z.string().uuid(),
+        title: z.string().nullable().optional(),
+        videoLibraryId: z.number().int().positive(),
+      }),
+    )
+    .nullable()
+    .optional(),
+});
 export const BUNNY_STATUS = [
   "Created",
   "Uploaded",
@@ -141,6 +156,7 @@ export async function bunnyRequest(
         response.status === 429 ? 429 : 502,
         retryAfter || undefined,
         [400, 401, 403, 404, 413, 415, 422, 429].includes(response.status),
+        response.status,
       );
     }
     try {

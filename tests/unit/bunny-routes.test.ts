@@ -26,6 +26,19 @@ import {
 const ID = "22222222-2222-4222-8222-222222222222";
 const REMOTE = "44444444-4444-4444-8444-444444444444";
 const CATEGORY = "33333333-3333-4333-8333-333333333333";
+/** Constraint names as created by migration 12 (verified against PostgreSQL). */
+const BUNNY_UNIQUE = {
+  bunny_uploads: {
+    bunny_uploads_pkey: ["id"],
+    bunny_uploads_created_by_original_name_size_bytes_mime_type_key: [
+      "created_by",
+      "original_name",
+      "size_bytes",
+      "mime_type",
+    ],
+    bunny_uploads_library_id_provider_id_key: ["library_id", "provider_id"],
+  },
+};
 const metadata = {
   sessionId: ID,
   title: "Clip",
@@ -46,7 +59,10 @@ const remote = {
 beforeEach(() => {
   vi.stubEnv("BUNNY_STREAM_LIBRARY_ID", "123");
   vi.stubEnv("BUNNY_STREAM_API_KEY", "test-secret");
-  h = createHarness({ categories: [{ id: CATEGORY }], bunny_uploads: [] });
+  h = createHarness(
+    { categories: [{ id: CATEGORY }], bunny_uploads: [] },
+    { unique: BUNNY_UNIQUE },
+  );
   vi.mocked(createClient).mockResolvedValue(h.auth);
   vi.mocked(createServiceClient).mockReturnValue(h.service);
   h.service.rpc = vi.fn(async () => ({
@@ -410,5 +426,344 @@ describe("Bunny Stream server routes (mock provider, not live acceptance)", () =
       retryAfter: 60,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("re-selected files resume their session instead of failing to reserve", () => {
+  const NEW_ID = "55555555-5555-4555-8555-555555555555";
+  const OTHER_CATEGORY = "66666666-6666-4666-8666-666666666666";
+  const SETTLED = "2026-01-01T00:00:00.000Z";
+  const sessions = (body: Record<string, unknown>) =>
+    create(jsonRequest("/api/videos/bunny/sessions", { ...metadata, ...body }));
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("resumes an earlier failed session for the same file (formerly 'Session already reserved')", async () => {
+    seed("failed");
+    h.db.bunny_uploads[0].last_error = "Browser reported upload failure.";
+    h.db.categories.push({ id: OTHER_CATEGORY });
+    fetchMock.mockResolvedValue(Response.json({ ...remote, status: 0 }));
+    const response = await sessions({
+      sessionId: NEW_ID,
+      title: "Fresh AI title",
+      description: "Fresh AI description",
+      categoryId: OTHER_CATEGORY,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      sessionId: ID,
+      videoId: REMOTE,
+      transferred: false,
+      resumed: true,
+    });
+    // Only the existing provider video is read; nothing new is created.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].method).toBe("GET");
+    expect(h.db.bunny_uploads).toHaveLength(1);
+    expect(h.db.bunny_uploads[0]).toMatchObject({
+      id: ID,
+      state: "uploading",
+      last_error: null,
+      title: "Fresh AI title",
+      description: "Fresh AI description",
+      category_id: OTHER_CATEGORY,
+    });
+  });
+
+  it("reports transferred bytes so a resumed upload skips straight to confirmation", async () => {
+    seed("processing");
+    fetchMock.mockResolvedValue(Response.json({ ...remote, status: 3 }));
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(await response.json()).toMatchObject({
+      sessionId: ID,
+      transferred: true,
+    });
+    expect(h.db.bunny_uploads[0].state).toBe("processing");
+  });
+
+  it("reactivates a cancelled session so its confirmation is accepted", async () => {
+    seed("cancelled");
+    fetchMock.mockResolvedValue(Response.json({ ...remote, status: 0 }));
+    expect((await sessions({})).status).toBe(200);
+    expect(h.db.bunny_uploads[0].state).toBe("uploading");
+    fetchMock.mockResolvedValue(Response.json({ ...remote, status: 3 }));
+    expect(
+      (
+        await confirm(
+          jsonRequest("/api/videos/bunny/confirm", { sessionId: ID }),
+        )
+      ).status,
+    ).toBe(202);
+  });
+
+  it("reports an already uploaded file as completed without a duplicate", async () => {
+    seed("completed");
+    Object.assign(h.db.bunny_uploads[0], {
+      video_id: ID,
+      video_slug: "clip-video",
+    });
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      completed: true,
+      slug: "clip-video",
+      sessionId: ID,
+      alreadyUploaded: true,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.db.bunny_uploads).toHaveLength(1);
+  });
+
+  it("explains how to re-upload a file whose video was deleted", async () => {
+    seed("completed");
+    Object.assign(h.db.bunny_uploads[0], {
+      video_id: null,
+      video_slug: "clip-video",
+    });
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatch(
+      /video was later deleted.*rename the file/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a different file sent with an existing session ID", async () => {
+    seed();
+    const response = await sessions({ sizeBytes: 6 });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatch(/does not match/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resumes the winner when a concurrent request reserves the same file first", async () => {
+    const realFrom = h.service.from;
+    let raced = false;
+    h.service.from = (table: string) => {
+      const query = realFrom(table);
+      if (table === "bunny_uploads" && !raced) {
+        const insert = query.insert.bind(query);
+        // The competing reservation commits between our lookup and our insert.
+        query.insert = (values: Record<string, unknown>) => {
+          raced = true;
+          seed("uploading");
+          return insert(values);
+        };
+      }
+      return query;
+    };
+    fetchMock.mockResolvedValue(Response.json({ ...remote, status: 0 }));
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(raced).toBe(true);
+    expect(response.status).toBe(200);
+    expect((await response.json()).sessionId).toBe(ID);
+    expect(fetchMock.mock.calls.every(([, o]) => o.method === "GET")).toBe(
+      true,
+    );
+    expect(h.db.bunny_uploads.map((row) => row.id)).toEqual([ID]);
+  });
+
+  it("uploads without the AI description when migration 19 is missing, and says so", async () => {
+    h = createHarness(
+      { categories: [{ id: CATEGORY }], bunny_uploads: [] },
+      {
+        unique: BUNNY_UNIQUE,
+        missingColumns: { bunny_uploads: ["description"] },
+      },
+    );
+    vi.mocked(createClient).mockResolvedValue(h.auth);
+    vi.mocked(createServiceClient).mockReturnValue(h.service);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockResolvedValue(Response.json({ guid: REMOTE }));
+    const response = await sessions({ description: "AI description" });
+    expect(response.status).toBe(201);
+    expect((await response.json()).warning).toContain(
+      "00000000000019_auto_publish_and_ai_metadata.sql",
+    );
+    expect(h.db.bunny_uploads).toHaveLength(1);
+    expect(h.db.bunny_uploads[0]).toMatchObject({
+      id: ID,
+      provider_id: REMOTE,
+      state: "uploading",
+    });
+    expect(h.db.bunny_uploads[0]).not.toHaveProperty("description");
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("surfaces the actual database failure instead of a generic conflict", async () => {
+    const realFrom = h.service.from;
+    h.service.from = (table: string) => {
+      const query = realFrom(table);
+      if (table === "bunny_uploads")
+        query.insert = async () => ({
+          data: null,
+          error: {
+            code: "42501",
+            message: "permission denied for table bunny_uploads",
+          },
+        });
+      return query;
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await sessions({});
+    expect(response.status).toBe(503);
+    const { error } = await response.json();
+    expect(error).toMatch(/permission denied.*service-role key.*42501/);
+    expect(error).not.toMatch(/already reserved/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("adopts the Bunny video carrying the session marker after a lost create response", async () => {
+    seed("creating");
+    Object.assign(h.db.bunny_uploads[0], {
+      provider_id: null,
+      created_at: SETTLED,
+    });
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes("?search=")
+        ? Response.json({
+            items: [
+              {
+                guid: REMOTE,
+                title: `Clip [session:${ID}]`,
+                videoLibraryId: 123,
+              },
+            ],
+          })
+        : Response.json({ ...remote, status: 0 }),
+    );
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      sessionId: ID,
+      videoId: REMOTE,
+      transferred: false,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `https://video.bunnycdn.com/library/123/videos?search=${ID}&itemsPerPage=100`,
+    );
+    expect(fetchMock.mock.calls.every(([, o]) => o.method === "GET")).toBe(
+      true,
+    );
+    expect(h.db.bunny_uploads[0]).toMatchObject({
+      provider_id: REMOTE,
+      state: "uploading",
+    });
+  });
+
+  it("creates exactly one video when an earlier create never reached Bunny", async () => {
+    seed("failed");
+    Object.assign(h.db.bunny_uploads[0], {
+      provider_id: null,
+      created_at: SETTLED,
+    });
+    fetchMock.mockImplementation(async (url: string, options: RequestInit) =>
+      url.includes("?search=")
+        ? Response.json({ items: [] })
+        : options.method === "POST"
+          ? Response.json({ guid: REMOTE })
+          : Response.json({ ...remote, status: 0 }),
+    );
+    const response = await sessions({});
+    expect(response.status).toBe(200);
+    expect((await response.json()).videoId).toBe(REMOTE);
+    const posts = fetchMock.mock.calls.filter(([, o]) => o.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(posts[0][1].body).title).toBe(`Clip [session:${ID}]`);
+    expect(h.db.bunny_uploads[0]).toMatchObject({
+      provider_id: REMOTE,
+      state: "uploading",
+    });
+  });
+
+  it("refuses to guess when several Bunny videos carry the session marker", async () => {
+    seed("creating");
+    Object.assign(h.db.bunny_uploads[0], {
+      provider_id: null,
+      created_at: SETTLED,
+    });
+    const marked = (guid: string) => ({
+      guid,
+      title: `Clip [session:${ID}]`,
+      videoLibraryId: 123,
+    });
+    fetchMock.mockResolvedValue(
+      Response.json({
+        items: [marked(REMOTE), marked("77777777-7777-4777-8777-777777777777")],
+      }),
+    );
+    const response = await sessions({});
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatch(/Several Bunny videos/);
+    expect(fetchMock.mock.calls.some(([, o]) => o.method === "POST")).toBe(
+      false,
+    );
+    expect(h.db.bunny_uploads[0].provider_id).toBeNull();
+  });
+
+  it("waits for a recent uncertain creation instead of duplicating it", async () => {
+    seed("creating");
+    Object.assign(h.db.bunny_uploads[0], {
+      provider_id: null,
+      created_at: new Date().toISOString(),
+    });
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(409);
+    expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("replaces a Bunny video deleted in the dashboard when the file was never saved to the library", async () => {
+    seed("failed");
+    const REPLACEMENT = "88888888-8888-4888-8888-888888888888";
+    fetchMock.mockImplementation(async (_url: string, options: RequestInit) =>
+      options.method === "POST"
+        ? Response.json({ guid: REPLACEMENT })
+        : Response.json({ message: "Video not found" }, { status: 404 }),
+    );
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      sessionId: ID,
+      videoId: REPLACEMENT,
+      transferred: false,
+    });
+    const posts = fetchMock.mock.calls.filter(([, o]) => o.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(posts[0][1].body).title).toBe(`Clip [session:${ID}]`);
+    expect(h.db.bunny_uploads[0]).toMatchObject({
+      provider_id: REPLACEMENT,
+      provider_status: null,
+      state: "uploading",
+    });
+  });
+
+  it("explains the way out when a deleted Bunny video is still listed in the library", async () => {
+    seed("processing");
+    h.db.videos.push({ id: ID, provider: "bunny", provider_file_id: REMOTE });
+    fetchMock.mockResolvedValue(
+      Response.json({ message: "Video not found" }, { status: 404 }),
+    );
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatch(
+      /Delete it in Admin → Videos, then select the file again/,
+    );
+    expect(fetchMock.mock.calls.some(([, o]) => o.method === "POST")).toBe(
+      false,
+    );
+    expect(h.db.bunny_uploads[0].provider_id).toBe(REMOTE);
+  });
+
+  it("never replaces the Bunny video on other provider errors", async () => {
+    seed("failed");
+    fetchMock.mockResolvedValue(new Response("{}", { status: 401 }));
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(502);
+    expect((await response.json()).error).toMatch(/authentication failed/);
+    expect(fetchMock.mock.calls.some(([, o]) => o.method === "POST")).toBe(
+      false,
+    );
+    expect(h.db.bunny_uploads[0].provider_id).toBe(REMOTE);
   });
 });
