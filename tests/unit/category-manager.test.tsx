@@ -57,6 +57,13 @@ afterEach(() => {
 });
 
 describe("CategoryManager — thumbnails", () => {
+  it("has no creation or icon editing controls", () => {
+    render(<CategoryManager initialCategories={[CATEGORY]} />);
+    expect(screen.queryByRole("button", { name: "Add category" })).toBeNull();
+    fireEvent.click(screen.getByText("Edit"));
+    expect(screen.queryByLabelText(/Icon name/)).toBeNull();
+    expect(screen.getByLabelText(/Description/)).toBeTruthy();
+  });
   it("shows the stored thumbnail on the category card", () => {
     render(<CategoryManager initialCategories={[{ ...CATEGORY, image_url: "https://cdn.example.com/thumb.png" }]} />);
     const image = document.querySelector('img[src="https://cdn.example.com/thumb.png"]');

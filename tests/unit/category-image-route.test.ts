@@ -57,30 +57,15 @@ beforeEach(() => {
   setup();
 });
 
-describe("POST /api/admin/categories — thumbnail on create", () => {
-  it("resolves an uploaded storage path to the stored public URL", async () => {
+describe("fixed taxonomy", () => {
+  it("rejects category creation even for admins", async () => {
     const harness = setup();
-    const res = await POST(
-      jsonRequest("/api/admin/categories", { label: "Latex", slug: "latex", image_url: IMAGE_PATH })
-    );
-    expect(res.status).toBe(201);
-    const body = await res.json();
-    expect(body.category.image_url).toBe(IMAGE_URL);
-    expect(harness.db.categories.at(-1)?.image_url).toBe(IMAGE_URL);
-    expect(harness.db.audit_logs.at(-1)?.metadata).toMatchObject({ has_image: true });
+    const res = await POST(jsonRequest("/api/admin/categories", { label: "New", image_url: IMAGE_PATH }));
+    expect(res.status).toBe(405);
+    expect(harness.db.categories).toHaveLength(1);
   });
-
-  it("accepts a ready-made public URL and an omitted thumbnail", async () => {
-    const harness = setup();
-    await POST(jsonRequest("/api/admin/categories", { label: "Latex", image_url: "https://i.postimg.cc/a/b.png" }));
-    expect(harness.db.categories.at(-1)?.image_url).toBe("https://i.postimg.cc/a/b.png");
-
-    await POST(jsonRequest("/api/admin/categories", { label: "Rain", slug: "rain" }));
-    expect(harness.db.categories.at(-1)?.image_url).toBeNull();
-  });
-
-  it("refuses a thumbnails-only body without a name", async () => {
-    const res = await POST(jsonRequest("/api/admin/categories", { image_url: IMAGE_PATH }));
+  it.each(["icon", "slug", "label"])("rejects changes to %s", async field => {
+    const res = await PATCH(jsonRequest("/api/admin/categories", { id: CATEGORY_ID, [field]: "changed" }, "PATCH"));
     expect(res.status).toBe(400);
   });
 });
@@ -114,7 +99,7 @@ describe("PATCH /api/admin/categories — thumbnail change/removal", () => {
     const harness = setup({
       categories: [{ id: CATEGORY_ID, label: "Boudoir", slug: "boudoir", icon: null, image_url: IMAGE_URL }],
     });
-    const res = await PATCH(jsonRequest("/api/admin/categories", { id: CATEGORY_ID, icon: "camera" }, "PATCH"));
+    const res = await PATCH(jsonRequest("/api/admin/categories", { id: CATEGORY_ID, description: "Updated description" }, "PATCH"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.category.image_url).toBe(IMAGE_URL);

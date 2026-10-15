@@ -25,6 +25,7 @@ function fakeSupabase(row: Record<string, any>) {
     select: () => builder,
     eq: () => builder,
     neq: () => builder,
+    not: () => builder,
     order: () => builder,
     limit: () => builder,
     single: async () => ({ data: row, error: null }),
@@ -39,6 +40,8 @@ function fakeSupabase(row: Record<string, any>) {
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => fakeSupabase(VIDEO_ROW),
 }));
+
+vi.mock("@/lib/public/catalog", () => ({ getPublicCategories: async () => [] }));
 
 vi.mock("next/navigation", () => ({
   notFound: () => {
@@ -84,6 +87,11 @@ describe("/video/[slug] watch page", () => {
     expect(grid.children).toHaveLength(8);
   });
 
+  it("renders the requested sections in order", async () => {
+    const html = await renderPage();
+    const headings = Array.from(new DOMParser().parseFromString(html, "text/html").querySelectorAll("h2")).map(h => h.textContent);
+    expect(headings).toEqual(["Comments", "More like this", "Recommended", "Top Rated", "Top Categories", "Latest"]);
+  });
   it("renders Like and Share buttons", async () => {
     const html = await renderPage();
     expect(html).toContain(">Like<");
@@ -113,16 +121,27 @@ describe("/video/[slug] watch page", () => {
 const VideoActions = (await import("@/src/components/VideoActions")).default;
 
 describe("watch page actions", () => {
+  it("copies even when a native share sheet is available and dismissed", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const share = vi.fn().mockRejectedValue(new Error("Dismissed"));
+    Object.assign(navigator, { clipboard: { writeText }, share });
+    render(<VideoActions title="Preview" />);
+    fireEvent.click(screen.getByRole("button", { name: /share/i }));
+    await screen.findByRole("button", { name: /copied/i });
+    expect(writeText).toHaveBeenCalledWith(window.location.href);
+    expect(share).toHaveBeenCalled();
+  });
   it("toggles Like and copies the link on Share", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText }, share: undefined });
 
-    render(<VideoActions title="Midnight Velvet" />);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true } as Response);
+    render(<VideoActions title="Midnight Velvet" videoId="vid-1" />);
 
     const like = screen.getByRole("button", { name: /like/i });
     expect(like).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(like);
-    expect(screen.getByRole("button", { name: /liked/i })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("button", { name: /liked/i })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(screen.getByRole("button", { name: /share/i }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(window.location.href));

@@ -96,6 +96,6 @@ describe("/admin/categories page", () => {
     state.rows = [];
     const html = await render();
 
-    expect(html).toContain("No categories yet");
+    expect(html).toContain("Apply the fixed-category database migration");
   });
 });

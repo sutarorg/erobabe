@@ -1,3 +1,4 @@
+import { resolveCategoryIcon } from "@/src/components/categoryIcons";
 import Link from "next/link";
 import { SITE_URL } from "@/lib/site";
 import { getPublicCategories } from "@/lib/public/catalog";
@@ -27,6 +28,7 @@ export default async function CategoriesPage() {
       {/* Four cards across in the center panel, with fewer columns on small screens. */}
       <div className="mt-6 grid grid-cols-2 auto-rows-fr gap-3 @md:grid-cols-3 @lg:grid-cols-4">
         {categories.map((cat) => {
+          const Icon = resolveCategoryIcon(cat.icon, cat.slug);
           return (
             <Link
               key={cat.id}
@@ -44,9 +46,11 @@ export default async function CategoriesPage() {
                   className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-50 transition-opacity duration-200 group-hover:opacity-65"
                 />
               ) : null}
+              <Icon aria-hidden className="relative h-6 w-6 text-accent" />
               <span className="relative mt-3 block w-full break-words text-[13px] font-semibold leading-snug text-ink transition-colors group-hover:text-accent">
                 {cat.label}
               </span>
+              {cat.description && <p className="relative mt-1 line-clamp-2 text-xs text-ink-2">{cat.description}</p>}
             </Link>
           );
         })}

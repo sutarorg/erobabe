@@ -34,11 +34,11 @@ describe("homepage categories", () => {
     const mobileVisibleLinks = links.filter((link) => !link.className.includes("hidden"));
     expect(mobileVisibleLinks).toHaveLength(6);
     expect(mobileVisibleLinks.map((link) => link.textContent?.trim())).toEqual([
-      "Mature",
       "Amateur",
-      "POV",
       "Lesbian",
-      "Kinky",
+      "MILF",
+      "Japanese",
+      "Teen (18+)",
       "More",
     ]);
     expect(mobileVisibleLinks[5].textContent?.trim()).toBe("More");

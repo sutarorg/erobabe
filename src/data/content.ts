@@ -1,4 +1,6 @@
 "use client";
+import { FIXED_CATEGORIES } from "@/lib/public/fixed-categories";
+import { resolveCategoryIcon } from "../components/categoryIcons";
 
 import {
   Camera,
@@ -68,23 +70,10 @@ export interface HeroSlide {
 /* ------------------------------------------------------------------ */
 
 export const CATEGORIES: Category[] = [
-  { id: "mature", label: "Mature", icon: Flame },
-  { id: "amateur", label: "Amateur", icon: Camera },
-  { id: "pov", label: "POV", icon: Eye },
-  { id: "lesbian", label: "Lesbian", icon: Users },
-  { id: "kinky", label: "Kinky", icon: VenetianMask },
-  { id: "mature18", label: "Mature 18+", icon: Wine },
-  { id: "couples", label: "Couples", icon: HeartHandshake },
+  ...FIXED_CATEGORIES.slice(0, 7).map(c => ({ id: c.slug, label: c.label, icon: resolveCategoryIcon(c.icon) })),
   { id: "more", label: "More", icon: LayoutGrid },
 ];
-
-export const EXTRA_CATEGORIES: Category[] = [
-  { id: "boudoir", label: "Boudoir", icon: Sparkles },
-  { id: "romantic", label: "Romantic", icon: Heart },
-  { id: "solo", label: "Solo", icon: UserRound },
-  { id: "roleplay", label: "Roleplay", icon: Drama },
-  { id: "massage", label: "Massage", icon: Flower2 },
-];
+export const EXTRA_CATEGORIES: Category[] = FIXED_CATEGORIES.slice(7).map(c => ({ id: c.slug, label: c.label, icon: resolveCategoryIcon(c.icon) }));
 
 export const ALL_CATEGORIES: Category[] = [
   ...CATEGORIES.filter((c) => c.id !== "more"),
