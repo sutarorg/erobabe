@@ -1,12 +1,13 @@
+import { publicPageMetadata } from "@/lib/metadata/page";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { SITE_URL } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = publicPageMetadata({
   title: "18 U.S.C. 2257 Statement",
   description: "18 U.S.C. § 2257 compliance and third-party content exemption statement",
   alternates: { canonical: `${SITE_URL}/2257` },
-};
+});
 
 const SECTIONS = [
   {

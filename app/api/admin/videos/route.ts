@@ -1,4 +1,4 @@
-import { bunnyRequest, bunnyVideoSchema } from "@/lib/video/bunny";
+import { bunnyRequest, bunnyVideoSchema, deleteBunnyVideo } from "@/lib/video/bunny";
 import { suggestCarouselCopy } from "@/lib/metadata/openrouter";
 import type { CarouselCopyResult } from "@/lib/metadata/openrouter";
 import { NextRequest, NextResponse } from "next/server";
@@ -14,10 +14,9 @@ import { revalidatePublicTag } from "@/lib/public/revalidate";
  * Admin video maintenance: change/remove a thumbnail, place a video in the
  * homepage carousel, regenerate its carousel copy, or delete a video.
  *
- * Nothing here touches provider video bytes. Deleting removes the catalog row,
- * not remote Bunny Stream media; provider-side retention/cleanup is separate. The thumbnail, which
- * *is* uploaded to Supabase Storage, is removed from the bucket as well (best
- * effort: a missing object never fails the database change).
+ * Bunny media is deleted before its catalog row. Provider failures retain the
+ * row so admins can retry; an already-missing remote video is a success.
+ * Thumbnail cleanup is best effort after the catalog deletion.
  *
  * Placing a video in a carousel slot also generates that video's short carousel
  * copy through the AI (max 5 words headline, max 10 words teaser). A failure
@@ -133,7 +132,7 @@ function isMissingColumnError(error: unknown): boolean {
 async function loadVideo(service: ServiceClient, id: string) {
   const { data, error } = await service
     .from("videos")
-    .select("id, slug, title, thumbnail_url, provider")
+    .select("id, slug, title, thumbnail_url, provider, provider_file_id, bunny_library_id")
     .eq("id", id)
     .single();
   if (error || !data) throw new Error("Video not found");
@@ -143,6 +142,8 @@ async function loadVideo(service: ServiceClient, id: string) {
     title: string;
     thumbnail_url: string | null;
     provider: string | null;
+    provider_file_id: string | null;
+    bunny_library_id: string | null;
   };
 }
 
@@ -445,7 +446,7 @@ export async function DELETE(req: NextRequest) {
 
       const { data: rows, error: rowsError } = await service
         .from("videos")
-        .select("id, slug, title, thumbnail_url, provider")
+        .select("id, slug, title, thumbnail_url, provider, provider_file_id, bunny_library_id")
         .in("id", bulkIds);
       if (rowsError) throw rowsError;
       const found = (rows || []) as Array<{
@@ -454,33 +455,31 @@ export async function DELETE(req: NextRequest) {
         title: string;
         thumbnail_url: string | null;
         provider: string | null;
+        provider_file_id: string | null;
+        bunny_library_id: string | null;
       }>;
 
-      if (found.length) {
-        const { error } = await service
-          .from("videos")
-          .delete()
-          .in(
-            "id",
-            found.map((row) => row.id),
-          );
-        if (error) throw error;
-      }
-
+      const deleted: string[] = [];
+      const failed: Array<{ id: string; error: string }> = [];
       for (const row of found) {
-        await removeThumbnailObject(service, row.thumbnail_url);
-        await audit(service, user.id, "video_deleted", row.id, {
-          slug: row.slug,
-          title: row.title,
-          provider: row.provider,
-          had_thumbnail: Boolean(row.thumbnail_url),
-          bulk: true,
-        });
+        try {
+          await deleteBunnyVideo(row);
+          const { error } = await service.from("videos").delete().eq("id", row.id);
+          if (error) throw error;
+          deleted.push(row.id);
+          await removeThumbnailObject(service, row.thumbnail_url);
+          await audit(service, user.id, "video_deleted", row.id, {
+            slug: row.slug, title: row.title, provider: row.provider, bulk: true,
+          });
+        } catch {
+          failed.push({ id: row.id, error: "Deletion could not finish. Check Bunny configuration and retry." });
+        }
       }
 
       revalidatePublicTag("videos");
       return NextResponse.json({
-        deleted: found.map((row) => row.id),
+        deleted,
+        failed,
         missing: bulkIds.filter(
           (value) => !found.some((row) => row.id === value),
         ),
@@ -495,6 +494,7 @@ export async function DELETE(req: NextRequest) {
 
     const video = await loadVideo(service, id);
 
+    await deleteBunnyVideo(video);
     const { error } = await service.from("videos").delete().eq("id", id);
     if (error) throw error;
 

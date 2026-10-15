@@ -6,6 +6,7 @@ function renderHeader(
   options: {
     navActive?: "home" | null;
     menuOpen?: boolean;
+    searchOpen?: boolean;
     user?: { name: string; role?: string } | null;
   } = {},
 ) {
@@ -16,7 +17,7 @@ function renderHeader(
       onNavigate={vi.fn()}
       query=""
       onQueryChange={vi.fn()}
-      searchOpen={false}
+      searchOpen={options.searchOpen || false}
       onSearchOpenChange={vi.fn()}
       menuOpen={menuOpen}
       onMenuOpenChange={vi.fn()}
@@ -109,4 +110,11 @@ describe("dashboardHrefFor", () => {
     expect(dashboardHrefFor({ name: "a" })).toBe("/advertiser");
     expect(dashboardHrefFor(null)).toBe("/advertiser");
   });
+});
+
+it("hides account and menu controls only below sm while search is open", () => {
+  renderHeader({ searchOpen: true, menuOpen: true });
+  expect(screen.getByRole("link", { name: /sign in/i }).parentElement?.className).toContain("max-sm:hidden");
+  expect(screen.getByRole("button", { name: "Close menu" }).className).toContain("max-sm:hidden");
+  expect(screen.queryByRole("navigation", { name: "Mobile" })).toBeNull();
 });

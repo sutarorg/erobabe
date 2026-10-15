@@ -9,10 +9,17 @@ export const revalidate = 30;
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const { category } = await getCategoryBySlug(slug);
-  if (!category) return { title: "Category not found" };
+  const { category, videos } = await getCategoryBySlug(slug);
+  if (!category) notFound();
   return {
     title: `${category.label} Videos`,
+    description: category.description || `Browse the ${category.label} video collection on Erobabe. Find published listings and related categories. For adults aged 18 and over.`,
+    robots: { index: videos.length > 0, follow: true },
+    openGraph: {
+      title: `${category.label} Videos`,
+      description: category.description || `Explore the ${category.label} collection on Erobabe. Adults 18+ only.`,
+      url: `${SITE_URL}/category/${slug}`,
+    },
     alternates: { canonical: `${SITE_URL}/category/${slug}` },
   };
 }

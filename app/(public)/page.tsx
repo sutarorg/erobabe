@@ -1,3 +1,4 @@
+import { publicPageMetadata } from "@/lib/metadata/page";
 import { homeSections } from "@/lib/public/selection";
 import { heroSlidesFromCarousel } from "@/lib/public/hero-slides";
 import { SITE_URL } from "@/lib/site";
@@ -18,12 +19,12 @@ import type { Metadata } from "next";
 
 export const revalidate = 30;
 
-export const metadata: Metadata = {
+export const metadata: Metadata = publicPageMetadata({
   title: "erobabe — Premium Adult Entertainment",
   description:
     "Your destination for discovering premium adult entertainment. 18+ adults only.",
   alternates: { canonical: SITE_URL },
-};
+});
 
 export default async function HomePage({
   searchParams,

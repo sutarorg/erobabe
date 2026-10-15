@@ -204,7 +204,7 @@ export default function Header({
           ) : (
             <button
               type="button"
-              onClick={() => onSearchOpenChange(true)}
+              onClick={() => { onMenuOpenChange(false); onSearchOpenChange(true); }}
               aria-label="Open search"
               className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition-colors hover:bg-card hover:text-ink"
             >
@@ -212,6 +212,7 @@ export default function Header({
             </button>
           )}
 
+          <div className={cn("flex items-center gap-2", searchOpen && "max-sm:hidden")}>
           {user ? (
             <>
               <Link
@@ -255,13 +256,15 @@ export default function Header({
             </button>
           )}
 
+          </div>
+
           {/* Compact menu toggle (narrow center panel / mobile) */}
           <button
             type="button"
             onClick={() => onMenuOpenChange(!menuOpen)}
             aria-label={menuOpen ? "Close menu" : "Open menu"}
             aria-expanded={menuOpen}
-            className="flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition-colors hover:bg-card hover:text-ink min-[1000px]:hidden"
+            className={cn("flex h-8 w-8 items-center justify-center rounded-md text-ink-2 transition-colors hover:bg-card hover:text-ink min-[1000px]:hidden", searchOpen && "max-sm:hidden")}
           >
             {menuOpen ? (
               <X className="h-4 w-4" aria-hidden />
@@ -273,7 +276,7 @@ export default function Header({
       </div>
 
       {/* Compact dropdown navigation */}
-      {menuOpen && (
+      {menuOpen && !searchOpen && (
         <nav
           aria-label="Mobile"
           className="border-t border-line bg-panel px-4 py-2 @sm:px-5 min-[1000px]:hidden @2xl:px-7"

@@ -6,7 +6,7 @@ vi.mock("@/lib/supabase/server", () => ({
       select: () => q,
       eq: () => q,
       order: () => q,
-      limit: async () => ({ data: rows }),
+      range: async (start: number, end: number) => ({ data: rows.slice(start, end + 1) }),
     };
     return { from: () => q };
   },
@@ -20,6 +20,8 @@ it("serializes empty and populated eligible-query results with escaped XML", asy
   rows = [
     {
       slug: "fixture",
+      provider: "direct_url",
+      playable_url: "https://cdn.example.com/video.mp4",
       title: "A & B <scene>",
       thumbnail_url: "https://example.com/a.jpg?x=1&y=2",
       duration_seconds: 120,
@@ -31,4 +33,22 @@ it("serializes empty and populated eligible-query results with escaped XML", asy
   expect(xml).toContain("A &amp; B &lt;scene&gt;");
   expect(xml).toContain("<video:duration>120</video:duration>");
   expect(xml).toContain("/video/fixture");
+  expect(xml).toContain("<video:content_loc>https://cdn.example.com/video.mp4</video:content_loc>");
+});
+
+it("paginates beyond Supabase's default row cap and reflects deletions on the next request", async () => {
+  rows = Array.from({ length: 1001 }, (_, index) => ({
+    slug: `video-${index}`, title: `Listing ${index}`, thumbnail_url: "https://example.com/thumb.jpg",
+    provider: "direct_url", playable_url: "https://example.com/media.mp4",
+  }));
+  let xml = await (await GET()).text();
+  expect(xml.match(/<video:video>/g)).toHaveLength(1001);
+  expect(xml).toContain("/video/video-1000");
+  rows = [];
+  xml = await (await GET()).text();
+  expect(xml).not.toContain("/video/video-1000");
+});
+it("omits entries without a crawlable player or thumbnail", async () => {
+  rows = [{ slug: "missing-player", title: "Unavailable", thumbnail_url: "https://example.com/thumb.jpg" }];
+  expect(await (await GET()).text()).not.toContain("<video:video>");
 });

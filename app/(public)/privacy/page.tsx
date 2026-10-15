@@ -1,3 +1,6 @@
+import type { Metadata } from "next";
+import { publicPageMetadata } from "@/lib/metadata/page";
+import { SITE_URL } from "@/lib/site";
 import Link from "next/link";
 
 const EFFECTIVE_DATE = "October 15, 2026";
@@ -122,3 +125,5 @@ export default function PrivacyPage() {
     </div>
   );
 }
+
+export const metadata: Metadata = publicPageMetadata({ title: "Privacy Policy", description: "Learn how Erobabe handles browser storage, visitor data, account information, analytics, privacy requests, and content removal requests.", alternates: { canonical: `${SITE_URL}/privacy` } });

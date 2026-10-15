@@ -121,6 +121,9 @@ export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProp
             <ThumbImage
               src={slide.image}
               alt={slide.alt}
+              loading={i === 0 ? "eager" : "lazy"}
+              fetchPriority={i === 0 ? "high" : "low"}
+              decoding="async"
               draggable={false}
               className="absolute inset-0 h-full w-full object-cover object-[70%_center]"
             />
@@ -197,7 +200,7 @@ export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProp
       </div>
 
       {/* Carousel controls — hidden on mobile; swipe left/right navigates on mobile */}
-      <div className="absolute bottom-3 right-3 hidden items-center gap-1.5 sm:flex @sm:flex">
+      <div className="absolute bottom-3 right-3 hidden items-center gap-1.5 sm:flex">
         <button
           type="button"
           onClick={() => go(index - 1)}
