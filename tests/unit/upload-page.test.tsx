@@ -34,6 +34,8 @@ const transfer = vi.mocked(uploadBunnyVideo);
 let fetchMock: ReturnType<typeof vi.fn>;
 let saveFails: boolean;
 let encodingPending: boolean;
+/** The catalog video of this file was deleted, so confirming is refused. */
+let videoDeleted: boolean;
 beforeEach(() => {
   localStorage.clear();
   URL.createObjectURL = vi.fn(() => "blob:preview");
@@ -41,6 +43,7 @@ beforeEach(() => {
   vi.mocked(uploadWithProgress).mockResolvedValue();
   saveFails = false;
   encodingPending = false;
+  videoDeleted = false;
   transfer.mockImplementation(async (_url, _file, options) => {
     options?.onProgress?.({
       percent: 62,
@@ -60,6 +63,15 @@ beforeEach(() => {
         sessions: [],
       });
     if (url.endsWith("confirm")) {
+      if (videoDeleted)
+        return Response.json(
+          {
+            error:
+              "This file's video was deleted from the video library, so there is nothing left to confirm. Retry to upload the file again as a new video.",
+            code: "video_deleted",
+          },
+          { status: 409 },
+        );
       if (encodingPending)
         return Response.json(
           {
@@ -180,6 +192,41 @@ describe("device-only upload queue", () => {
       expect(screen.getByText("Completed")).toBeInTheDocument(),
     );
     expect(transfer).toHaveBeenCalledTimes(1);
+  });
+  it("uploads a file again after its published video was deleted", async () => {
+    videoDeleted = true;
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Retry transfer")).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /deleted from the video library/,
+    );
+    expect(screen.queryByText("Completed")).toBeNull();
+    // The retry transfers a brand-new video instead of confirming the old one.
+    videoDeleted = false;
+    fireEvent.click(screen.getByText("Retry transfer"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    expect(transfer).toHaveBeenCalledTimes(2);
+    // One reservation per attempt: the deleted session is never confirmed again.
+    expect(
+      fetchMock.mock.calls.filter(
+        ([u, o]) => String(u).endsWith("sessions") && o?.body,
+      ),
+    ).toHaveLength(2);
+  });
+  it("removes a finished queue entry so the same file can be selected again", async () => {
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByText("Remove"));
+    await waitFor(() => expect(screen.queryByText("Completed")).toBeNull());
+    expect(screen.getByText("No files selected yet.")).toBeInTheDocument();
   });
   it("cancels only the in-flight transfer and leaves it retryable", async () => {
     transfer.mockImplementation(

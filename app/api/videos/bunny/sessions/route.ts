@@ -117,23 +117,38 @@ export async function POST(req: NextRequest) {
     // Re-selecting a file (after a reload, failure or cancellation) arrives
     // with a new browser ID, but one administrator/filename/size/MIME may hold
     // only one session. Resume that session instead of inserting a conflict.
-    const existing = await findSession(service, user.id, input);
-    if (existing) return await resumeSession(service, user.id, existing, input);
+    // A session whose catalog video was deleted is cleared here, so the same
+    // file can be uploaded again without renaming it.
+    const lookup = await findSession(service, user.id, input);
+    if (lookup.session)
+      return await resumeSession(service, user.id, lookup.session, input);
+    // A replacement never borrows the cleared session's identity: the new video
+    // is published under a new ID and slug, so the deleted video keeps its own
+    // catalog identity, public URL and media_retention records.
+    const reservationInput =
+      lookup.cleared?.id === input.sessionId
+        ? { ...input, sessionId: crypto.randomUUID() }
+        : input;
     const { libraryId } = bunnyConfiguration();
     const reservation = await reserveSession(
       service,
       user.id,
-      input,
+      reservationInput,
       libraryId,
     );
     if ("existing" in reservation)
-      return await resumeSession(service, user.id, reservation.existing, input);
+      return await resumeSession(
+        service,
+        user.id,
+        reservation.existing,
+        reservationInput,
+      );
     let remote;
     try {
       // A unique title marker permits reconciliation after a lost create response.
       remote = createdVideoSchema.parse(
         await bunnyRequest("", "POST", {
-          title: `${input.title} [session:${input.sessionId}]`,
+          title: `${reservationInput.title} [session:${reservationInput.sessionId}]`,
         }),
       );
     } catch (e) {
@@ -141,21 +156,28 @@ export async function POST(req: NextRequest) {
         await service
           .from("bunny_uploads")
           .delete()
-          .eq("id", input.sessionId)
+          .eq("id", reservationInput.sessionId)
           .eq("created_by", user.id);
       throw e;
     }
     const { error } = await service
       .from("bunny_uploads")
       .update({ provider_id: remote.guid, state: "uploading" })
-      .eq("id", input.sessionId)
+      .eq("id", reservationInput.sessionId)
       .eq("created_by", user.id);
     if (error) throw error;
+    // Both notices matter: an unapplied migration blocks AI descriptions, and a
+    // re-armed file tells the administrator why a second transfer started.
+    const cleared = lookup.cleared ?? reservation.cleared;
+    const warning =
+      [reservation.warning, cleared ? reuploadNotice(cleared) : undefined]
+        .filter(Boolean)
+        .join(" ") || undefined;
     return NextResponse.json(
       {
         ...signUpload(remote.guid),
-        sessionId: input.sessionId,
-        ...(reservation.warning ? { warning: reservation.warning } : {}),
+        sessionId: reservationInput.sessionId,
+        ...(warning ? { warning } : {}),
       },
       { status: 201, headers },
     );
@@ -174,8 +196,39 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** The requested session, else this administrator's session for the same source file. */
+type SessionLookup = {
+  /** The session to resume, or null when a fresh reservation is required. */
+  session: UploadSession | null;
+  /** The completed session that was archived because its video was deleted. */
+  cleared?: UploadSession;
+};
+
+/**
+ * The requested session, else this administrator's session for the same source
+ * file. A completed session whose catalog video was deleted is archived and
+ * dropped instead of returned, so the same file can be uploaded again without
+ * being renamed.
+ */
 async function findSession(
+  service: ServiceClient,
+  userId: string,
+  input: SessionInput,
+): Promise<SessionLookup> {
+  let cleared: UploadSession | undefined;
+  // Clearing a deleted session frees the file identity, and a concurrent
+  // request may have reserved that file in the meantime, so look once more.
+  for (let pass = 0; ; pass++) {
+    const found = await readSession(service, userId, input);
+    if (!found) return { session: null, ...(cleared ? { cleared } : {}) };
+    const archived = await clearDeletedSession(service, userId, found);
+    if (!archived) return { session: found, ...(cleared ? { cleared } : {}) };
+    cleared = archived;
+    if (pass >= 1) return { session: null, cleared };
+  }
+}
+
+/** Reads the session by ID first, then by the source-file identity. */
+async function readSession(
   service: ServiceClient,
   userId: string,
   input: SessionInput,
@@ -206,34 +259,151 @@ async function findSession(
   return bySource;
 }
 
+/**
+ * Archives and drops a completed session whose catalog video was deleted
+ * (deleting the video nulls `video_id`), because such a session can never
+ * publish again while its file identity keeps blocking a new reservation.
+ * Returns the archived row, or null when the session is still usable.
+ *
+ * The deleted video is never resurrected: clearing only lets the same file
+ * start a genuinely new upload, with a new Bunny video and a new catalog
+ * entry. The deleted video's provider bytes stay untouched, retained for
+ * operator review by `media_retention`.
+ */
+async function clearDeletedSession(
+  service: ServiceClient,
+  userId: string,
+  session: UploadSession,
+): Promise<UploadSession | null> {
+  if (session.state !== "completed" || session.video_id) return null;
+  await assertNoCatalogVideo(service, session);
+  await archiveDeletedSession(service, userId, session);
+  const { data: cleared, error } = await service
+    .from("bunny_uploads")
+    .delete()
+    .eq("id", session.id)
+    .eq("created_by", userId)
+    .eq("state", "completed")
+    .is("video_id", null)
+    .select("id");
+  if (error) throw databaseError("clear the deleted upload session", error);
+  // Nothing was deleted: a concurrent request re-linked or cleared it first.
+  return cleared?.length ? session : null;
+}
+
+/** Refuses to discard a session that any catalog video still points at. */
+async function assertNoCatalogVideo(
+  service: ServiceClient,
+  session: UploadSession,
+) {
+  const { data: byId, error } = await service
+    .from("videos")
+    .select("id")
+    .eq("id", session.id)
+    .maybeSingle();
+  if (error) throw error;
+  // finish_bunny_upload publishes the video under the session ID, so a live row
+  // means the session is still linked and must be kept for audit.
+  if (byId)
+    throw new BunnyError(
+      "This file's video is still in the video library, so its upload session is kept. Delete the video in Admin → Videos, then select the file again to upload it once more.",
+      409,
+    );
+  if (!session.provider_id) return;
+  const { data: byProvider, error: providerLookupError } = await service
+    .from("videos")
+    .select("id")
+    .eq("provider_file_id", session.provider_id)
+    .maybeSingle();
+  if (providerLookupError) throw providerLookupError;
+  if (byProvider)
+    throw new BunnyError(
+      "This file's Bunny video is still used by a video in the library, so its upload session is kept. Delete that video in Admin → Videos, then select the file again.",
+      409,
+    );
+}
+
+/**
+ * Keeps the durable record of a cleared session: the audit log holds the file,
+ * provider video and slug the deleted catalog entry was published under.
+ */
+async function archiveDeletedSession(
+  service: ServiceClient,
+  userId: string,
+  session: UploadSession,
+) {
+  const { error } = await service.from("audit_logs").insert({
+    actor_id: userId,
+    action: "bunny_upload_session_cleared",
+    target_type: "upload_session",
+    target_id: session.id,
+    level: "info",
+    metadata: {
+      reason:
+        "Catalog video deleted; session cleared so the same file can be uploaded again",
+      title: session.title,
+      original_name: session.original_name,
+      mime_type: session.mime_type,
+      size_bytes: Number(session.size_bytes),
+      duration_seconds: session.duration_seconds,
+      category_id: session.category_id,
+      library_id: session.library_id,
+      provider_id: session.provider_id,
+      video_slug: session.video_slug,
+      session_created_at: session.created_at,
+    },
+  });
+  // Fail closed: this row is the only surviving record of the deleted session.
+  if (error) throw databaseError("archive the deleted upload session", error);
+}
+
+/** Tells the administrator why a file that was uploaded before transfers again. */
+function reuploadNotice(cleared: UploadSession) {
+  return `The video published from this file's earlier upload was deleted, so a new upload session was started for it. Its previous Bunny video (${cleared.provider_id || "unknown"}) stays in the library for retention review; delete it in the Bunny dashboard once it is no longer needed.`;
+}
+
 async function reserveSession(
   service: ServiceClient,
   userId: string,
   input: SessionInput,
   libraryId: string,
-): Promise<{ warning?: string } | { existing: UploadSession }> {
-  const { error, warning } = await saveSession(
-    (values) => service.from("bunny_uploads").insert(values),
-    {
-      id: input.sessionId,
-      created_by: userId,
-      title: input.title,
-      ...(input.description ? { description: input.description } : {}),
-      original_name: input.originalName,
-      mime_type: input.mimeType,
-      size_bytes: input.sizeBytes,
-      duration_seconds: input.durationSeconds ?? null,
-      category_id: input.categoryId,
-      library_id: libraryId,
-    },
-  );
-  if (!error) return { warning };
-  if (error.code === "23505") {
+): Promise<
+  { warning?: string; cleared?: UploadSession } | { existing: UploadSession }
+> {
+  const values = {
+    id: input.sessionId,
+    created_by: userId,
+    title: input.title,
+    ...(input.description ? { description: input.description } : {}),
+    original_name: input.originalName,
+    mime_type: input.mimeType,
+    size_bytes: input.sizeBytes,
+    duration_seconds: input.durationSeconds ?? null,
+    category_id: input.categoryId,
+    library_id: libraryId,
+  };
+  // Clearing a deleted session frees this file's identity key, so one retry
+  // after a conflict is enough to reserve it.
+  let cleared: UploadSession | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { error, warning } = await saveSession(
+      (row) => service.from("bunny_uploads").insert(row),
+      values,
+    );
+    if (!error) return { warning, ...(cleared ? { cleared } : {}) };
+    if (error.code !== "23505")
+      throw databaseError("reserve the upload session", error);
     // A concurrent request reserved this session or source first; resume it.
-    const winner = await findSession(service, userId, input);
-    if (winner) return { existing: winner };
+    const lookup = await findSession(service, userId, input);
+    if (lookup.session) return { existing: lookup.session };
+    if (!lookup.cleared)
+      throw databaseError("reserve the upload session", error);
+    cleared = lookup.cleared;
   }
-  throw databaseError("reserve the upload session", error);
+  throw new BunnyError(
+    "The upload session for this file changed while it was being reserved. Select the file again.",
+    409,
+  );
 }
 
 async function resumeSession(
@@ -253,10 +423,12 @@ async function resumeSession(
     );
   const resumed = session.id !== input.sessionId;
   if (session.state === "completed") {
-    // finish_bunny_upload always links the video; deleting it nulls video_id.
+    // finish_bunny_upload always links the video; deleting it nulls video_id,
+    // and findSession archives and drops such a session before resuming. Only a
+    // concurrent change can leave one here, and it must not publish anything.
     if (!session.video_id)
       throw new BunnyError(
-        "This file was uploaded before and its video was later deleted. Deleted videos are not re-created from their old upload; rename the file if you want to upload it again.",
+        "This file's earlier upload is being replaced by a new session. Select the file again to start its new upload.",
         409,
       );
     return NextResponse.json(

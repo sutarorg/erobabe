@@ -5,6 +5,11 @@ import { thumbnailVisionEnabled } from "./thumbnail-ranking";
 import type { UploadPolicy } from "./bunny-validation";
 
 export class BunnyError extends Error {
+  /**
+   * Machine-readable reason a client may act on. The message stays the human
+   * explanation; clients must never match on its wording.
+   */
+  code?: string;
   constructor(
     message: string,
     public status = 502,
@@ -193,12 +198,21 @@ export function signUpload(
     },
   };
 }
-export function providerError(error: unknown) {
+/** The client-facing shape of a failure: a human message plus optional hints. */
+export type ProviderErrorBody = {
+  error: string;
+  status: number;
+  retryAfter?: number;
+  code?: string;
+};
+
+export function providerError(error: unknown): ProviderErrorBody {
   if (error instanceof BunnyError)
     return {
       error: error.message,
       status: error.status,
       retryAfter: error.retryAfter,
+      ...(error.code ? { code: error.code } : {}),
     };
   if (error instanceof Error && /^(Unauthorized|Forbidden)/.test(error.message))
     return {

@@ -543,12 +543,27 @@ none of these providers/accounts has been approved by this implementation.
   media sharing this tuple, rename the authorized file before starting. This is
   duplicate prevention, not a cryptographic proof of source identity. Renaming
   a partial source loses file matching and is not a resume workflow.
+- Video deleted from the library, same file uploaded again: reselect the file —
+  no rename is needed. A completed session whose catalog video was deleted (its
+  `video_id` is NULL) can never publish again, so it is archived to `audit_logs`
+  (`action = 'bunny_upload_session_cleared'`, with the file, title, library,
+  provider GUID and slug it was published under) and dropped, which frees the
+  file identity for one new session. That session creates a **new** Bunny video
+  and, once it finishes, a **new** catalog row under the new session ID; the
+  deleted video is never resurrected, re-linked or republished. Confirming the
+  old session answers 409 instead of reporting a deleted video as published.
+  Clearing is refused while any catalog row still points at the session ID or at
+  its provider GUID — delete that video in Admin → Videos first. The deleted
+  video's Bunny bytes stay retained per `media_retention`; review and delete them
+  in the Bunny dashboard once retention approval allows it. In the upload queue,
+  a finished entry can be removed (or the page reloaded) so the same file can be
+  selected again without renaming it.
 - Cancelling pauses local transfer, not deletion of provider media. Catalog deletion
   remains catalog/thumbnail-only. Review incomplete/orphan remote videos and delete
   confirmed unused objects manually in Bunny dashboard after retention approval.
-  Keep completed session audit rows; retries cannot republish a subsequently deleted
-  or moderated video. Reselecting a file whose video was deleted is refused with an
-  explanation; rename the file to deliberately upload it again.
+  Completed session audit rows are kept, and retries cannot republish a
+  subsequently deleted or moderated video: only an explicit reselection of the
+  source file starts a new upload for it.
 
 ### 6. Legacy media migration report/workflow
 

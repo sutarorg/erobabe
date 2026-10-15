@@ -34,7 +34,19 @@ export async function POST(req: NextRequest) {
       .single();
     if (error || !session)
       throw new BunnyError("Upload session not found.", 404);
-    if (session.state === "completed")
+    if (session.state === "completed") {
+      // Deleting the catalog video nulls video_id; a deleted video is never
+      // reported as published, and confirming never resurrects it. Selecting
+      // the file again in Admin → Upload starts a new session for it.
+      if (!session.video_id)
+        throw Object.assign(
+          new BunnyError(
+            "This file's video was deleted from the video library, so there is nothing left to confirm. Retry to upload the file again as a new video.",
+            409,
+          ),
+          // Lets the uploader re-arm the queue entry instead of matching prose.
+          { code: "video_deleted" },
+        );
       return NextResponse.json(
         {
           videoId: session.video_id,
@@ -45,6 +57,7 @@ export async function POST(req: NextRequest) {
         },
         { headers: { "Cache-Control": "no-store" } },
       );
+    }
     if (session.state === "cancelled")
       throw new BunnyError("This upload session was cancelled.", 409);
     if (!session.provider_id)
@@ -218,7 +231,7 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const r = providerError(e);
     return NextResponse.json(
-      { error: r.error },
+      { error: r.error, ...(r.code ? { code: r.code } : {}) },
       {
         status: r.status,
         headers: {
