@@ -36,7 +36,13 @@ export async function POST(req: NextRequest) {
       throw new BunnyError("Upload session not found.", 404);
     if (session.state === "completed")
       return NextResponse.json(
-        { videoId: session.video_id, slug: session.video_slug },
+        {
+          videoId: session.video_id,
+          slug: session.video_slug,
+          status: "published",
+          visibility: "public",
+          published: true,
+        },
         { headers: { "Cache-Control": "no-store" } },
       );
     if (session.state === "cancelled")
@@ -203,9 +209,12 @@ export async function POST(req: NextRequest) {
         "Bunny Finished, but database persistence failed. Retry confirmation without re-uploading video.",
       );
     revalidatePublicTag("videos");
-    return NextResponse.json(data, {
-      headers: { "Cache-Control": "no-store" },
-    });
+    return NextResponse.json(
+      { ...data, status: "published", visibility: "public", published: true },
+      {
+        headers: { "Cache-Control": "no-store" },
+      },
+    );
   } catch (e) {
     const r = providerError(e);
     return NextResponse.json(

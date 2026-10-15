@@ -4,7 +4,6 @@ import Link from "next/link";
 import Categories from "@/src/components/Categories";
 import Hero from "@/src/components/Hero";
 import VideoSection from "@/src/components/VideoSection";
-import InlineAd from "@/src/components/InlineAd";
 import PublicVideoCard from "@/src/components/PublicVideoCard";
 import FourRowVideoGrid from "@/src/components/FourRowVideoGrid";
 import {
@@ -134,10 +133,6 @@ export default async function HomePage({
           </FourRowVideoGrid>
         </VideoSection>
       </section>
-
-      <div className="mt-8">
-        <InlineAd />
-      </div>
 
       <section className="mt-8">
         <VideoSection title="Latest Videos">

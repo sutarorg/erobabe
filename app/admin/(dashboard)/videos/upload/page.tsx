@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { UploadCloud, CheckCircle2, LoaderCircle, X } from "lucide-react";
+import { UploadCloud, CheckCircle2, LoaderCircle, Sparkles, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { validateVideo, type UploadPolicy } from "@/lib/video/bunny-validation";
+import { generateCategoryFallbackMetadata } from "@/lib/metadata/suggestion";
 import { localVideoThumbnail } from "@/src/utils/localVideoThumbnail";
 import {
   uploadBunnyVideo,
@@ -21,10 +22,14 @@ type Phase =
   | "Completed"
   | "Failed"
   | "Cancelled";
+
 type Item = {
   id: string;
   file: File;
   title: string;
+  description?: string;
+  userEditedTitle?: boolean;
+  aiGeneratedForCategory?: string;
   phase: Phase;
   percent: number;
   thumbnail?: Blob | null;
@@ -37,17 +42,9 @@ type Item = {
   slug?: string;
   categoryId?: string;
 };
-type Recovery = {
-  id: string;
-  title: string;
-  original_name: string;
-  state: string;
-  provider_id?: string;
-  thumbnail_path?: string;
-  mime_type: string;
-  size_bytes: number;
-  category_id: string;
-};
+
+const PARALLEL_UPLOADS = 4;
+
 async function json<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, {
     method: body === undefined ? "GET" : "POST",
@@ -64,6 +61,7 @@ async function json<T>(url: string, body?: unknown): Promise<T> {
   }
   return result;
 }
+
 export default function UploadPage() {
   const [policy, setPolicy] = useState<UploadPolicy | null>(null);
   const [categories, setCategories] = useState<{ id: string; label: string }[]>(
@@ -71,20 +69,20 @@ export default function UploadPage() {
   );
   const [categoryId, setCategoryId] = useState("");
   const [items, setItems] = useState<Item[]>([]);
-  const [recovery, setRecovery] = useState<Recovery[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [dragging, setDragging] = useState(false);
   const [running, setRunning] = useState(false);
-  const [recovering, setRecovering] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const current = useRef(items);
   current.current = items;
   const controllers = useRef(new Map<string, AbortController>());
   const encodingWatchers = useRef(new Map<string, AbortController>());
+  const usedTitles = useRef(new Set<string>());
   const alive = useRef(true);
   const busy = useRef(false);
   const decodeQueue = useRef<Promise<unknown>>(Promise.resolve());
+
   function prepareThumbnail(file: File) {
     const result = decodeQueue.current.then(() =>
       alive.current
@@ -94,22 +92,26 @@ export default function UploadPage() {
     decodeQueue.current = result.catch(() => undefined);
     return result;
   }
+
   const patch = (id: string, value: Partial<Item>) => {
     current.current = current.current.map((i) =>
       i.id === id ? { ...i, ...value } : i,
     );
     if (alive.current) setItems(current.current);
   };
+
   const load = useCallback(async () => {
     try {
       const result = await json<{
         policy: UploadPolicy | null;
         configurationError: string | null;
-        sessions: Recovery[];
       }>("/api/videos/bunny/sessions");
       if (!alive.current) return;
-      setPolicy(result.policy);
-      setRecovery(result.sessions);
+      setPolicy(
+        result.policy
+          ? { ...result.policy, concurrency: PARALLEL_UPLOADS }
+          : null,
+      );
       setError(result.configurationError || "");
     } catch (e) {
       if (alive.current) setError((e as Error).message);
@@ -117,6 +119,7 @@ export default function UploadPage() {
       if (alive.current) setLoading(false);
     }
   }, []);
+
   useEffect(() => {
     alive.current = true;
     const transferControllers = controllers.current;
@@ -138,6 +141,7 @@ export default function UploadPage() {
       });
     };
   }, [load]);
+
   useEffect(() => {
     if (!running) return;
     const warn = (e: BeforeUnloadEvent) => {
@@ -147,6 +151,62 @@ export default function UploadPage() {
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
   }, [running]);
+
+  async function generateAiMetadataForItem(
+    item: Item,
+    targetCategoryId: string,
+  ): Promise<{ title: string; description: string }> {
+    const categoryLabel =
+      categories.find((c) => c.id === targetCategoryId)?.label || "Mature";
+    const existingList = Array.from(usedTitles.current);
+    try {
+      const response = await fetch("/api/metadata/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: item.file.name,
+          title: item.title,
+          category: categoryLabel,
+          existingTitles: existingList,
+        }),
+        cache: "no-store",
+      });
+      const data = await response.json().catch(() => null);
+      if (response.ok && data?.suggestion?.title) {
+        const nextTitle = String(data.suggestion.title).trim();
+        const nextDescription = String(data.suggestion.description || "").trim();
+        usedTitles.current.add(nextTitle);
+        return { title: nextTitle, description: nextDescription };
+      }
+      if (!response.ok) {
+        const fallback = generateCategoryFallbackMetadata(
+          item.file.name,
+          categoryLabel,
+          existingList,
+        );
+        usedTitles.current.add(fallback.title);
+        return { title: fallback.title, description: fallback.description };
+      }
+    } catch {
+      const fallback = generateCategoryFallbackMetadata(
+        item.file.name,
+        categoryLabel,
+        existingList,
+      );
+      usedTitles.current.add(fallback.title);
+      return { title: fallback.title, description: fallback.description };
+    }
+    const fallback = generateCategoryFallbackMetadata(
+      item.file.name,
+      categoryLabel,
+      existingList,
+    );
+    return {
+      title: item.title,
+      description: item.description || fallback.description,
+    };
+  }
+
   async function add(files: File[]) {
     if (!policy) return;
     const accepted: Item[] = [],
@@ -166,56 +226,15 @@ export default function UploadPage() {
         )
       )
         continue;
-      let interrupted = recovery.find(
-        (r) =>
-          r.original_name === file.name &&
-          Number(r.size_bytes) === file.size &&
-          r.mime_type === file.type,
-      );
-      const savedKey = `erobabe-session:${file.name}:${file.size}:${file.lastModified}`;
-      let savedId: string | null = null;
-      try {
-        savedId = localStorage.getItem(savedKey);
-      } catch {
-        /* Storage may be unavailable. */
-      }
-      if (!interrupted && savedId) {
-        try {
-          const result = await json<{ session: Recovery | null }>(
-            `/api/videos/bunny/sessions?sessionId=${encodeURIComponent(savedId)}`,
-          );
-          if (
-            result.session &&
-            result.session.original_name === file.name &&
-            Number(result.session.size_bytes) === file.size &&
-            result.session.mime_type === file.type
-          )
-            interrupted = result.session;
-          else savedId = null;
-        } catch {
-          savedId = null;
-        }
-      }
-      const id = interrupted?.id || savedId || crypto.randomUUID();
-      if ([...current.current, ...accepted].some((i) => i.id === id)) continue;
-      try {
-        localStorage.setItem(savedKey, id);
-      } catch {
-        /* Server recovery remains available. */
-      }
+      const id = crypto.randomUUID();
       accepted.push({
         id,
-        categoryId: interrupted?.category_id,
-        thumbnailPath: interrupted?.thumbnail_path,
-
         file,
         title:
-          interrupted?.title ||
           file.name
             .replace(/\.[^.]+$/, "")
             .replace(/[_-]+/g, " ")
-            .slice(0, 240) ||
-          "Untitled",
+            .slice(0, 240) || "Untitled",
         phase: "Preparing",
         percent: 0,
       });
@@ -242,15 +261,7 @@ export default function UploadPage() {
       });
     }
   }
-  function clearSavedSession(item: Item) {
-    try {
-      localStorage.removeItem(
-        `erobabe-session:${item.file.name}:${item.file.size}:${item.file.lastModified}`,
-      );
-    } catch {
-      /* optional cache */
-    }
-  }
+
   async function watchEncoding(itemId: string) {
     if (encodingWatchers.current.has(itemId)) return;
     const watcher = new AbortController();
@@ -283,8 +294,6 @@ export default function UploadPage() {
               slug: result.slug,
               warning: undefined,
             });
-            const uploaded = current.current.find((i) => i.id === itemId);
-            if (uploaded) clearSavedSession(uploaded);
             return;
           }
           patch(itemId, {
@@ -318,6 +327,7 @@ export default function UploadPage() {
       encodingWatchers.current.delete(itemId);
     }
   }
+
   async function upload(item: Item) {
     let latest = current.current.find((i) => i.id === item.id)!;
     const controller = new AbortController();
@@ -340,17 +350,37 @@ export default function UploadPage() {
       }
       if (controller.signal.aborted) throw new UploadAbortedError();
       if (!latest.transferred) {
+        const targetCategoryId = latest.categoryId || categoryId;
         patch(item.id, {
           phase: "Preparing",
           error: undefined,
-          categoryId: latest.categoryId || categoryId,
+          categoryId: targetCategoryId,
         });
         latest = current.current.find((i) => i.id === item.id)!;
+
+        if (
+          !latest.userEditedTitle &&
+          latest.aiGeneratedForCategory !== targetCategoryId
+        ) {
+          const aiMeta = await generateAiMetadataForItem(
+            latest,
+            targetCategoryId,
+          );
+          if (controller.signal.aborted) throw new UploadAbortedError();
+          patch(item.id, {
+            title: aiMeta.title,
+            description: aiMeta.description,
+            aiGeneratedForCategory: targetCategoryId,
+          });
+          latest = current.current.find((i) => i.id === item.id)!;
+        }
+
         const session = await json<BunnyUploadTarget>(
           "/api/videos/bunny/sessions",
           {
             sessionId: item.id,
-            title: item.title,
+            title: latest.title,
+            ...(latest.description ? { description: latest.description } : {}),
             originalName: item.file.name,
             mimeType: item.file.type,
             sizeBytes: item.file.size,
@@ -422,7 +452,6 @@ export default function UploadPage() {
           slug: done.slug,
           warning: undefined,
         });
-        clearSavedSession(item);
         return;
       }
       patch(item.id, {
@@ -445,7 +474,6 @@ export default function UploadPage() {
         phase: e instanceof UploadAbortedError ? "Cancelled" : "Failed",
         error: (e as Error).message,
       });
-      // Persist only a bounded diagnostic enum, never browser-supplied raw errors or bytes.
       await fetch("/api/videos/bunny/sessions", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -464,6 +492,7 @@ export default function UploadPage() {
       controllers.current.delete(item.id);
     }
   }
+
   async function start(ids?: string[]) {
     if (!policy || !categoryId || busy.current) return;
     const queue = current.current.filter(
@@ -476,54 +505,31 @@ export default function UploadPage() {
     busy.current = true;
     setRunning(true);
     let index = 0;
+    const concurrency = Math.min(PARALLEL_UPLOADS, policy.concurrency || PARALLEL_UPLOADS, queue.length);
     const worker = async () => {
       while (index < queue.length && alive.current)
         await upload(queue[index++]);
     };
     await Promise.all(
-      Array.from(
-        { length: Math.min(policy.concurrency, queue.length) },
-        worker,
-      ),
+      Array.from({ length: concurrency }, worker),
     );
     busy.current = false;
     if (alive.current) {
       setRunning(false);
-      void load();
     }
   }
-  async function recover(session: Recovery) {
-    setRecovering(session.id);
-    setError("");
-    try {
-      const result = await json<{
-        processing?: boolean;
-        providerStatus?: string;
-      }>("/api/videos/bunny/confirm", {
-        sessionId: session.id,
-        thumbnailPath: session.thumbnail_path || null,
-      });
-      if (result.processing)
-        setError(
-          `Bunny ${result.providerStatus}. The video is saved as Encoding in the video library; transcoding continues in the background.`,
-        );
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setRecovering("");
-    }
-  }
+
   const completed = items.filter((i) => i.phase === "Completed").length;
   const failed = items.filter((i) => i.phase === "Failed").length;
+
   return (
     <div className="mx-auto max-w-5xl pb-12">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Upload videos</h1>
           <p className="mt-2 text-sm text-ink-3">
-            Local files → Bunny Stream. Automatic frame thumbnails are stored in
-            Erobabe.
+            Local files → Bunny Stream with OpenRouter AI metadata and automatic
+            publishing on encoding completion.
           </p>
         </div>
         <Link href="/admin/videos" className="text-sm text-accent">
@@ -601,8 +607,8 @@ export default function UploadPage() {
         </button>
         {policy && (
           <p className="mt-4 text-xs text-ink-3">
-            {policy.mimeTypes.join(", ")} · {policy.concurrency} parallel
-            uploads · no application-level video size limit
+            {policy.mimeTypes.join(", ")} · {PARALLEL_UPLOADS} parallel uploads
+            · OpenRouter AI metadata · no application-level video size limit
           </p>
         )}
       </div>
@@ -631,10 +637,10 @@ export default function UploadPage() {
           </button>
         </div>
         <p role="status" className="text-xs text-ink-3">
-          {completed} ready for review ·{" "}
+          {completed} published ·{" "}
           {items.filter((i) => i.phase === "Encoding").length} encoding ·{" "}
           {failed} failed. Uploads continue while Bunny encodes in the
-          background.
+          background and publishes automatically.
         </p>
         {!items.length && (
           <p className="rounded-xl border border-line p-6 text-center text-sm text-ink-3">
@@ -663,16 +669,51 @@ export default function UploadPage() {
                 )}
               </div>
               <div className="min-w-0 flex-1">
-                <input
-                  aria-label={`Title for ${item.file.name}`}
-                  value={item.title}
-                  maxLength={240}
-                  disabled={
-                    running || !!item.categoryId || item.phase === "Completed"
-                  }
-                  onChange={(e) => patch(item.id, { title: e.target.value })}
-                  className="w-full rounded-lg border border-line bg-void px-3 py-2 text-sm"
-                />
+                <div className="flex items-center gap-2">
+                  <input
+                    aria-label={`Title for ${item.file.name}`}
+                    value={item.title}
+                    maxLength={240}
+                    disabled={
+                      running || !!item.categoryId || item.phase === "Completed"
+                    }
+                    onChange={(e) =>
+                      patch(item.id, {
+                        title: e.target.value,
+                        userEditedTitle: true,
+                      })
+                    }
+                    className="w-full rounded-lg border border-line bg-void px-3 py-2 text-sm"
+                  />
+                  {["Queued", "Failed", "Cancelled"].includes(item.phase) &&
+                    !running &&
+                    categoryId && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const meta = await generateAiMetadataForItem(
+                            item,
+                            categoryId,
+                          );
+                          patch(item.id, {
+                            title: meta.title,
+                            description: meta.description,
+                            aiGeneratedForCategory: categoryId,
+                            userEditedTitle: false,
+                          });
+                        }}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-line bg-void px-3 py-2 text-xs text-accent hover:border-accent/50"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" aria-hidden />
+                        AI Meta
+                      </button>
+                    )}
+                </div>
+                {item.description && (
+                  <p className="mt-1.5 text-xs leading-relaxed text-ink-2">
+                    {item.description}
+                  </p>
+                )}
                 <p className="mt-2 break-all text-xs text-ink-3">
                   {item.file.name} · {(item.file.size / 1024 / 1024).toFixed(1)}{" "}
                   MB
@@ -694,7 +735,10 @@ export default function UploadPage() {
                     ].includes(item.phase) ? (
                     <LoaderCircle className="h-4 w-4 animate-spin" />
                   ) : null}
-                  {item.phase}
+                  <span>{item.phase}</span>
+                  {item.phase === "Completed" && (
+                    <span className="text-xs text-green-400">· Published</span>
+                  )}
                   {item.phase === "Uploading"
                     ? ` · ${Math.floor(item.percent)}%`
                     : ""}
@@ -722,9 +766,17 @@ export default function UploadPage() {
                     </Link>
                   )}
                   {item.phase === "Completed" && item.slug && (
-                    <Link href="/admin/videos" className="text-accent">
-                      Review in Videos
-                    </Link>
+                    <>
+                      <Link
+                        href={`/video/${item.slug}`}
+                        className="text-accent"
+                      >
+                        View published video
+                      </Link>
+                      <Link href="/admin/videos" className="text-ink-3 hover:text-ink">
+                        View in Videos
+                      </Link>
+                    </>
                   )}
                   {["Failed", "Cancelled"].includes(item.phase) && (
                     <button
@@ -766,42 +818,6 @@ export default function UploadPage() {
           </article>
         ))}
       </section>
-      {recovery.filter((s) => !items.some((i) => i.id === s.id)).length > 0 && (
-        <section className="mt-8 rounded-xl border border-line bg-pcard p-5">
-          <h2 className="font-semibold">Recover interrupted sessions</h2>
-          <p className="mt-2 text-xs text-ink-3">
-            Re-select the same source file with Choose videos to resume transfer
-            or regenerate a missing thumbnail. Existing metadata and provider
-            identity are retained. Check and finish saves ready videos without
-            uploading again. Unknown creation outcomes require dashboard
-            reconciliation.
-          </p>
-          {recovery
-            .filter((s) => !items.some((i) => i.id === s.id))
-            .map((s) => (
-              <div
-                key={s.id}
-                className="mt-4 flex flex-wrap justify-between gap-2 text-sm"
-              >
-                <span>
-                  {s.title} · {s.state}
-                  <small className="block text-ink-3">Session {s.id}</small>
-                </span>
-                <button
-                  disabled={!!recovering || running || !s.provider_id}
-                  onClick={() => void recover(s)}
-                  className="text-accent disabled:opacity-40"
-                >
-                  {recovering === s.id
-                    ? "Checking…"
-                    : s.provider_id
-                      ? "Check and finish"
-                      : "Creation unknown — contact support"}
-                </button>
-              </div>
-            ))}
-        </section>
-      )}
     </div>
   );
 }

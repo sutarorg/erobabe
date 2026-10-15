@@ -2,7 +2,7 @@
 import { ChevronLeft, ChevronRight, LayoutGrid, Play } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HERO_SLIDES, type HeroSlide } from "../data/content";
 import { cn } from "../utils/cn";
 import ThumbImage from "./ThumbImage";
@@ -23,11 +23,15 @@ interface HeroProps {
   slides?: HeroSlide[];
 }
 
+const SWIPE_THRESHOLD_PX = 40;
+
 export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProps = {}) {
   const router = useRouter();
   const HERO_ITEMS: HeroSlide[] = slides && slides.length ? slides : HERO_SLIDES;
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
+  const swipeStartX = useRef<number | null>(null);
+  const swipeStartY = useRef<number | null>(null);
   const total = HERO_ITEMS.length;
 
   const handleExplore = useCallback(() => {
@@ -45,6 +49,32 @@ export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProp
     [total]
   );
 
+  const handleSwipeStart = useCallback((clientX: number, clientY: number) => {
+    swipeStartX.current = clientX;
+    swipeStartY.current = clientY;
+  }, []);
+
+  const handleSwipeEnd = useCallback(
+    (clientX: number, clientY: number) => {
+      if (swipeStartX.current === null || swipeStartY.current === null) return;
+      const deltaX = clientX - swipeStartX.current;
+      const deltaY = clientY - swipeStartY.current;
+      swipeStartX.current = null;
+      swipeStartY.current = null;
+      if (
+        Math.abs(deltaX) >= SWIPE_THRESHOLD_PX &&
+        Math.abs(deltaX) > Math.abs(deltaY)
+      ) {
+        if (deltaX < 0) {
+          go(index + 1);
+        } else {
+          go(index - 1);
+        }
+      }
+    },
+    [go, index]
+  );
+
   useEffect(() => {
     if (paused) return;
     const id = window.setInterval(() => go(index + 1), 6500);
@@ -55,9 +85,27 @@ export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProp
     <section
       aria-roledescription="carousel"
       aria-label="Featured highlights"
-      className="relative mt-4 h-[238px] select-none overflow-hidden rounded-[10px] border border-line bg-panel @sm:h-[256px] @2xl:h-[272px]"
+      className="relative mt-4 h-[320px] min-h-[320px] touch-pan-y select-none overflow-hidden rounded-[10px] border border-line bg-panel sm:h-[268px] sm:min-h-[268px] @sm:h-[268px] @2xl:h-[280px]"
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
+      onTouchStart={(e) => {
+        setPaused(true);
+        const touch = e.touches[0];
+        if (touch) handleSwipeStart(touch.clientX, touch.clientY);
+      }}
+      onTouchEnd={(e) => {
+        setPaused(false);
+        const touch = e.changedTouches[0];
+        if (touch) handleSwipeEnd(touch.clientX, touch.clientY);
+      }}
+      onPointerDown={(e) => {
+        if (e.pointerType === "touch") return;
+        handleSwipeStart(e.clientX, e.clientY);
+      }}
+      onPointerUp={(e) => {
+        if (e.pointerType === "touch") return;
+        handleSwipeEnd(e.clientX, e.clientY);
+      }}
     >
       {HERO_ITEMS.map((slide, i) => {
         const active = i === index;
@@ -78,20 +126,20 @@ export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProp
             />
             {/* Readability overlays: keep the left text zone dark */}
             <div className="absolute inset-0 bg-gradient-to-r from-panel via-panel/85 to-panel/5" />
-            <div className="absolute inset-0 bg-gradient-to-t from-panel/70 via-transparent to-panel/20" />
+            <div className="absolute inset-0 bg-gradient-to-t from-panel/75 via-transparent to-panel/25" />
 
             <div className="absolute inset-0 flex items-center">
-              <div className="max-w-[78%] px-5 @sm:max-w-[64%] @2xl:max-w-[60%] @2xl:px-7">
+              <div className="w-full max-w-[92%] px-5 pt-4 pb-9 sm:max-w-[68%] sm:py-0 @sm:max-w-[64%] @2xl:max-w-[60%] @2xl:px-7">
                 <span className="inline-flex items-center rounded-full border border-accent/55 bg-accent/12 px-2.5 py-[3px] text-[10px] font-semibold uppercase tracking-[0.18em] text-accent backdrop-blur-sm">
                   {slide.eyebrow}
                 </span>
-                <h1 className="mt-3 whitespace-pre-line text-[21px] font-semibold leading-[1.14] tracking-tight text-white @sm:text-[24px] @2xl:text-[27px]">
+                <h1 className="mt-2.5 whitespace-pre-line text-[20px] font-semibold leading-[1.16] tracking-tight text-white sm:mt-3 sm:text-[24px] @sm:text-[24px] @2xl:text-[27px]">
                   {slide.headline}
                 </h1>
-                <p className="mt-2.5 max-w-[350px] text-[12px] leading-relaxed text-ink-2 @2xl:text-[13px]">
+                <p className="mt-2 max-w-[350px] text-[12px] leading-relaxed text-ink-2 sm:mt-2.5 @2xl:text-[13px]">
                   {slide.sub}
                 </p>
-                <div className="mt-4 flex flex-wrap items-center gap-2.5">
+                <div className="mt-3.5 flex flex-wrap items-center gap-2.5 sm:mt-4">
                   {slide.href ? (
                     <Link
                       href={slide.href}
@@ -144,8 +192,8 @@ export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProp
         ))}
       </div>
 
-      {/* Carousel controls */}
-      <div className="absolute bottom-3 right-3 flex items-center gap-1.5">
+      {/* Carousel controls — hidden on mobile; swipe left/right navigates on mobile */}
+      <div className="absolute bottom-3 right-3 hidden items-center gap-1.5 sm:flex @sm:flex">
         <button
           type="button"
           onClick={() => go(index - 1)}

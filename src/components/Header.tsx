@@ -217,9 +217,9 @@ export default function Header({
               <Link
                 href={dashboardTo}
                 prefetch
-                className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[13px] font-semibold text-white transition-colors hover:bg-accent-soft @sm:px-3"
+                className="flex h-8 items-center gap-1.5 rounded-md border border-line bg-transparent px-2.5 text-[13px] font-medium text-ink transition-colors hover:border-zinc-600 hover:bg-card @sm:px-3"
               >
-                <LayoutDashboard className="h-3.5 w-3.5" aria-hidden />
+                <LayoutDashboard className="h-3.5 w-3.5 text-ink-2" aria-hidden />
                 Dashboard
               </Link>
               <button

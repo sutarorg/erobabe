@@ -28,8 +28,8 @@ export default async function AboutPage() {
         <p className="mt-4 text-[13.5px] font-semibold">erobabe — founded for adults who expect better.</p>
         <p className="mt-2 text-[12.5px] leading-relaxed text-ink-3">
           We built erobabe around a simple idea: an adult site can feel like a premium product. Clean design,
-          verified content owned or licensed by the platform, and one honest ad format — ten fixed 16:9 placements,
-          never a maze of pop-unders.
+          third-party uploaded video streams hosted without intrusive clutter, and one honest ad format — ten fixed 16:9 placements,
+          never a maze of pop-unders. erobabe does not own or produce any of the videos uploaded to the platform; all rights remain with their respective third-party copyright holders.
         </p>
       </div>
 

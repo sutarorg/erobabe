@@ -53,19 +53,21 @@ export default function Categories({ activeCategory = null, onSelect, onMore, ca
       </div>
 
       {/*
-        Exactly one row: all eight cards (seven featured + More) share a single
-        eight-column track at every container width, and the cards are compact
-        enough — icon above label — to fit without horizontal scrolling.
+        On mobile: 6 cards (5 featured categories + More as the last card) in a
+        6-column row. On sm/desktop: all 8 cards (7 featured + More) in an
+        8-column row without horizontal scrolling.
       */}
-      <div className="category-grid mt-3.5 grid grid-cols-8 gap-1 @md:gap-1.5 @2xl:gap-2.5">
-        {list.map((cat) => {
+      <div className="category-grid mt-3.5 grid grid-cols-6 gap-1.5 sm:grid-cols-8 sm:gap-1 @sm:grid-cols-8 @md:gap-1.5 @2xl:gap-2.5">
+        {list.map((cat, index) => {
           const isMore = cat.label.trim().toLowerCase() === "more";
+          const hideOnMobile = !isMore && index >= 5;
           const Icon = resolveCategoryIcon(cat.icon, cat.slug || cat.label);
           const active = !isMore && activeCategory === cat.label;
           const className = cn(
-            // Compact vertical cards keep all eight categories on one row
+            // Compact vertical cards keep all categories on one row
             // without horizontal scrolling in the center content panel.
-            "group flex min-h-[58px] min-w-0 flex-col items-center justify-center gap-1.5 rounded-lg border px-0 py-1.5 text-center transition-colors duration-150 @sm:min-h-[68px] @sm:gap-2 @sm:px-0.5 @sm:py-2 @md:px-1 @2xl:min-h-[76px]",
+            hideOnMobile ? "hidden sm:flex @sm:flex" : "flex",
+            "group min-h-[58px] min-w-0 flex-col items-center justify-center gap-1.5 rounded-lg border px-0 py-1.5 text-center transition-colors duration-150 @sm:min-h-[68px] @sm:gap-2 @sm:px-0.5 @sm:py-2 @md:px-1 @2xl:min-h-[76px]",
             active
               ? "border-accent/70 bg-accent/8"
               : "border-line bg-card hover:border-accent/45 hover:bg-card-hover"

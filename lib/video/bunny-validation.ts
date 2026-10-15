@@ -23,6 +23,7 @@ export const sessionInput = z
     sizeBytes: z.number().int().positive().refine(Number.isSafeInteger),
     durationSeconds: z.number().int().nonnegative().max(2147483647).optional(),
     categoryId: z.string().uuid(),
+    description: z.string().trim().max(1000).optional(),
   })
   .strict();
 export function validateVideo(

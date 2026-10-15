@@ -20,6 +20,13 @@ const INFO_LINKS: { label: string; path: string; href: string }[] = [
   { label: "About Us", path: "about", href: "/about" },
   { label: "Privacy Policy", path: "privacy", href: "/privacy" },
   { label: "Terms of Service", path: "terms", href: "/terms" },
+  { label: "DMCA Notice", path: "dmca", href: "/dmca" },
+  { label: "18 U.S.C. 2257", path: "2257", href: "/2257" },
+  {
+    label: "Parental Controls",
+    path: "parental-controls",
+    href: "/parental-controls",
+  },
 ];
 
 const SUPPORT_LINKS: { label: string; path: string; href: string }[] = [
@@ -160,7 +167,8 @@ export default function Footer({
 
         <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
           <p className="text-[11.5px] text-ink-3">
-            © 2026 erobabe. All rights reserved.
+            © 2026 erobabe. All rights reserved. erobabe does not own or produce
+            any uploaded videos.
           </p>
           <span className="inline-flex items-center rounded border border-accent/45 bg-accent/8 px-2 py-1 text-[10px] font-semibold tracking-[0.14em] text-accent">
             18+ ADULTS ONLY

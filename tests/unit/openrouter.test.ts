@@ -170,7 +170,7 @@ describe("suggestVideoMetadata", () => {
     expect(messages[0].content).toContain('The admin has already chosen the category "Boudoir"');
     expect(messages[0].content).toMatch(/ONE clause/i);
     expect(messages[0].content).toMatch(/Never use a hyphen, en dash, em dash/i);
-    expect(messages[0].content).toMatch(/softly lit portrait/i);
+    expect(messages[0].content).toMatch(/softly lit bedroom scene/i);
   });
 
   it("keeps the admin's category when the model answers with a different one", async () => {

@@ -139,8 +139,8 @@ export default function VideoManager({
                     ? {
                         ...video,
                         slug: payload.slug,
-                        status: "pending_review",
-                        visibility: "private",
+                        status: "published",
+                        visibility: "public",
                         provider_progress: 100,
                         provider_error: null,
                       }
@@ -912,7 +912,7 @@ export default function VideoManager({
                           </Link>
                         ) : (
                           <span className="text-[11px] text-ink-3">
-                            Private — review required
+                            Unpublished
                           </span>
                         )}
                         {video.provider === "bunny" &&

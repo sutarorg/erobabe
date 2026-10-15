@@ -3,7 +3,8 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { Check, ImagePlus, LoaderCircle, Plus, X } from "lucide-react";
+import { Check, ImagePlus, LoaderCircle, Plus, QrCode, X } from "lucide-react";
+import { buildPaymentUri, encodeQrCodeMatrix } from "@/src/utils/paymentQr";
 
 type Slot = {
   id: number;
@@ -16,22 +17,11 @@ type Slot = {
   available: boolean;
 };
 
-/** Asset/network combinations the server accepts (see lib/nowpayments). */
-const PAY_OPTIONS = [
-  { paymentCurrency: "USDT", chain: "ethereum", label: "USDT on Ethereum" },
-  { paymentCurrency: "USDT", chain: "tron", label: "USDT on Tron" },
-  {
-    paymentCurrency: "USDT",
-    chain: "binance",
-    label: "USDT on BNB Smart Chain",
-  },
-  { paymentCurrency: "USDT", chain: "solana", label: "USDT on Solana" },
-  { paymentCurrency: "BTC", chain: "bitcoin", label: "BTC on Bitcoin" },
-  { paymentCurrency: "ETH", chain: "ethereum", label: "ETH on Ethereum" },
-  { paymentCurrency: "TRX", chain: "tron", label: "TRX on Tron" },
-  { paymentCurrency: "BNB", chain: "binance", label: "BNB on BNB Smart Chain" },
-  { paymentCurrency: "SOL", chain: "solana", label: "SOL on Solana" },
-];
+/** Default asset/network: USDT on Ethereum. */
+const DEFAULT_PAYMENT = {
+  paymentCurrency: "USDT",
+  chain: "ethereum",
+} as const;
 
 type PaymentState =
   | "awaiting_payment"
@@ -85,6 +75,89 @@ function stateBanner(state: PaymentState | null): {
   }
 }
 
+function PaymentQrCode({
+  address,
+  amount,
+  priceUSD,
+  paymentCurrency,
+  chain,
+}: {
+  address: string;
+  amount: string | number;
+  priceUSD: string | number;
+  paymentCurrency?: string;
+  chain?: string;
+}) {
+  const paymentUri = useMemo(
+    () =>
+      buildPaymentUri({
+        address,
+        amount,
+        priceUSD,
+        paymentCurrency: paymentCurrency || DEFAULT_PAYMENT.paymentCurrency,
+        chain: chain || DEFAULT_PAYMENT.chain,
+      }),
+    [address, amount, priceUSD, paymentCurrency, chain],
+  );
+  const matrix = useMemo(() => encodeQrCodeMatrix(paymentUri), [paymentUri]);
+  const quietZone = 3;
+  const viewBoxSize = matrix.length + quietZone * 2;
+  const currencyLabel = paymentCurrency || DEFAULT_PAYMENT.paymentCurrency;
+  const payableAmount = String(amount ?? priceUSD);
+
+  return (
+    <div
+      data-testid="payment-qr-section"
+      data-payment-uri={paymentUri}
+      data-payable-amount={payableAmount}
+      className="flex flex-col items-center rounded-lg border border-line bg-void p-4 text-center"
+    >
+      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-ink-2">
+        <QrCode aria-hidden="true" className="h-3.5 w-3.5 text-accent" />
+        <span>Scan QR Code to Pay</span>
+      </div>
+      <div className="rounded-lg bg-white p-2.5 shadow-sm">
+        <svg
+          role="img"
+          aria-label={`Payment QR code for ${payableAmount} ${currencyLabel} ($${priceUSD} USD) to ${address}`}
+          viewBox={`0 0 ${viewBoxSize} ${viewBoxSize}`}
+          className="h-44 w-44"
+          shapeRendering="crispEdges"
+        >
+          <rect width={viewBoxSize} height={viewBoxSize} fill="#ffffff" />
+          {matrix.map((row, r) =>
+            row.map((dark, c) =>
+              dark ? (
+                <rect
+                  key={`${r}-${c}`}
+                  x={c + quietZone}
+                  y={r + quietZone}
+                  width={1}
+                  height={1}
+                  fill="#000000"
+                />
+              ) : null,
+            ),
+          )}
+        </svg>
+      </div>
+      <p className="mt-3 text-[13px] font-semibold text-ink">
+        Payable amount: {payableAmount} {currencyLabel} (${priceUSD} USD)
+      </p>
+      <p className="mt-1 text-[11px] text-ink-3">
+        Scan with your payment or wallet app to pre-fill the exact payable
+        amount and recipient address.
+      </p>
+      <a
+        href={paymentUri}
+        className="mt-2.5 inline-flex h-8 items-center justify-center rounded-md border border-line bg-card px-3 text-[11px] font-medium text-ink hover:border-ink-3"
+      >
+        Open in payment app ({payableAmount} {currencyLabel})
+      </a>
+    </div>
+  );
+}
+
 function NewCampaignForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -99,7 +172,6 @@ function NewCampaignForm() {
   const [slotsLoading, setSlotsLoading] = useState(true);
   const [error, setError] = useState("");
   const [paymentInfo, setPaymentInfo] = useState<any>(null);
-  const [payOption, setPayOption] = useState(0);
   const [paymentState, setPaymentState] = useState<PaymentState | null>(null);
 
   useEffect(() => {
@@ -278,7 +350,6 @@ function NewCampaignForm() {
         throw new Error(campaignError?.message || "Unable to create campaigns");
       campaignIds = campaigns.map((campaign: any) => campaign.id);
 
-      const selected = PAY_OPTIONS[payOption] || PAY_OPTIONS[0];
       const response = await fetch("/api/nowpayments/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -286,8 +357,8 @@ function NewCampaignForm() {
           campaignIds,
           slotIds: selectedSlotIds,
           durationMonths: duration,
-          paymentCurrency: selected.paymentCurrency,
-          chain: selected.chain,
+          paymentCurrency: DEFAULT_PAYMENT.paymentCurrency,
+          chain: DEFAULT_PAYMENT.chain,
         }),
       });
       const json = await response.json();
@@ -375,6 +446,17 @@ function NewCampaignForm() {
             )}
             {banner.text}
           </div>
+
+          <PaymentQrCode
+            address={paymentInfo.address}
+            amount={paymentInfo.amount}
+            priceUSD={paymentInfo.priceUSD}
+            paymentCurrency={
+              paymentInfo.paymentCurrency || DEFAULT_PAYMENT.paymentCurrency
+            }
+            chain={paymentInfo.chain || DEFAULT_PAYMENT.chain}
+          />
+
           <div>
             <p className="text-[11px] text-ink-3">Selected slots</p>
             <p className="mt-1 text-[14px] font-semibold">
@@ -389,8 +471,9 @@ function NewCampaignForm() {
               ${paymentInfo.priceUSD} USD
             </p>
             <p className="text-[12px]">
-              {paymentInfo.amount} {paymentInfo.paymentCurrency} on{" "}
-              {paymentInfo.network || paymentInfo.chain}
+              {paymentInfo.amount}{" "}
+              {paymentInfo.paymentCurrency || DEFAULT_PAYMENT.paymentCurrency}{" "}
+              on {paymentInfo.network || paymentInfo.chain || "Ethereum"}
             </p>
           </div>
           <div>
@@ -407,9 +490,9 @@ function NewCampaignForm() {
             </button>
           </div>
           <div className="rounded-md bg-amber-500/10 p-3 text-[11px] text-amber-200">
-            Send exactly the displayed amount on the selected network. The
-            campaign activates only after NOWPayments confirms the payment and
-            the creative review completes.
+            Send exactly the displayed amount on the Ethereum network (USDT).
+            The campaign activates only after NOWPayments confirms the payment
+            and the creative review completes.
           </div>
           <p className="text-[11px] text-ink-3">
             Invoice: {paymentInfo.invoiceNumber} • Expires:{" "}
@@ -567,29 +650,6 @@ function NewCampaignForm() {
                 <option value={6}>6 months</option>
                 <option value={12}>12 months</option>
               </select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[11px] font-medium">
-                Payment asset & network *
-              </span>
-              <select
-                value={payOption}
-                onChange={(event) => setPayOption(Number(event.target.value))}
-                className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]"
-              >
-                {PAY_OPTIONS.map((option, index) => (
-                  <option
-                    key={`${option.paymentCurrency}-${option.chain}`}
-                    value={index}
-                  >
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <span className="mt-1 block text-[10.5px] text-ink-3">
-                Pay with crypto via NOWPayments. Send exactly the quoted amount
-                on this network.
-              </span>
             </label>
             <label className="block">
               <span className="mb-1 block text-[11px] font-medium">

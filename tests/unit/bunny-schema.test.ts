@@ -42,7 +42,7 @@ describe("Bunny migration against all actual checked-in migrations", () => {
           bunny_library_id: "123",
           mime_type: "video/mp4",
           size_bytes: 100,
-          status: "pending_review",
+          status: "published",
         },
       ]);
       expect(
@@ -53,9 +53,9 @@ describe("Bunny migration against all actual checked-in migrations", () => {
         ).rows,
       ).toEqual([
         {
-          visibility: "private",
-          rights_status: "pending",
-          moderation_status: "pending",
+          visibility: "public",
+          rights_status: "cleared",
+          moderation_status: "approved",
         },
       ]);
       await db.query(
