@@ -1,3 +1,4 @@
+import { FIXED_CATEGORIES } from "./fixed-categories";
 import { unstable_cache } from "next/cache";
 import { tryCreateServiceClient } from "@/lib/supabase/server";
 
@@ -135,7 +136,7 @@ async function loadCategories(): Promise<PublicCategory[]> {
   let rows: any[] | null = null;
   const withImage = await supabase
     .from("categories")
-    .select("id, label, slug, icon, image_url, video_count")
+    .select("id, label, slug, icon, image_url, description, video_count")
     .order("label");
   if (withImage.error) {
     const withoutImage = await supabase
@@ -148,7 +149,7 @@ async function loadCategories(): Promise<PublicCategory[]> {
   }
 
   return Promise.all(
-    (rows || []).map(async (row: any) => {
+    (rows || []).sort((a, b) => FIXED_CATEGORIES.findIndex(c => c.slug === a.slug) - FIXED_CATEGORIES.findIndex(c => c.slug === b.slug)).map(async (row: any) => {
       const storedCount = Number(row.video_count) || 0;
       const publicCount = await countPublicVideos(supabase, String(row.id));
       return {
@@ -156,6 +157,7 @@ async function loadCategories(): Promise<PublicCategory[]> {
         label: String(row.label),
         slug: String(row.slug || ""),
         icon: row.icon ? String(row.icon) : null,
+        description: row.description || null,
         image_url: row.image_url ? String(row.image_url) : null,
         video_count: publicCount ?? storedCount,
       };

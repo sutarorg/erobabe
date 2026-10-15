@@ -1,3 +1,8 @@
+import VideoComments from "@/src/components/VideoComments";
+import LatestVideoFeed from "@/src/components/LatestVideoFeed";
+import WatchCategories from "@/src/components/WatchCategories";
+import { watchFeed } from "@/lib/public/watch-feed";
+import { getPublicCategories } from "@/lib/public/catalog";
 import ViewTracker from "@/src/components/ViewTracker";
 import { createClient } from "@/lib/supabase/server";
 import { selectPlaybackSource } from "@/lib/video/playback";
@@ -104,6 +109,12 @@ export default async function VideoPage({
     .neq("id", video.id)
     .order("published_at", { ascending: false })
     .limit(16);
+
+  const [recommended, rated, categories] = await Promise.all([
+    watchFeed("recommended", video.id),
+    watchFeed("rated", video.id),
+    getPublicCategories(),
+  ]);
 
   // A direct file is fetched by the browser from its own host: open that
   // connection, and start the poster, while the document is still parsing.
@@ -215,7 +226,7 @@ export default async function VideoPage({
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <VideoActions title={video.title} />
+        <VideoActions title={video.title} videoId={video.id} />
         <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
           {video.category && (
             <Link
@@ -239,32 +250,20 @@ export default async function VideoPage({
         </p>
       )}
 
-      {/* Related */}
-      {related && related.length > 0 && (
-        <section className="mt-8 border-t border-line pt-5">
-          <h2 className="text-[15px] font-semibold">More like this</h2>
-          <FourRowVideoGrid className="video-grid mt-3.5">
-            {related.map((v: any) => (
-              <PublicVideoCard
-                key={v.id}
-                video={{
-                  id: String(v.slug || v.id),
-                  slug: String(v.slug || v.id),
-                  title: String(v.title || "Untitled"),
-                  description: null,
-                  thumbnail_url: v.thumbnail_url || null,
-                  duration_seconds: v.duration_seconds ?? null,
-                  view_count: Number(v.view_count) || 0,
-                  published_at: v.published_at || null,
-                  quality: v.quality || null,
-                  category_label: null,
-                  category_slug: null,
-                }}
-              />
-            ))}
-          </FourRowVideoGrid>
-        </section>
-      )}
+      <VideoComments key={video.id} videoId={video.id} />
+      {[
+        { title: "More like this", videos: (related || []).map((v: any) => ({ ...v, description: null, category_label: null, category_slug: null })) },
+        { title: "Recommended", videos: recommended.videos },
+        { title: "Top Rated", videos: rated.videos },
+      ].map(section => <section key={section.title} className="mt-8 border-t border-line pt-5">
+        <h2 className="text-[15px] font-semibold">{section.title}</h2>
+        <FourRowVideoGrid className="video-grid mt-3.5">
+          {section.videos.map((v: any) => <PublicVideoCard key={v.id} video={v} />)}
+        </FourRowVideoGrid>
+        {!section.videos.length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
+      </section>)}
+      <WatchCategories categories={categories} />
+      <LatestVideoFeed key={video.id} videoId={video.id} />
     </div>
   );
 }

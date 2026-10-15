@@ -1,11 +1,13 @@
 "use client";
 import { Check, Share2, ThumbsUp } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { anonymousProfile } from "../utils/anonymousProfile";
 import { cn } from "../utils/cn";
 
 interface VideoActionsProps {
   /** Video title, used as the share sheet title. */
   title: string;
+  videoId?: string;
 }
 
 /**
@@ -43,8 +45,14 @@ async function copyLink(text: string): Promise<boolean> {
  * Share uses the native share sheet when the browser offers one and falls back
  * to copying the page URL.
  */
-export default function VideoActions({ title }: VideoActionsProps) {
+export default function VideoActions({ title, videoId }: VideoActionsProps) {
+  const [copyError, setCopyError] = useState("");
   const [liked, setLiked] = useState(false);
+  const [ratingBusy, setRatingBusy] = useState(false);
+  const [ratingError, setRatingError] = useState("");
+  useEffect(() => {
+    try { setLiked(localStorage.getItem(`video-like:${videoId}`) === "true"); } catch { /* storage unavailable */ }
+  }, [videoId]);
   const [shared, setShared] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -62,27 +70,32 @@ export default function VideoActions({ title }: VideoActionsProps) {
   }, []);
 
   const share = useCallback(async () => {
+    setCopyError("");
     const url = typeof window === "undefined" ? "" : window.location.href;
 
-    try {
-      if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-        await navigator.share({ title, url });
-        flashShared();
-        return;
-      }
-    } catch {
-      // The user dismissed the share sheet — nothing to report.
-      return;
-    }
-
     if (await copyLink(url)) flashShared();
+    else setCopyError("Couldn't copy the link. Copy the address from your browser.");
+    try {
+      if (typeof navigator.share === "function") await navigator.share({ title, url });
+    } catch { /* Copy remains successful even when the share sheet is dismissed. */ }
   }, [flashShared, title]);
 
   return (
     <div className="flex flex-wrap items-center gap-2">
       <button
         type="button"
-        onClick={() => setLiked((current) => !current)}
+        disabled={ratingBusy}
+        onClick={async () => {
+          if (!videoId) return;
+          setRatingBusy(true); setRatingError("");
+          try {
+            const res = await fetch("/api/community", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ videoId, visitorId: anonymousProfile().id, liked: !liked }) });
+            if (!res.ok) throw new Error("Unable to save your like. Please retry.");
+            setLiked(!liked);
+            try { localStorage.setItem(`video-like:${videoId}`, String(!liked)); } catch { /* storage unavailable */ }
+          } catch { setRatingError("Unable to save your like. Please retry."); }
+          finally { setRatingBusy(false); }
+        }}
         aria-pressed={liked}
         className={cn(
           "flex h-8 items-center gap-1.5 rounded-md border px-3 text-[12px] font-medium transition-colors",
@@ -95,6 +108,8 @@ export default function VideoActions({ title }: VideoActionsProps) {
         {liked ? "Liked" : "Like"}
       </button>
 
+      {ratingError && <p role="status" className="text-xs text-ink-3">{ratingError}</p>}
+      {copyError && <p role="status" className="text-xs text-ink-3">{copyError}</p>}
       <button
         type="button"
         onClick={share}

@@ -44,6 +44,14 @@ export const CATEGORY_ICONS: Record<string, LucideIcon> = {
 
 /** Used when a category has no `icon` value stored. */
 const ICON_BY_SLUG: Record<string, LucideIcon> = {
+  milf: Wine,
+  japanese: Flower2,
+  "teen-18plus": Sparkles,
+  hentai: Drama,
+  ebony: UserRound,
+  "big-ass": Flame,
+  threesome: Users,
+  hardcore: VenetianMask,
   mature: Flame,
   amateur: Camera,
   pov: Eye,
