@@ -433,6 +433,10 @@ describe("re-selected files resume their session instead of failing to reserve",
   const NEW_ID = "55555555-5555-4555-8555-555555555555";
   const OTHER_CATEGORY = "66666666-6666-4666-8666-666666666666";
   const SETTLED = "2026-01-01T00:00:00.000Z";
+  /** The Bunny video of a session whose catalog video was deleted. */
+  const DELETED_REMOTE = "77777777-7777-4777-8777-777777777777";
+  /** The replacement Bunny video created when that file is uploaded again. */
+  const NEW_REMOTE = "88888888-8888-4888-8888-888888888888";
   const sessions = (body: Record<string, unknown>) =>
     create(jsonRequest("/api/videos/bunny/sessions", { ...metadata, ...body }));
   afterEach(() => {
@@ -515,18 +519,114 @@ describe("re-selected files resume their session instead of failing to reserve",
     expect(h.db.bunny_uploads).toHaveLength(1);
   });
 
-  it("explains how to re-upload a file whose video was deleted", async () => {
+  it("starts a fresh upload for a file whose video was deleted (no rename needed)", async () => {
+    seed("completed");
+    Object.assign(h.db.bunny_uploads[0], {
+      video_id: null,
+      video_slug: "clip-video",
+      provider_id: DELETED_REMOTE,
+    });
+    fetchMock.mockResolvedValue(Response.json({ ...remote, guid: NEW_REMOTE }));
+    const response = await sessions({
+      sessionId: NEW_ID,
+      title: "Second release",
+    });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body).toMatchObject({ sessionId: NEW_ID, videoId: NEW_REMOTE });
+    expect(body.warning).toMatch(/earlier upload was deleted/);
+    // A brand-new Bunny video is created; the deleted one is never resurrected.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1].method).toBe("POST");
+    expect(fetchMock.mock.calls[0][1].body).toContain(NEW_ID);
+    expect(h.db.bunny_uploads).toHaveLength(1);
+    expect(h.db.bunny_uploads[0]).toMatchObject({
+      id: NEW_ID,
+      state: "uploading",
+      provider_id: NEW_REMOTE,
+      title: "Second release",
+      original_name: "clip.mp4",
+    });
+    // The cleared session stays on the audit trail with its deleted identity.
+    expect(h.db.audit_logs).toHaveLength(1);
+    expect(h.db.audit_logs[0]).toMatchObject({
+      action: "bunny_upload_session_cleared",
+      target_type: "upload_session",
+      target_id: ID,
+      actor_id: ADMIN_ID,
+      level: "info",
+    });
+    expect(h.db.audit_logs[0].metadata).toMatchObject({
+      provider_id: DELETED_REMOTE,
+      video_slug: "clip-video",
+      original_name: "clip.mp4",
+    });
+  });
+
+  it("gives the re-armed upload of a stale session ID its own identity", async () => {
+    seed("completed");
+    Object.assign(h.db.bunny_uploads[0], { video_id: null });
+    fetchMock.mockResolvedValue(Response.json({ ...remote, guid: NEW_REMOTE }));
+    // The browser still holds the deleted session's ID (Retry, no reload).
+    const response = await sessions({ sessionId: ID });
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body.videoId).toBe(NEW_REMOTE);
+    // The deleted video's catalog ID and slug are never reused for the new one.
+    expect(body.sessionId).not.toBe(ID);
+    expect(fetchMock.mock.calls[0][1].body).toContain(body.sessionId);
+    expect(h.db.bunny_uploads).toHaveLength(1);
+    expect(h.db.bunny_uploads[0]).toMatchObject({
+      id: body.sessionId,
+      state: "uploading",
+      provider_id: NEW_REMOTE,
+    });
+  });
+
+  it("keeps a completed session whose catalog video still exists", async () => {
+    seed("completed");
+    // The link was dropped but the catalog row survives: never discard it.
+    Object.assign(h.db.bunny_uploads[0], { video_id: null });
+    h.db.videos.push({ id: ID, provider: "bunny", provider_file_id: REMOTE });
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatch(/still in the video library/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.db.bunny_uploads).toHaveLength(1);
+    expect(h.db.audit_logs).toHaveLength(0);
+  });
+
+  it("keeps a completed session whose Bunny video another catalog entry uses", async () => {
+    seed("completed");
+    Object.assign(h.db.bunny_uploads[0], { video_id: null });
+    h.db.videos.push({
+      id: "99999999-9999-4999-8999-999999999999",
+      provider: "bunny",
+      provider_file_id: REMOTE,
+    });
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatch(/still used by a video/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.db.bunny_uploads).toHaveLength(1);
+  });
+
+  it("refuses to confirm a session whose video was deleted", async () => {
     seed("completed");
     Object.assign(h.db.bunny_uploads[0], {
       video_id: null,
       video_slug: "clip-video",
     });
-    const response = await sessions({ sessionId: NEW_ID });
-    expect(response.status).toBe(409);
-    expect((await response.json()).error).toMatch(
-      /video was later deleted.*rename the file/,
+    const response = await confirm(
+      jsonRequest("/api/videos/bunny/confirm", { sessionId: ID }),
     );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: "video_deleted",
+      error: expect.stringMatching(/deleted from the video library/),
+    });
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.service.rpc).not.toHaveBeenCalled();
   });
 
   it("still rejects a different file sent with an existing session ID", async () => {
@@ -562,6 +662,35 @@ describe("re-selected files resume their session instead of failing to reserve",
       true,
     );
     expect(h.db.bunny_uploads.map((row) => row.id)).toEqual([ID]);
+  });
+
+  it("reserves the file itself when the conflicting session was deleted", async () => {
+    const realFrom = h.service.from;
+    let raced = false;
+    h.service.from = (table: string) => {
+      const query = realFrom(table);
+      if (table === "bunny_uploads" && !raced) {
+        const insert = query.insert.bind(query);
+        // The blocking row appears only at insert time: a completed session
+        // whose catalog video was deleted, which clearing then frees.
+        query.insert = (values: Record<string, unknown>) => {
+          raced = true;
+          seed("completed");
+          h.db.bunny_uploads[0].video_id = null;
+          return insert(values);
+        };
+      }
+      return query;
+    };
+    fetchMock.mockResolvedValue(Response.json({ ...remote, guid: NEW_REMOTE }));
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(raced).toBe(true);
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    expect(body).toMatchObject({ sessionId: NEW_ID, videoId: NEW_REMOTE });
+    expect(body.warning).toMatch(/earlier upload was deleted/);
+    expect(h.db.bunny_uploads.map((row) => row.id)).toEqual([NEW_ID]);
+    expect(h.db.audit_logs.map((row) => row.target_id)).toEqual([ID]);
   });
 
   it("uploads without the AI description when migration 19 is missing, and says so", async () => {

@@ -48,6 +48,16 @@ const PARALLEL_UPLOADS = 4;
 /** Another queue entry already owns the server session for the same source file. */
 class DuplicateQueueEntryError extends Error {}
 
+/** A route failure carrying the machine-readable code a client may act on. */
+class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
+
 async function json<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, {
     method: body === undefined ? "GET" : "POST",
@@ -58,8 +68,9 @@ async function json<T>(url: string, body?: unknown): Promise<T> {
   const result = await response.json();
   if (!response.ok) {
     const after = response.headers.get("retry-after");
-    throw new Error(
+    throw new ApiError(
       `${result.error || "Request failed."}${after ? ` Retry after ${after} seconds.` : ""}`,
+      typeof result.code === "string" ? result.code : undefined,
     );
   }
   return result;
@@ -499,6 +510,10 @@ export default function UploadPage() {
       // starts immediately instead of waiting for Bunny's transcoder.
       void watchEncoding(sessionId);
     } catch (e) {
+      // Its catalog video was deleted, so a retry must transfer a new video:
+      // drop the transferred state and the server re-arms a fresh session for
+      // the same file (no rename needed).
+      const videoDeleted = e instanceof ApiError && e.code === "video_deleted";
       if (
         /Thumbnail (storage failed|generation required)/i.test(
           (e as Error).message,
@@ -508,9 +523,12 @@ export default function UploadPage() {
       patch(sessionId, {
         phase: e instanceof UploadAbortedError ? "Cancelled" : "Failed",
         error: (e as Error).message,
+        ...(videoDeleted ? { transferred: false, slug: undefined } : {}),
       });
       // The shared session belongs to the other queue entry; leave it untouched.
       if (e instanceof DuplicateQueueEntryError) return;
+      // That session is completed server-side, so a lifecycle report cannot apply.
+      if (videoDeleted) return;
       await fetch("/api/videos/bunny/sessions", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -842,21 +860,26 @@ export default function UploadPage() {
                       Cancel transfer
                     </button>
                   )}
-                  {["Queued", "Preparing"].includes(item.phase) && !running && (
-                    <button
-                      onClick={() => {
-                        if (item.preview) URL.revokeObjectURL(item.preview);
-                        current.current = current.current.filter(
-                          (i) => i.id !== item.id,
-                        );
-                        setItems(current.current);
-                      }}
-                      className="inline-flex items-center gap-1 text-ink-3"
-                    >
-                      <X className="h-3 w-3" />
-                      Remove
-                    </button>
-                  )}
+                  {/* A finished entry can be dropped so the same file can be
+                      selected again (for example after its video was deleted
+                      in Admin → Videos); only the queue entry goes, never the
+                      published video. */}
+                  {["Queued", "Preparing", "Completed"].includes(item.phase) &&
+                    !running && (
+                      <button
+                        onClick={() => {
+                          if (item.preview) URL.revokeObjectURL(item.preview);
+                          current.current = current.current.filter(
+                            (i) => i.id !== item.id,
+                          );
+                          setItems(current.current);
+                        }}
+                        className="inline-flex items-center gap-1 text-ink-3"
+                      >
+                        <X className="h-3 w-3" />
+                        Remove
+                      </button>
+                    )}
                 </div>
               </div>
             </div>
