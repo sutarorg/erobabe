@@ -6,7 +6,13 @@ vi.mock("@/lib/public/catalog", () => ({
   getPopularVideos: async () => [],
   getPublicCategories: async () => [],
   getCategoryBySlug: async () => ({
-    category: { id: "1", slug: "couples", label: "Couples", icon: "heart", description: null },
+    category: {
+      id: "1",
+      slug: "couples",
+      label: "Couples",
+      icon: "heart",
+      description: null,
+    },
     videos: [],
   }),
 }));
@@ -56,34 +62,53 @@ describe("public video listing copy", () => {
     const html = await renderPage(latestModule.default as any);
     expect(html).toMatch(/<h1[^>]*>Latest Videos<\/h1>/);
     expect(html).toContain(">Fresh This Week</p>");
-    expect(html).toContain("New scenes land every day, here is everything uploaded most recently.");
+    expect(html).toContain(
+      "New scenes land every day, here is everything uploaded most recently.",
+    );
     expect(html).not.toContain("Fresh uploads first");
   });
 
-  it("uses the requested community-favorites copy on /popular", async () => {
+  it("describes recorded views rather than inventing ratings on /popular", async () => {
     const html = await renderPage(popularModule.default as any);
-    expect(html).toMatch(/<h1[^>]*>Top Rated Videos<\/h1>/);
-    expect(html).toContain(">Community Favorites</p>");
-    expect(html).toContain("Highest-rated picks loved by our community.");
-    expect(html).not.toContain("Popular Videos");
-    expect(html).not.toContain("Most viewed");
+    expect(html).toMatch(/<h1[^>]*>Popular Videos<\/h1>/);
+    expect(html).toContain(">Most Viewed</p>");
+    expect(html).toContain(
+      "Published videos ordered by recorded watch-page views.",
+    );
+    expect(html).not.toContain("Top Rated Videos");
+    expect(html).not.toContain("Highest-rated");
   });
 
   it.each([
     ["/categories", () => (categoriesModule.default as any)()],
     ["/latest", () => (latestModule.default as any)()],
     ["/popular", () => (popularModule.default as any)()],
-    ["/category/couples", () => (categoryModule.default as any)({ params: Promise.resolve({ slug: "couples" }) })],
+    [
+      "/category/couples",
+      () =>
+        (categoryModule.default as any)({
+          params: Promise.resolve({ slug: "couples" }),
+        }),
+    ],
     ["/about", () => (aboutModule.default as any)()],
     ["/contact", () => (contactModule.default as any)()],
     ["/content-removal", () => (removalModule.default as any)()],
     ["/faq", () => (faqModule.default as any)()],
     ["/privacy", () => (privacyModule.default as any)()],
     ["/terms", () => (termsModule.default as any)()],
-  ])("aligns tag, title, and description consistently on %s", async (_path, page) => {
-    const html = await renderPage(page);
-    expect(html).toContain('<div class="pt-4"><p class="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">');
-    expect(html).toContain('<div class="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1"><h1 class="text-[22px] font-semibold tracking-tight">');
-    expect(html).toContain('<p class="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">');
-  });
+  ])(
+    "aligns tag, title, and description consistently on %s",
+    async (_path, page) => {
+      const html = await renderPage(page);
+      expect(html).toContain(
+        '<div class="pt-4"><p class="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">',
+      );
+      expect(html).toContain(
+        '<div class="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1"><h1 class="text-[22px] font-semibold tracking-tight">',
+      );
+      expect(html).toContain(
+        '<p class="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">',
+      );
+    },
+  );
 });

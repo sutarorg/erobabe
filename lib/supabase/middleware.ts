@@ -1,14 +1,21 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-function redirectToSignIn(request: NextRequest) {
+function copySessionCookies(target: NextResponse, session: NextResponse) {
+  for (const cookie of session.cookies.getAll()) target.cookies.set(cookie);
+  return target;
+}
+
+function redirectToSignIn(request: NextRequest, session: NextResponse) {
   const url = request.nextUrl.clone();
   // Staff and advertisers sign in on different pages: an admin hitting a
   // protected /admin path is sent to the admin page, everything else to the
   // advertiser portal's front door.
-  url.pathname = request.nextUrl.pathname.startsWith("/admin") ? "/admin/signin" : "/auth/sign-in";
+  url.pathname = request.nextUrl.pathname.startsWith("/admin")
+    ? "/admin/signin"
+    : "/auth/sign-in";
   url.searchParams.set("next", request.nextUrl.pathname);
-  return NextResponse.redirect(url);
+  return copySessionCookies(NextResponse.redirect(url), session);
 }
 
 export async function updateSession(request: NextRequest) {
@@ -25,7 +32,7 @@ export async function updateSession(request: NextRequest) {
   if (!supabaseUrl || !supabaseKey) {
     // If env not configured, still allow public routes, redirect protected to sign-in for E2E tests
     if (isAdminRoute || isAdvertiserRoute) {
-      return redirectToSignIn(request);
+      return redirectToSignIn(request, supabaseResponse);
     }
     return supabaseResponse;
   }
@@ -39,12 +46,14 @@ export async function updateSession(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet: any[]) {
-          cookiesToSet.forEach(({ name, value }: any) => request.cookies.set(name, value));
+          cookiesToSet.forEach(({ name, value }: any) =>
+            request.cookies.set(name, value),
+          );
           supabaseResponse = NextResponse.next({
             request,
           });
           cookiesToSet.forEach(({ name, value, options }: any) =>
-            supabaseResponse.cookies.set(name, value, options)
+            supabaseResponse.cookies.set(name, value, options),
           );
         },
       },
@@ -56,12 +65,34 @@ export async function updateSession(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     if ((isAdminRoute || isAdvertiserRoute) && !user) {
-      return redirectToSignIn(request);
+      return redirectToSignIn(request, supabaseResponse);
     }
-  } catch (error) {
-    console.error("[middleware] Supabase session refresh failed", error);
+
+    // Layouts can remain mounted during client navigation. Check current role
+    // and suspension on EVERY protected request before service-backed pages run.
+    if (user && (isAdminRoute || isAdvertiserRoute)) {
+      const { data: profile, error } = await supabase
+        .from("profiles")
+        .select("role, status")
+        .eq("id", user.id)
+        .single();
+      if (error || !profile || profile.status !== "active") {
+        return redirectToSignIn(request, supabaseResponse);
+      }
+      if (isAdvertiserRoute && profile.role === "admin") {
+        const url = request.nextUrl.clone();
+        url.pathname = "/admin";
+        url.search = "";
+        return copySessionCookies(NextResponse.redirect(url), supabaseResponse);
+      }
+      if (profile.role !== (isAdminRoute ? "admin" : "advertiser")) {
+        return redirectToSignIn(request, supabaseResponse);
+      }
+    }
+  } catch {
+    console.error("[middleware] Protected session/profile verification failed");
     if (isAdminRoute || isAdvertiserRoute) {
-      return redirectToSignIn(request);
+      return redirectToSignIn(request, supabaseResponse);
     }
   }
 

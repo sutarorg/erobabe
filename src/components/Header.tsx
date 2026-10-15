@@ -18,7 +18,7 @@ const NAV_ITEMS: { key: NavKey; label: string }[] = [
   { key: "home", label: "Home" },
   { key: "categories", label: "Categories" },
   { key: "latest", label: "Latest" },
-  { key: "toprated", label: "Top Rated" },
+  { key: "toprated", label: "Popular" },
 ];
 
 /** The signed-in account shown in the right-hand cluster. */
@@ -91,8 +91,18 @@ export default function Header({
       <div className="relative mx-auto flex h-14 w-full max-w-[1200px] items-center gap-5 px-4 @sm:px-5 @2xl:px-7">
         {/* Brand */}
         {useLinks ? (
-          <Link href="/" prefetch className="flex shrink-0 items-center gap-2" aria-label="erobabe — home">
-            <img src={LOGO_URL} alt="erobabe logo" className="h-7 w-auto object-contain" draggable={false} />
+          <Link
+            href="/"
+            prefetch
+            className="flex shrink-0 items-center gap-2"
+            aria-label="erobabe — home"
+          >
+            <img
+              src={LOGO_URL}
+              alt="erobabe logo"
+              className="h-7 w-auto object-contain"
+              draggable={false}
+            />
             <span className="text-[15px] font-bold tracking-tight text-ink">
               erobabe<span className="text-accent">.</span>
             </span>
@@ -125,7 +135,7 @@ export default function Header({
             const active = navActive === item.key;
             const className = cn(
               "relative flex items-center px-2 text-[13px] font-medium transition-colors duration-150 min-[1000px]:px-1.5",
-              active ? "text-accent" : "text-ink-2 hover:text-ink"
+              active ? "text-accent" : "text-ink-2 hover:text-ink",
             );
             const inner = (
               <>
@@ -134,13 +144,19 @@ export default function Header({
                   aria-hidden
                   className={cn(
                     "absolute inset-x-0 bottom-0 mx-auto h-[2px] w-[18px] rounded-full bg-accent transition-opacity duration-150",
-                    active ? "opacity-100" : "opacity-0"
+                    active ? "opacity-100" : "opacity-0",
                   )}
                 />
               </>
             );
             return useLinks ? (
-              <Link key={item.key} href={NAV_HREFS[item.key]} prefetch aria-current={active ? "page" : undefined} className={className}>
+              <Link
+                key={item.key}
+                href={NAV_HREFS[item.key]}
+                prefetch
+                aria-current={active ? "page" : undefined}
+                className={className}
+              >
                 {inner}
               </Link>
             ) : (
@@ -266,12 +282,19 @@ export default function Header({
             const active = navActive === item.key;
             const className = cn(
               "flex w-full items-center justify-between rounded-md px-2 py-2.5 text-left text-[13.5px] font-medium transition-colors",
-              active ? "text-accent" : "text-ink-2 hover:bg-card hover:text-ink"
+              active
+                ? "text-accent"
+                : "text-ink-2 hover:bg-card hover:text-ink",
             );
             const inner = (
               <>
                 {item.label}
-                {active && <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />}
+                {active && (
+                  <span
+                    className="h-1.5 w-1.5 rounded-full bg-accent"
+                    aria-hidden
+                  />
+                )}
               </>
             );
             return useLinks ? (

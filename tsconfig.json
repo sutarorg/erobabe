@@ -50,15 +50,11 @@
     "src/utils/**/*.ts",
     "supabase/**/*.ts",
     "tests/**/*.ts",
-    ".next/types/**/*.ts"
+    ".next/types/**/*.ts",
+    "tests/**/*.tsx"
   ],
   "exclude": [
     "node_modules",
-    ".next",
-    "src/admin",
-    "src/portal",
-    "src/App.tsx",
-    "src/PublicSite.tsx",
-    "src/main.tsx"
+    ".next"
   ]
 }

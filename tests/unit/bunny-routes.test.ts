@@ -119,6 +119,18 @@ describe("Bunny Stream server routes (mock provider, not live acceptance)", () =
     expect(policy.concurrency).toBe(4);
     expect(policy).not.toHaveProperty("maxBytes");
   });
+  it("enforces an operator-configured size limit before creating provider media", async () => {
+    vi.stubEnv("BUNNY_UPLOAD_MAX_BYTES", "1024");
+    expect(uploadConfiguration().policy.maxBytes).toBe(1024);
+    const response = await create(
+      jsonRequest("/api/videos/bunny/sessions", {
+        ...metadata,
+        sizeBytes: 1025,
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
   it("validates key and expiration/signature exactly", () => {
     const signed = signUpload(REMOTE, "123", 1700000000000);
     expect(signed.expiration).toBe(1700086400);

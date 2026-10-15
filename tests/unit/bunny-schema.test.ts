@@ -6,7 +6,7 @@ import { uuid_ossp } from "@electric-sql/pglite/contrib/uuid_ossp";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 describe("Bunny migration against all actual checked-in migrations", () => {
-  it("applies 00–13 with Supabase auth/storage schema fixtures and completes a real-schema record", async () => {
+  it("applies every migration with Supabase auth/storage schema fixtures and completes a real-schema record", async () => {
     const db = new PGlite({ extensions: { pgcrypto, uuid_ossp } });
     try {
       // Only Supabase-managed infrastructure is stubbed; application migrations are unmodified.
@@ -15,7 +15,7 @@ describe("Bunny migration against all actual checked-in migrations", () => {
         create schema auth; create schema storage;
         create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb default '{}');
         create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
-        create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint);
+        create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
         create table storage.objects(id uuid primary key,bucket_id text,name text);
       `);
       const directory = path.resolve("supabase/migrations");
@@ -42,13 +42,57 @@ describe("Bunny migration against all actual checked-in migrations", () => {
           bunny_library_id: "123",
           mime_type: "video/mp4",
           size_bytes: 100,
-          status: "published",
+          status: "pending_review",
         },
+      ]);
+      expect(
+        (
+          await db.query(
+            "select visibility,rights_status,moderation_status from videos",
+          )
+        ).rows,
+      ).toEqual([
+        {
+          visibility: "private",
+          rights_status: "pending",
+          moderation_status: "pending",
+        },
+      ]);
+      await db.query(
+        "select publish_reviewed_bunny('22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111','owned','Fixture evidence of consent, rights and moderation reviewed')",
+      );
+      expect((await db.query("select status from videos")).rows).toEqual([
+        { status: "published" },
       ]);
       expect(
         (await db.query("select count(*)::int count from public.upload_jobs"))
           .rows,
       ).toEqual([{ count: 1 }]);
+      await db.query(
+        "select record_video_view('22222222-2222-4222-8222-222222222222','daily-test')",
+      );
+      await db.query(
+        "select record_video_view('22222222-2222-4222-8222-222222222222','daily-test')",
+      );
+      expect(
+        (await db.query("select view_count::int from videos")).rows,
+      ).toEqual([{ view_count: 1 }]);
+      await db.query(
+        "delete from videos where id='22222222-2222-4222-8222-222222222222'",
+      );
+      expect(
+        (
+          await db.query(
+            "select provider,provider_file_id,status from media_retention",
+          )
+        ).rows,
+      ).toEqual([
+        {
+          provider: "bunny",
+          provider_file_id: "44444444-4444-4444-8444-444444444444",
+          status: "pending_review",
+        },
+      ]);
     } finally {
       await db.close();
     }

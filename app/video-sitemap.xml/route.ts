@@ -12,7 +12,10 @@ export async function GET() {
     if (supabase) {
       const { data } = await supabase
         .from("videos")
-        .select("slug, title, description, thumbnail_url, published_at, duration_seconds, updated_at")
+        .select(
+          "slug, title, description, thumbnail_url, published_at, duration_seconds, updated_at",
+        )
+        .eq("requires_reupload", false)
         .eq("status", "published")
         .eq("visibility", "public")
         .eq("rights_status", "cleared")
@@ -28,11 +31,17 @@ export async function GET() {
   const xmlEntries = videos
     .map((v) => {
       const loc = `${siteUrl}/video/${v.slug}`;
-      const thumb = v.thumbnail_url ? `<video:thumbnail_loc>${escapeXml(v.thumbnail_url)}</video:thumbnail_loc>` : "";
+      const thumb = v.thumbnail_url
+        ? `<video:thumbnail_loc>${escapeXml(v.thumbnail_url)}</video:thumbnail_loc>`
+        : "";
       const title = `<video:title>${escapeXml(v.title)}</video:title>`;
       const desc = `<video:description>${escapeXml((v.description || v.title).slice(0, 200))}</video:description>`;
-      const pubDate = v.published_at ? `<video:publication_date>${new Date(v.published_at).toISOString()}</video:publication_date>` : "";
-      const duration = v.duration_seconds ? `<video:duration>${v.duration_seconds}</video:duration>` : "";
+      const pubDate = v.published_at
+        ? `<video:publication_date>${new Date(v.published_at).toISOString()}</video:publication_date>`
+        : "";
+      const duration = v.duration_seconds
+        ? `<video:duration>${v.duration_seconds}</video:duration>`
+        : "";
       const playerLoc = `<video:player_loc>${escapeXml(`${siteUrl}/video/${v.slug}`)}</video:player_loc>`;
 
       return `
@@ -61,7 +70,7 @@ ${xmlEntries}
   return new Response(xml, {
     headers: {
       "Content-Type": "application/xml",
-      "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400",
+      "Cache-Control": "public, s-maxage=30, must-revalidate",
     },
   });
 }

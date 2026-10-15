@@ -29,7 +29,10 @@ const PROVIDER_PAYMENT_ID = "5730453421";
 const PAY_ADDRESS = "0x72E4CF05e4A6b123623B7443fBF8C83BD14182f1";
 
 function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 function baseIpn(overrides: Record<string, unknown> = {}) {
@@ -65,9 +68,11 @@ function providerRecord(overrides: Record<string, unknown> = {}) {
 }
 
 /** Stubs fetch and returns the spy so tests can inspect the provider calls. */
-function stubProvider(response: Response | (() => Response | Promise<Response>)) {
+function stubProvider(
+  response: Response | (() => Response | Promise<Response>),
+) {
   const spy = vi.fn(async (..._args: unknown[]) =>
-    typeof response === "function" ? await response() : response.clone()
+    typeof response === "function" ? await response() : response.clone(),
   );
   vi.stubGlobal("fetch", spy);
   return spy;
@@ -75,21 +80,44 @@ function stubProvider(response: Response | (() => Response | Promise<Response>))
 
 function seedPayment(overrides: Record<string, unknown> = {}) {
   const fake = createFakeSupabase({
-    payments: [makePayment(overrides.payment as Record<string, unknown> | undefined)],
-    invoices: [{ id: "invoice-1", number: "INV-1", status: "pending", paid_at: null }],
-    campaigns: [{ id: "campaign-1", payment_id: "payment-1", creative_id: "creative-1", status: "pending_payment" }],
+    payments: [
+      makePayment(overrides.payment as Record<string, unknown> | undefined),
+    ],
+    invoices: [
+      { id: "invoice-1", number: "INV-1", status: "pending", paid_at: null },
+    ],
+    campaigns: [
+      {
+        id: "campaign-1",
+        payment_id: "payment-1",
+        creative_id: "creative-1",
+        status: "pending_payment",
+      },
+    ],
     ad_creatives: [{ id: "creative-1", status: "approved" }],
   });
   state.client = fake.client;
   return fake;
 }
 
-function signedRequest(ipn: Record<string, unknown>, sigOverrides: { sig?: string | null; raw?: string } = {}) {
+function signedRequest(
+  ipn: Record<string, unknown>,
+  sigOverrides: { sig?: string | null; raw?: string } = {},
+) {
   const raw = sigOverrides.raw ?? JSON.stringify(ipn);
-  const sig = sigOverrides.sig === undefined ? computeNowpaymentsSignature(JSON.parse(raw), IPN_SECRET) : sigOverrides.sig;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const sig =
+    sigOverrides.sig === undefined
+      ? computeNowpaymentsSignature(JSON.parse(raw), IPN_SECRET)
+      : sigOverrides.sig;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   if (sig !== null) headers["x-nowpayments-sig"] = sig as string;
-  return new NextRequest(IPN_URL, { method: "POST", body: raw, headers } as any);
+  return new NextRequest(IPN_URL, {
+    method: "POST",
+    body: raw,
+    headers,
+  } as any);
 }
 
 let logSpy: ReturnType<typeof vi.spyOn>;
@@ -147,11 +175,15 @@ describe("POST /api/nowpayments/ipn — signature enforcement", () => {
     const fake = seedPayment();
     stubProvider(jsonResponse(providerRecord()));
 
-    const response = await POST(signedRequest(baseIpn(), { sig: "ab".repeat(64) }));
+    const response = await POST(
+      signedRequest(baseIpn(), { sig: "ab".repeat(64) }),
+    );
 
     expect(response.status).toBe(401);
     expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
-    expect(fake.db.payment_events.some((event) => event.event_type === "confirmed")).toBe(false);
+    expect(
+      fake.db.payment_events.some((event) => event.event_type === "confirmed"),
+    ).toBe(false);
   });
 
   it("rejects a tampered payload even with the original signature", async () => {
@@ -159,9 +191,14 @@ describe("POST /api/nowpayments/ipn — signature enforcement", () => {
     stubProvider(jsonResponse(providerRecord()));
     const original = baseIpn({ payment_status: "waiting" });
     const sig = computeNowpaymentsSignature(original, IPN_SECRET);
-    const tampered = JSON.stringify({ ...original, payment_status: "finished" });
+    const tampered = JSON.stringify({
+      ...original,
+      payment_status: "finished",
+    });
 
-    const response = await POST(signedRequest(original, { sig, raw: tampered }));
+    const response = await POST(
+      signedRequest(original, { sig, raw: tampered }),
+    );
 
     expect(response.status).toBe(401);
     expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
@@ -171,7 +208,9 @@ describe("POST /api/nowpayments/ipn — signature enforcement", () => {
     const fake = seedPayment();
     stubProvider(jsonResponse(providerRecord()));
 
-    const response = await POST(signedRequest(baseIpn(), { sig: "ab".repeat(64), raw: "{not json" }));
+    const response = await POST(
+      signedRequest(baseIpn(), { sig: "ab".repeat(64), raw: "{not json" }),
+    );
 
     expect(response.status).toBe(401);
     expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
@@ -183,7 +222,9 @@ describe("POST /api/nowpayments/ipn — signature enforcement", () => {
     const fake = seedPayment();
     stubProvider(jsonResponse(providerRecord()));
 
-    const response = await POST(signedRequest(baseIpn(), { sig: "ab".repeat(64) }));
+    const response = await POST(
+      signedRequest(baseIpn(), { sig: "ab".repeat(64) }),
+    );
 
     expect(response.status).toBe(503);
     expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
@@ -198,7 +239,10 @@ describe("POST /api/nowpayments/ipn — correlation and verification", () => {
     const response = await POST(signedRequest(baseIpn()));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ status: "confirmed", paymentId: "payment-1" });
+    expect(await response.json()).toMatchObject({
+      status: "confirmed",
+      paymentId: "payment-1",
+    });
 
     expect(fake.db.payments[0].status).toBe("confirmed");
     expect(fake.db.payments[0].provider_status).toBe("finished");
@@ -206,7 +250,11 @@ describe("POST /api/nowpayments/ipn — correlation and verification", () => {
     expect(fake.db.invoices[0].status).toBe("paid");
     expect(fake.db.invoices[0].paid_at).toBeTruthy();
     expect(fake.db.campaigns[0].status).toBe("active");
-    expect(fake.db.payment_events.filter((event) => event.event_type === "confirmed")).toHaveLength(1);
+    expect(
+      fake.db.payment_events.filter(
+        (event) => event.event_type === "confirmed",
+      ),
+    ).toHaveLength(1);
   });
 
   it("moves campaigns with unapproved creatives to pending_review, not active", async () => {
@@ -222,11 +270,20 @@ describe("POST /api/nowpayments/ipn — correlation and verification", () => {
   });
 
   it("records but never fulfills intermediate statuses", async () => {
-    for (const providerStatus of ["waiting", "confirming", "confirmed", "sending"]) {
+    for (const providerStatus of [
+      "waiting",
+      "confirming",
+      "confirmed",
+      "sending",
+    ]) {
       const fake = seedPayment();
-      const fetchSpy = stubProvider(jsonResponse(providerRecord({ payment_status: providerStatus })));
+      const fetchSpy = stubProvider(
+        jsonResponse(providerRecord({ payment_status: providerStatus })),
+      );
 
-      const response = await POST(signedRequest(baseIpn({ payment_status: providerStatus })));
+      const response = await POST(
+        signedRequest(baseIpn({ payment_status: providerStatus })),
+      );
 
       expect(response.status).toBe(200);
       // The provider's intermediate `confirmed` must not mark anything paid.
@@ -245,32 +302,48 @@ describe("POST /api/nowpayments/ipn — correlation and verification", () => {
 
   it("answers unknown payments without touching known ones", async () => {
     const fake = seedPayment();
-    stubProvider(jsonResponse(providerRecord({ payment_id: "999", order_id: "INV-UNKNOWN" })));
+    stubProvider(
+      jsonResponse(
+        providerRecord({ payment_id: "999", order_id: "INV-UNKNOWN" }),
+      ),
+    );
 
-    const response = await POST(signedRequest(baseIpn({ payment_id: "999", order_id: "INV-UNKNOWN" })));
+    const response = await POST(
+      signedRequest(baseIpn({ payment_id: "999", order_id: "INV-UNKNOWN" })),
+    );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ status: "unknown_payment" });
     expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
-    expect(fake.db.audit_logs.some((log) => log.action === "nowpayments_ipn_unknown_payment")).toBe(true);
+    expect(
+      fake.db.audit_logs.some(
+        (log) => log.action === "nowpayments_ipn_unknown_payment",
+      ),
+    ).toBe(true);
   });
 
   it("rejects a mismatched order reference", async () => {
     const fake = seedPayment();
     stubProvider(jsonResponse(providerRecord()));
 
-    const response = await POST(signedRequest(baseIpn({ order_id: "INV-SOMEONE-ELSE" })));
+    const response = await POST(
+      signedRequest(baseIpn({ order_id: "INV-SOMEONE-ELSE" })),
+    );
 
     expect(response.status).toBe(400);
     expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
-    expect(fake.db.payment_events.some((event) => event.event_type === "confirmed")).toBe(false);
+    expect(
+      fake.db.payment_events.some((event) => event.event_type === "confirmed"),
+    ).toBe(false);
   });
 
   it("rejects a mismatched pay currency", async () => {
     const fake = seedPayment();
     stubProvider(jsonResponse(providerRecord()));
 
-    const response = await POST(signedRequest(baseIpn({ pay_currency: "btc" })));
+    const response = await POST(
+      signedRequest(baseIpn({ pay_currency: "btc" })),
+    );
 
     expect(response.status).toBe(400);
     expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
@@ -278,14 +351,18 @@ describe("POST /api/nowpayments/ipn — correlation and verification", () => {
 
   it("rejects a finished claim the provider does not corroborate", async () => {
     const fake = seedPayment();
-    stubProvider(jsonResponse(providerRecord({ payment_status: "confirming" })));
+    stubProvider(
+      jsonResponse(providerRecord({ payment_status: "confirming" })),
+    );
 
     const response = await POST(signedRequest(baseIpn()));
 
-    expect(response.status).toBe(200);
-    expect(fake.db.payments[0].status).not.toBe("confirmed");
+    expect(response.status).toBe(503);
+    expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
     expect(fake.db.invoices[0].status).toBe("pending");
-    expect(fake.db.payment_events.some((event) => event.event_type === "confirmed")).toBe(false);
+    expect(
+      fake.db.payment_events.some((event) => event.event_type === "confirmed"),
+    ).toBe(false);
   });
 
   it("asks for a retry when NOWPayments is unreachable", async () => {
@@ -314,9 +391,17 @@ describe("POST /api/nowpayments/ipn — correlation and verification", () => {
 
   it("never activates campaigns on partially_paid", async () => {
     const fake = seedPayment();
-    stubProvider(jsonResponse(providerRecord({ payment_status: "partially_paid", actually_paid: 10 })));
+    stubProvider(
+      jsonResponse(
+        providerRecord({ payment_status: "partially_paid", actually_paid: 10 }),
+      ),
+    );
 
-    const response = await POST(signedRequest(baseIpn({ payment_status: "partially_paid", actually_paid: 10 })));
+    const response = await POST(
+      signedRequest(
+        baseIpn({ payment_status: "partially_paid", actually_paid: 10 }),
+      ),
+    );
 
     expect(response.status).toBe(200);
     expect(fake.db.payments[0].status).toBe("underpaid");
@@ -327,9 +412,13 @@ describe("POST /api/nowpayments/ipn — correlation and verification", () => {
   it("applies expired and failed outcomes with invoice/campaign side effects", async () => {
     for (const providerStatus of ["expired", "failed"] as const) {
       const fake = seedPayment();
-      stubProvider(jsonResponse(providerRecord({ payment_status: providerStatus })));
+      stubProvider(
+        jsonResponse(providerRecord({ payment_status: providerStatus })),
+      );
 
-      const response = await POST(signedRequest(baseIpn({ payment_status: providerStatus })));
+      const response = await POST(
+        signedRequest(baseIpn({ payment_status: providerStatus })),
+      );
 
       expect(response.status).toBe(200);
       expect(fake.db.payments[0].status).toBe(providerStatus);
@@ -340,13 +429,19 @@ describe("POST /api/nowpayments/ipn — correlation and verification", () => {
 
   it("moves a refund after completion to refunded and pauses campaigns", async () => {
     const fake = seedPayment({
-      payment: { status: "confirmed", provider_status: "finished", confirmed_at: "2026-01-01T00:00:00Z" },
+      payment: {
+        status: "confirmed",
+        provider_status: "finished",
+        confirmed_at: "2026-01-01T00:00:00Z",
+      },
     });
     fake.db.campaigns[0].status = "active";
     fake.db.invoices[0].status = "paid";
     stubProvider(jsonResponse(providerRecord({ payment_status: "refunded" })));
 
-    const response = await POST(signedRequest(baseIpn({ payment_status: "refunded" })));
+    const response = await POST(
+      signedRequest(baseIpn({ payment_status: "refunded" })),
+    );
 
     expect(response.status).toBe(200);
     expect(fake.db.payments[0].status).toBe("refunded");
@@ -368,24 +463,48 @@ describe("POST /api/nowpayments/ipn — idempotency", () => {
     expect(second.status).toBe(200);
     expect(await second.json()).toMatchObject({ status: "already_processed" });
 
-    expect(fake.db.payment_events.filter((event) => event.event_type === "confirmed")).toHaveLength(1);
-    expect(fake.db.invoices.filter((invoice) => invoice.status === "paid")).toHaveLength(1);
+    expect(
+      fake.db.payment_events.filter(
+        (event) => event.event_type === "confirmed",
+      ),
+    ).toHaveLength(1);
+    expect(
+      fake.db.invoices.filter((invoice) => invoice.status === "paid"),
+    ).toHaveLength(1);
   });
 
   it("dedupes repeated partially_paid notifications without re-applying side effects", async () => {
     const fake = seedPayment();
-    stubProvider(jsonResponse(providerRecord({ payment_status: "partially_paid", actually_paid: 10 })));
+    stubProvider(
+      jsonResponse(
+        providerRecord({ payment_status: "partially_paid", actually_paid: 10 }),
+      ),
+    );
 
-    const first = await POST(signedRequest(baseIpn({ payment_status: "partially_paid", actually_paid: 10 })));
+    const first = await POST(
+      signedRequest(
+        baseIpn({ payment_status: "partially_paid", actually_paid: 10 }),
+      ),
+    );
     expect(first.status).toBe(200);
     expect(fake.db.payments[0].status).toBe("underpaid");
-    const terminalEvents = fake.db.payment_events.filter((event) => event.event_type === "provider_partially_paid");
+    const terminalEvents = fake.db.payment_events.filter(
+      (event) => event.event_type === "underpaid",
+    );
     expect(terminalEvents).toHaveLength(1);
 
-    const second = await POST(signedRequest(baseIpn({ payment_status: "partially_paid", actually_paid: 10 })));
+    const second = await POST(
+      signedRequest(
+        baseIpn({ payment_status: "partially_paid", actually_paid: 10 }),
+      ),
+    );
     expect(second.status).toBe(200);
     expect(await second.json()).toMatchObject({ status: "already_processed" });
-    expect(fake.db.payment_events.filter((event) => event.event_type === "provider_partially_paid")).toHaveLength(1);
+    expect(
+      fake.db.payment_events.filter(
+        (event) => event.event_type === "underpaid",
+      ),
+    ).toHaveLength(1);
   });
 
   it("ignores stale intermediate notifications after completion", async () => {
@@ -395,11 +514,17 @@ describe("POST /api/nowpayments/ipn — idempotency", () => {
     await POST(signedRequest(baseIpn()));
     expect(fake.db.payments[0].status).toBe("confirmed");
 
-    const stale = await POST(signedRequest(baseIpn({ payment_status: "confirming" })));
+    const stale = await POST(
+      signedRequest(baseIpn({ payment_status: "confirming" })),
+    );
     expect(stale.status).toBe(200);
     expect(fake.db.payments[0].status).toBe("confirmed");
     expect(fake.db.payments[0].provider_status).toBe("finished");
-    expect(fake.db.payment_events.filter((event) => event.event_type === "confirmed")).toHaveLength(1);
+    expect(
+      fake.db.payment_events.filter(
+        (event) => event.event_type === "confirmed",
+      ),
+    ).toHaveLength(1);
   });
 
   it("handles out-of-order intermediate notifications without downgrading", async () => {
@@ -425,9 +550,73 @@ describe("POST /api/nowpayments/ipn — failure handling", () => {
       },
     };
 
-    const response = await POST(signedRequest(baseIpn({ payment_status: "waiting" })));
+    const response = await POST(
+      signedRequest(baseIpn({ payment_status: "waiting" })),
+    );
 
     expect(response.status).toBe(500);
     expect(errorSpy).toHaveBeenCalled();
   });
+});
+
+describe("strict provider evidence", () => {
+  it.each([
+    { payment_id: "999" },
+    { order_id: "wrong-order" },
+    { order_id: null },
+    { pay_currency: "btc" },
+    { pay_currency: null },
+    { pay_address: null },
+    { price_amount: null },
+    { price_currency: "eur" },
+    { price_amount: 1 },
+    { actually_paid: null },
+  ])(
+    "never fulfills incomplete/mismatched provider evidence %j",
+    async (override) => {
+      const fake = seedPayment();
+      stubProvider(jsonResponse(providerRecord(override)));
+      const response = await POST(signedRequest(baseIpn()));
+      expect(response.status).toBe(400);
+      expect(fake.db.payments[0].status).not.toBe("confirmed");
+      expect(fake.db.invoices[0].status).toBe("pending");
+      expect(fake.db.campaigns[0].status).toBe("pending_payment");
+    },
+  );
+});
+
+describe("terminal snapshots never bypass transactional settlement", () => {
+  it.each(["failed", "expired", "refunded"])(
+    "does not strand invoices when a finished IPN disagrees with provider %s",
+    async (status) => {
+      const fake = seedPayment();
+      stubProvider(jsonResponse(providerRecord({ payment_status: status })));
+      const response = await POST(signedRequest(baseIpn()));
+      expect(response.status).toBe(503);
+      expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
+      expect(fake.db.invoices[0].status).toBe("pending");
+      expect(fake.db.campaigns[0].status).toBe("pending_payment");
+      expect(
+        (await POST(signedRequest(baseIpn({ payment_status: status })))).status,
+      ).toBe(200);
+      expect(fake.db.payments[0].status).toBe(status);
+      expect(fake.db.invoices[0].status).toBe(status);
+    },
+  );
+  it.each([
+    ["98.9", "underpaid"],
+    ["100.1", "overpaid"],
+  ])(
+    "does not silently forgive a near-miss %s amount",
+    async (amount, status) => {
+      const fake = seedPayment();
+      stubProvider(jsonResponse(providerRecord({ actually_paid: amount })));
+      expect(
+        (await POST(signedRequest(baseIpn({ actually_paid: amount })))).status,
+      ).toBe(200);
+      expect(fake.db.payments[0].status).toBe(status);
+      expect(fake.db.invoices[0].status).toBe("pending");
+      expect(fake.db.campaigns[0].status).toBe("pending_payment");
+    },
+  );
 });

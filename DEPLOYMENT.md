@@ -2,6 +2,8 @@
 
 Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWPayments, video publishing, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. Bunny Stream resumable device uploads are implemented; section D documents setup and remaining live acceptance.
 
+**Current launch evidence:** see PRODUCTION_READINESS.md and GO_LIVE_CHECKLIST.md. Repository checks are not account-policy approval. Follow the rollout addendum below before using historical setup steps.
+
 **Video-provider guidance audited**: October 14, 2026
 
 **Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, OpenRouter (DeepSeek V3.2), Bunny Stream device uploads, Tailwind CSS 4.
@@ -20,7 +22,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 - Hosting provider that permits lawful adult content and commercial use (NOT Vercel Hobby — see Hosting Restrictions). Recommended: Fly.io, Render, Railway, or self-hosted VPS with Docker. Verify Acceptable Use Policy before deploying.
 
 ### Local software
-- Node.js 20+ (`node -v`)
+- Node.js 22.x (`node -v`)
 - npm 10+ (`npm -v`)
 - Git
 - Supabase CLI (optional, for migrations): `npm i -g supabase` or `brew install supabase/tap/supabase`
@@ -57,7 +59,8 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 1. Go to **Authentication** → **URL Configuration**
 2. Set **Site URL** to your production domain, e.g., `https://erobabe.com`
 3. Under **Redirect URLs**, add:
-   - `https://erobabe.com/auth/callback` (if you implement callback)
+   - `https://erobabe.com/auth/callback` (implemented PKCE callback)
+   - `https://erobabe.com/auth/callback?next=/auth/update-password`
    - `https://erobabe.com/auth/sign-in`
    - `https://erobabe.com/advertiser`
    - `https://erobabe.com/admin`
@@ -89,7 +92,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 2. Open `supabase/migrations/00000000000000_initial_schema.sql` in your editor, copy entire content, paste into SQL Editor, click **Run**
 3. Repeat for `00000000000001_rls_policies.sql`
 4. Repeat for `00000000000002_seed_fixed_data.sql`
-5. Apply the remaining checked-in migrations in order through `00000000000013_bunny_background_encoding.sql`; do not re-run or edit migrations already recorded as applied.
+5. Apply the remaining checked-in migrations in order through `00000000000018_payment_recovery.sql`; do not re-run or edit migrations already recorded as applied.
 6. Verify in **Table Editor** that tables exist: `profiles`, `categories`, `videos`, `ad_slots` (should have 10 rows), `site_settings` (1 row), etc.
 
 **Option B — via Supabase CLI**
@@ -424,7 +427,7 @@ none of these providers/accounts has been approved by this implementation.
    used by the selected library and Supabase thumbnail Storage. If using CSP, allow
    the Bunny iframe in `frame-src`, TUS in `connect-src` and local decoding/posters
    in `media-src blob:` / `img-src blob:`. Never add a server video relay.
-6. Node.js 20+ hosting is required. New automatic local thumbnails use browser
+6. Node.js 22.x hosting is required. New automatic local thumbnails use browser
    decoding/canvas, not server ffmpeg. The existing manual direct-media thumbnail
    tool requires an executable ffmpeg binary on a compatible Node host.
 7. Redeploy/restart after environment changes; verify **Admin → System Health**.
@@ -487,16 +490,15 @@ none of these providers/accounts has been approved by this implementation.
    and already transferred video bytes are not sent again.
 7. Verify **Encoding** separately from Uploading in `/admin/videos`. GET video
    reports Created=0, Uploaded=1, Processing=2, Transcoding=3, Finished=4, Error=5,
-   UploadFailed=6, JitSegmenting=7, JitPlaylistsCreated=8. Only 4 publishes.
+   UploadFailed=6, JitSegmenting=7, JitPlaylistsCreated=8. Only 4 completes processing; explicit admin review publishes.
    `storageSize` is encoded
    storage, **not** original byte count; original MIME/size come from the reserved
    local upload metadata, duration from Bunny `length`.
 8. While Bunny encodes, inspect Supabase `videos`, `upload_jobs`, `bunny_uploads`:
    there is one private `processing`/Encoding catalog row and job per session. The
    admin list polls status in the background; after Finished=4, that same row/job
-   becomes published/completed with the actual GUID, library/embed, MIME/size,
-   duration, category and verified thumbnail. Administrators remain responsible
-   for rights and content authorization before starting uploads.
+   becomes private pending_review/completed with the actual GUID, library/embed, MIME/size,
+   duration, category and verified thumbnail. Review rights, consent, adult-performer records and moderation in Videos → Review & publish; provide evidence references before publication.
 9. Check cards, admin lists, watch poster, OpenGraph/VideoObject thumbnail and
    play/pause/seek/fullscreen on desktop and mobile from the production domain.
    Playback iframe URL is `https://iframe.mediadelivery.net/embed/{LIBRARY_ID}/{VIDEO_ID}`.
@@ -518,7 +520,7 @@ none of these providers/accounts has been approved by this implementation.
 - Finished but DB error: Check and finish or Retry; never re-upload video.
 - Encoding takes a long time: upload workers are already free; the row remains
   **Encoding** and `/admin/videos` resumes background reconciliation whenever an
-  admin opens the library. It is not reported as published until status 4. Status
+  admin opens the library. It is not eligible for review until status 4 and is not published until explicit approval. Status
   5/6 is a provider failure; inspect provider diagnostics rather than pretending
   the transfer succeeded.
 - Uncertain creation (timeout/lost response): creation is not automatically replayed.
@@ -824,7 +826,7 @@ npx playwright test
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
 - [ ] Device uploads at `/admin/videos/upload` → multiple local files, real progress, local thumbnails and verified completion.
 - [ ] Choose a category, review editable filename-derived titles and generated thumbnails before upload. Existing metadata suggestion tools remain independent.
-- [ ] Verified Bunny Finished (4) plus stored thumbnail and atomic finalization sets published/public/cleared/approved and appears on public listings. Unconfirmed sessions never appear publicly.
+- [ ] Verified Bunny Finished (4) plus stored thumbnail and atomic finalization creates private pending_review content; explicit rights/moderation review then sets published/public/cleared/approved. Unconfirmed sessions never appear publicly.
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
 - [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject
@@ -843,7 +845,7 @@ npx playwright test
 - [ ] Checkout UX: shows exact crypto amount, USD equivalent, asset, network, address, copy button, expiration, live status (polls `/api/nowpayments/status`, no page refresh needed), instructions for correct network
 - [ ] IPN reachability probe: `curl -i https://YOUR_DOMAIN/api/nowpayments/ipn` → HTTP 200 `{"status":"ok",…}` and no row written to `payments` / `payment_events`
 - [ ] Synthetic confirmation attempt (must NOT confirm): unsigned `POST /api/nowpayments/ipn` with `{"payment_id":"<real id>","payment_status":"finished"}` → HTTP 401, payment stays `awaiting_confirmation`, nothing written. Only a correctly signed IPN corroborated by `GET /v1/payment/{id}` as `finished` with a matching amount can move a payment to `confirmed`.
-- [ ] Genuine payment (real funds, smallest checkout): signed NOWPayments IPN arrives → payment `confirmed`, invoice paid, campaign `pending_review` or `active` if the creative is approved
+- [ ] Provider-approved authorized staging test procedure (no live charge without separate explicit authorization): signed NOWPayments IPN arrives → payment `confirmed`, invoice paid, campaign `pending_review` or `active` if the creative is approved
 - [ ] Duplicate final IPN → `already_processed`, no duplicate ledger entries; exactly one `confirmed` event
 - [ ] Campaign approval: admin approves creative → campaign becomes active, appears on public site if slot active and schedule valid
 - [ ] Billing history at `/advertiser/payments` → real payments, no fake
@@ -979,3 +981,28 @@ curl http://localhost:3000/robots.txt
 # Check for mock data leakage
 grep -R "pexels\|INITIAL_VIDEOS\|mock\|demo" --include="*.tsx" --include="*.ts" app/ | grep -v "node_modules" | grep -v "IMPLEMENTATION_AUDIT"
 ```
+
+
+## October 14 audit rollout addendum — mandatory
+
+1. Stop new bookings/uploads during schema rollout. Back up DB and Storage metadata; restore and test the backup in an isolated staging project. Run `docs/LAUNCH_PREFLIGHT.sql`. Resolve overlaps and unsafe historical records deliberately; migrations do not silently delete or relabel payment history.
+2. Verify applied migration history. Apply only unapplied SQL in order: **14 launch_integrity**, **15 measured_events**, **16 video_review_and_retention**, **17 operator_actions**, **18 payment_recovery**. Do not edit/reapply 00–13. Migration 14 restricts browser permissions immediately; deploy matching application code in the same maintenance window. All five have transaction wrappers. Use the Supabase CLI's reviewed migration process so migration history stays accurate; dashboard execution alone does not populate CLI history automatically.
+3. Backfill/review historic confirmed payments before enabling ads. `eligible_ads` now requires paid/approved/associated/in-date/active-account records. Legacy provider records are retained, not automatically trusted by a new checkout. Current migration 14 adds one-hour holds to existing campaign rows; reconcile pending invoices before exposing inventory. Campaign dates use **[start_date,end_date)** in UTC; a month is the existing 30-day product definition.
+4. Use Node **22.x**, `npm ci`, and the full commands in PRODUCTION_READINESS.md. Lint now uses supported ESLint CLI directly. FFmpeg remains packaged for manual direct-media thumbnails; deployment must permit executable binaries and outbound media requests. No video bytes pass through Next/Supabase.
+5. Set NEXT_PUBLIC_SITE_URL to the approved HTTPS domain. SITE_URL is not a runtime environment variable. Register `/auth/callback` and `/auth/callback?next=/auth/update-password` for both staging and production Auth redirect allowlists; test PKCE verification/recovery emails from a real inbox. Never use wildcard production redirects.
+6. Choose BUNNY_UPLOAD_MAX_BYTES to match operational/provider budget; server and browser validate declared size. Confirm provider-side enforcement of actual bytes separately. Signed TUS authorization currently lasts 24h; previously issued credentials cannot be instantly revoked merely by suspending the app account. Document provider/key-revocation incident procedure.
+7. Configure a dedicated random ANALYTICS_HASH_SECRET (server-only, preferably 32+ random bytes). The service credential is a fallback. The trusted reverse proxy **must overwrite x-real-ip**. Without a trusted client IP, fallback clients share an abuse budget. Bot/WAF and multi-instance acceptance are launch gates, not supplied by browser events. Schedule `select public.prune_measured_events();` daily under a service/DB operator identity: 7-day pseudonymous events, 2-day rate-key retention. Campaign totals remain after pruning. Impressions mean loaded creative >=50% visible for 1s in a foreground tab; watch-page views mean 5 foreground seconds, not proven playback. Counts are deduplicated (ad type/campaign/creative/visitor/hour; video/visitor/day) and not independently audited human traffic.
+8. Pending checkout recovery: **do not create a second provider request after a timeout**. The local invoice/order and claimed campaigns exist before the provider call. In Admin → Payments, locate that exact invoice in NOWPayments and enter its real provider payment ID under Recover missing provider reference. The server re-fetches and compares order/asset/fiat identity before binding, then runs normal verification. A late payment after hold expiry is recorded paid but its campaign stays cancelled, requiring a reviewed refund/rebooking decision. Failed/expired/refunded outcomes atomically update invoices/campaigns. Do not fix mismatches by manually setting `payments.status='confirmed'`.
+9. The ad-creatives bucket is provisioned with image MIME/10MB limits. Browser object overwrite/deletion is denied; creative edits must submit new media for review. Pending assets in this public bucket are accessible by exact object URL; select/implement private premoderation storage if required by your content/data policy before accepting untrusted uploads. MIME declarations alone are not byte-level content scanning.
+10. Catalog deletion now creates a durable **media_retention** record (visible in System Health) in the same transaction. Review legal retention/backups, match provider/library/GUID to the deleted catalog record, and obtain two-person deletion approval. Retain or delete the exact remote object in the provider dashboard; verify provider outcome independently, then update that queue row to `retained` or `deleted` with `reviewed_at=now()` and record the change ticket in the operator audit. Never bulk-delete by title or erase the queue to hide billing inventory. No remote deletions were made in this audit.
+11. Roll back application code only with compatible schema permissions; do **not** restore permissive advertiser RLS to make old checkout code work. A failed migration transaction rolls back itself. For post-rollout issues, disable writes and use forward fixes; database restore is a separately approved disaster-recovery operation, tested on staging first.
+
+
+## October 15 payment-recovery follow-up — mandatory
+
+- Apply **00000000000018_payment_recovery.sql** after 14–17, in the same controlled maintenance window as the matching application. It replaces the four-argument `bind_nowpayment` with a five-argument version requiring the authenticated active admin ID. Old recovery handlers deliberately cannot bind through the removed signature; do not roll back the application alone and assume recovery is compatible.
+- The RPC row-locks the payment, validates bounded positive decimal amounts, rejects replacement identities/addresses/amounts, and atomically records the recovering actor in `payment_events` and `audit_logs`. Repeating the same valid reference is harmless, including after settlement. Recovery **does not itself mark a payment paid**.
+- Initial checkout and recovery now share quote validation: a real matching order and asset, exact USD price (no rounding mismatches), bounded nonempty address, positive decimal pay amount with at most 18 fractional digits, and valid provider ID. Invalid/absent evidence stays unbound for investigation. Do not manually replace a bound address or quote.
+- Automatic fulfillment requires provider `finished` plus exactly matching received crypto at the supported 18-decimal working precision; it no longer uses the comparison utility's legacy 2% tolerance. Shortfalls/excesses are recorded for manual reconciliation, not silently forgiven or auto-delivered. Missing `actually_paid` never falls back to quoted funds.
+- If provider snapshots disagree, IPN/recovery returns a retry rather than directly changing only the payment. Retry with current provider evidence; terminal outcomes must pass through the transactional settlement RPC. Inspect the added historical payment/invoice preflight query: past mismatches are **not automatically repaired**. Any repair needs verified provider evidence and an audited, approved operator action.
+- Local tests prove route behavior, SQL authorization, identical retries and rollback on audit failure. They are not evidence of real-provider API delivery or independent concurrent PostgreSQL sessions; both remain release gates.

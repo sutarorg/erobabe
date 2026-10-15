@@ -297,7 +297,8 @@ export default function UploadPage() {
           if (watcher.signal.aborted) return;
           patch(itemId, {
             phase: "Encoding",
-            warning: "Encoding status check is temporarily unavailable; retrying in the background.",
+            warning:
+              "Encoding status check is temporarily unavailable; retrying in the background.",
           });
         }
         await new Promise<void>((resolve) => {
@@ -600,7 +601,8 @@ export default function UploadPage() {
         </button>
         {policy && (
           <p className="mt-4 text-xs text-ink-3">
-            {policy.mimeTypes.join(", ")} · {policy.concurrency} parallel uploads · no application-level video size limit
+            {policy.mimeTypes.join(", ")} · {policy.concurrency} parallel
+            uploads · no application-level video size limit
           </p>
         )}
       </div>
@@ -629,7 +631,10 @@ export default function UploadPage() {
           </button>
         </div>
         <p role="status" className="text-xs text-ink-3">
-          {completed} published · {items.filter((i) => i.phase === "Encoding").length} encoding · {failed} failed. Uploads continue while Bunny encodes in the background.
+          {completed} ready for review ·{" "}
+          {items.filter((i) => i.phase === "Encoding").length} encoding ·{" "}
+          {failed} failed. Uploads continue while Bunny encodes in the
+          background.
         </p>
         {!items.length && (
           <p className="rounded-xl border border-line p-6 text-center text-sm text-ink-3">
@@ -717,8 +722,8 @@ export default function UploadPage() {
                     </Link>
                   )}
                   {item.phase === "Completed" && item.slug && (
-                    <Link href={`/video/${item.slug}`} className="text-accent">
-                      View published video
+                    <Link href="/admin/videos" className="text-accent">
+                      Review in Videos
                     </Link>
                   )}
                   {["Failed", "Cancelled"].includes(item.phase) && (

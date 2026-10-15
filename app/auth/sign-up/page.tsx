@@ -26,6 +26,7 @@ export default function SignUpPage() {
       email,
       password,
       options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
         data: { company_name: company, contact_name: contact },
       },
     });
@@ -47,8 +48,15 @@ export default function SignUpPage() {
       <div className="flex min-h-screen items-center justify-center bg-void px-4">
         <div className="w-full max-w-sm rounded-xl border border-line bg-pcard p-6 text-center">
           <h1 className="text-[18px] font-semibold">Check your email</h1>
-          <p className="mt-2 text-[12px] text-ink-3">We sent a verification link to {email}. Please verify to continue.</p>
-          <Link href="/auth/sign-in" className="mt-4 inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white">Go to sign in</Link>
+          <p className="mt-2 text-[12px] text-ink-3">
+            We sent a verification link to {email}. Please verify to continue.
+          </p>
+          <Link
+            href="/auth/sign-in"
+            className="mt-4 inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white"
+          >
+            Go to sign in
+          </Link>
           <div className="mt-5 flex justify-center">
             <BackToHome />
           </div>
@@ -61,20 +69,48 @@ export default function SignUpPage() {
     <div className="flex min-h-screen items-center justify-center bg-void px-4">
       <div className="w-full max-w-sm rounded-xl border border-line bg-pcard p-6">
         <h1 className="text-[18px] font-semibold">Create advertiser account</h1>
-        <p className="mt-1 text-[12px] text-ink-3">Advertise on erobabe — $99 per slot per month</p>
+        <p className="mt-1 text-[12px] text-ink-3">
+          Advertise on erobabe — $99 per slot per month
+        </p>
 
         <form onSubmit={handleSignUp} className="mt-6 space-y-4">
           <label className="block">
-            <span className="mb-1 block text-[11px] font-medium">Company name</span>
-            <input value={company} onChange={(event) => setCompany(event.target.value)} required autoComplete="organization" className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]" placeholder="EroAds Media" />
+            <span className="mb-1 block text-[11px] font-medium">
+              Company name
+            </span>
+            <input
+              value={company}
+              onChange={(event) => setCompany(event.target.value)}
+              required
+              autoComplete="organization"
+              className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]"
+              placeholder="EroAds Media"
+            />
           </label>
           <label className="block">
-            <span className="mb-1 block text-[11px] font-medium">Contact name</span>
-            <input value={contact} onChange={(event) => setContact(event.target.value)} required autoComplete="name" className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]" placeholder="Alex Morgan" />
+            <span className="mb-1 block text-[11px] font-medium">
+              Contact name
+            </span>
+            <input
+              value={contact}
+              onChange={(event) => setContact(event.target.value)}
+              required
+              autoComplete="name"
+              className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]"
+              placeholder="Alex Morgan"
+            />
           </label>
           <label className="block">
             <span className="mb-1 block text-[11px] font-medium">Email</span>
-            <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoComplete="email" className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]" placeholder="ads@company.com" />
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+              autoComplete="email"
+              className="h-9 w-full rounded-md border border-line bg-void px-3 text-[13px]"
+              placeholder="ads@company.com"
+            />
           </label>
           <label className="block">
             <span className="mb-1 block text-[11px] font-medium">Password</span>
@@ -96,18 +132,29 @@ export default function SignUpPage() {
                 aria-pressed={showPassword}
                 className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-ink-3 hover:text-ink"
               >
-                {showPassword ? <EyeOff aria-hidden="true" className="h-4 w-4" /> : <Eye aria-hidden="true" className="h-4 w-4" />}
+                {showPassword ? (
+                  <EyeOff aria-hidden="true" className="h-4 w-4" />
+                ) : (
+                  <Eye aria-hidden="true" className="h-4 w-4" />
+                )}
               </button>
             </span>
           </label>
           {error && <p className="text-[11px] text-red-400">{error}</p>}
-          <button type="submit" disabled={loading} className="h-9 w-full rounded-md bg-accent text-[13px] font-semibold text-white hover:bg-accent-soft disabled:opacity-50">
+          <button
+            type="submit"
+            disabled={loading}
+            className="h-9 w-full rounded-md bg-accent text-[13px] font-semibold text-white hover:bg-accent-soft disabled:opacity-50"
+          >
             {loading ? "Creating..." : "Create account"}
           </button>
         </form>
 
         <p className="mt-4 text-center text-[11px] text-ink-3">
-          Already have an account? <Link href="/auth/sign-in" className="text-accent hover:underline">Sign in</Link>
+          Already have an account?{" "}
+          <Link href="/auth/sign-in" className="text-accent hover:underline">
+            Sign in
+          </Link>
         </p>
         <div className="mt-5 flex justify-center">
           <BackToHome />

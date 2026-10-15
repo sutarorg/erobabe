@@ -119,7 +119,9 @@ describe("device-only upload queue", () => {
     expect(screen.getByLabelText("Choose video files")).toHaveAttribute(
       "multiple",
     );
-    expect(screen.getByText(/no application-level video size limit/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/no application-level video size limit/i),
+    ).toBeInTheDocument();
   });
   it("rejects invalid files clearly before creating sessions", async () => {
     render(<UploadPage />);
@@ -151,9 +153,9 @@ describe("device-only upload queue", () => {
       .filter(([, o]) => o?.body)
       .map(([, o]) => o.body);
     expect(postBodies.every((b: unknown) => typeof b === "string")).toBe(true);
-    expect(screen.getByText("View published video")).toHaveAttribute(
+    expect(screen.getByText("Review in Videos")).toHaveAttribute(
       "href",
-      "/video/saved-video",
+      "/admin/videos",
     );
   });
   it("retries database failures without re-transferring bytes", async () => {
@@ -246,7 +248,9 @@ describe("device-only upload queue", () => {
       expect(screen.getAllByText("Encoding")).toHaveLength(5),
     );
     expect(screen.queryByText("Uploading…")).toBeNull();
-    expect(screen.getByText(/Uploads continue while Bunny encodes/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Uploads continue while Bunny encodes/),
+    ).toBeInTheDocument();
   });
 
   it("retries thumbnail storage without transferring video again", async () => {

@@ -13,7 +13,7 @@ interface FooterProps {
 const EXPLORE_LINKS: { label: string; key: NavKey }[] = [
   { label: "Categories", key: "categories" },
   { label: "Latest Videos", key: "latest" },
-  { label: "Top Rated", key: "toprated" },
+  { label: "Popular", key: "toprated" },
 ];
 
 const INFO_LINKS: { label: string; path: string; href: string }[] = [
@@ -48,7 +48,12 @@ function LinkColumn({
 const linkClass =
   "w-fit text-[12.5px] text-ink-3 transition-colors duration-150 hover:text-accent";
 
-export default function Footer({ onNavigate, onOpenPage, onAdvertise, useLinks = false }: FooterProps) {
+export default function Footer({
+  onNavigate,
+  onOpenPage,
+  onAdvertise,
+  useLinks = false,
+}: FooterProps) {
   return (
     <footer className="mt-10 border-t border-line">
       <div className="mx-auto w-full max-w-[1200px] px-4 py-8 @sm:px-5 @2xl:px-7">
@@ -75,11 +80,19 @@ export default function Footer({ onNavigate, onOpenPage, onAdvertise, useLinks =
             {EXPLORE_LINKS.map((link) => (
               <li key={link.label}>
                 {useLinks ? (
-                  <Link href={NAV_HREFS[link.key]} prefetch className={linkClass}>
+                  <Link
+                    href={NAV_HREFS[link.key]}
+                    prefetch
+                    className={linkClass}
+                  >
                     {link.label}
                   </Link>
                 ) : (
-                  <button type="button" onClick={() => onNavigate(link.key)} className={linkClass}>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate(link.key)}
+                    className={linkClass}
+                  >
                     {link.label}
                   </button>
                 )}
@@ -95,7 +108,11 @@ export default function Footer({ onNavigate, onOpenPage, onAdvertise, useLinks =
                     {link.label}
                   </Link>
                 ) : (
-                  <button type="button" onClick={() => onOpenPage?.(link.path)} className={linkClass}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenPage?.(link.path)}
+                    className={linkClass}
+                  >
                     {link.label}
                   </button>
                 )}
@@ -111,7 +128,11 @@ export default function Footer({ onNavigate, onOpenPage, onAdvertise, useLinks =
                     {link.label}
                   </Link>
                 ) : (
-                  <button type="button" onClick={() => onOpenPage?.(link.path)} className={linkClass}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenPage?.(link.path)}
+                    className={linkClass}
+                  >
                     {link.label}
                   </button>
                 )}
@@ -124,7 +145,11 @@ export default function Footer({ onNavigate, onOpenPage, onAdvertise, useLinks =
                     Advertise with us
                   </Link>
                 ) : (
-                  <button type="button" onClick={onAdvertise} className={linkClass}>
+                  <button
+                    type="button"
+                    onClick={onAdvertise}
+                    className={linkClass}
+                  >
                     Advertise with us
                   </button>
                 )}

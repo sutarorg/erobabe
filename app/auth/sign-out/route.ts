@@ -1,14 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
-import { getSiteUrl } from "@/lib/site";
 import { NextRequest, NextResponse } from "next/server";
 
 function redirectHome(request: NextRequest) {
   // Prefer the request origin so preview deployments redirect to themselves.
-  const base = getSiteUrl() || request.nextUrl.origin;
+  const base = request.nextUrl.origin;
   try {
-    return NextResponse.redirect(new URL("/", base));
+    return NextResponse.redirect(new URL("/", base), 303);
   } catch {
-    return NextResponse.redirect(new URL("/", request.nextUrl.origin));
+    return NextResponse.redirect(new URL("/", request.nextUrl.origin), 303);
   }
 }
 
@@ -18,8 +17,7 @@ export async function POST(request: NextRequest) {
   return redirectHome(request);
 }
 
+// GET cannot mutate a session (prefetch/crawlers must not sign users out).
 export async function GET(request: NextRequest) {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
   return redirectHome(request);
 }

@@ -19,7 +19,9 @@ test.describe("SEO acceptance", () => {
     expect(res?.status()).toBe(404);
   });
 
-  test("sitemap.xml is valid XML and contains only public URLs", async ({ request }) => {
+  test("sitemap.xml is valid XML and contains only public URLs", async ({
+    request,
+  }) => {
     const res = await request.get("/sitemap.xml");
     expect(res.status()).toBe(200);
     const text = await res.text();
@@ -28,12 +30,18 @@ test.describe("SEO acceptance", () => {
     expect(text).not.toContain("/advertiser");
   });
 
-  test("video-sitemap.xml is valid and matches expected structure", async ({ request }) => {
+  test("video-sitemap.xml is valid and matches expected structure", async ({
+    request,
+  }) => {
     const res = await request.get("/video-sitemap.xml");
     expect(res.status()).toBe(200);
     const text = await res.text();
     expect(text).toContain("<urlset");
-    expect(text).toContain("video:video");
+    expect(text).toContain(
+      'xmlns:video="http://www.google.com/schemas/sitemap-video/1.1"',
+    );
+    expect(text).toContain("</urlset>");
+    // Empty catalogs have no video entries; populated serialization has a unit fixture.
   });
 
   test("robots.txt does not block public content", async ({ request }) => {
@@ -60,7 +68,7 @@ test.describe("SEO acceptance", () => {
   test("canonical URLs are correct", async ({ page }) => {
     await page.goto("/");
     const canonical = page.locator('link[rel="canonical"]');
-    if (await canonical.count() > 0) {
+    if ((await canonical.count()) > 0) {
       const href = await canonical.getAttribute("href");
       expect(href).toBeTruthy();
     }

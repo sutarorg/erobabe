@@ -62,3 +62,6 @@ playwright/.cache
 
 # Agent scratch assets (never part of deployment)
 .arena/
+
+# TypeScript incremental cache
+*.tsbuildinfo

@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import Header, { dashboardHrefFor } from "@/src/components/Header";
 
-function renderHeader(options: { navActive?: "home" | null; menuOpen?: boolean; user?: { name: string; role?: string } | null } = {}) {
+function renderHeader(
+  options: {
+    navActive?: "home" | null;
+    menuOpen?: boolean;
+    user?: { name: string; role?: string } | null;
+  } = {},
+) {
   const { navActive = "home", menuOpen = false, user = null } = options;
   return render(
     <Header
@@ -18,7 +24,7 @@ function renderHeader(options: { navActive?: "home" | null; menuOpen?: boolean; 
       onSignInClick={vi.fn()}
       onSignOut={vi.fn()}
       useLinks
-    />
+    />,
   );
 }
 
@@ -38,7 +44,9 @@ describe("public header navigation", () => {
 
     unmount();
     renderHeader({ menuOpen: true });
-    const compactNavigation = screen.getByRole("navigation", { name: "Mobile" });
+    const compactNavigation = screen.getByRole("navigation", {
+      name: "Mobile",
+    });
     expect(compactNavigation.className).toContain("min-[1000px]:hidden");
   });
 
@@ -52,8 +60,12 @@ describe("public header navigation", () => {
     renderHeader({ navActive: null });
     const inactiveHome = screen.getByRole("link", { name: /^Home$/ });
     expect(inactiveHome.getAttribute("aria-current")).toBeNull();
-    for (const label of ["Categories", "Latest", "Top Rated"]) {
-      expect(screen.getByRole("link", { name: new RegExp(`^${label}$`) }).getAttribute("aria-current")).toBeNull();
+    for (const label of ["Categories", "Latest", "Popular"]) {
+      expect(
+        screen
+          .getByRole("link", { name: new RegExp(`^${label}$`) })
+          .getAttribute("aria-current"),
+      ).toBeNull();
     }
     expect(document.querySelector('[aria-current="page"]')).toBeNull();
   });
@@ -65,7 +77,9 @@ describe("public header navigation", () => {
   });
 
   it("shows Dashboard instead of Sign in for a signed-in advertiser", () => {
-    renderHeader({ user: { name: "advertiser@example.com", role: "advertiser" } });
+    renderHeader({
+      user: { name: "advertiser@example.com", role: "advertiser" },
+    });
     expect(screen.queryByRole("link", { name: /sign in/i })).toBeNull();
 
     const dashboard = screen.getByRole("link", { name: /dashboard/i });
@@ -76,14 +90,18 @@ describe("public header navigation", () => {
 
   it("sends an admin to the admin dashboard", () => {
     renderHeader({ user: { name: "owner@example.com", role: "admin" } });
-    expect(screen.getByRole("link", { name: /dashboard/i }).getAttribute("href")).toBe("/admin");
+    expect(
+      screen.getByRole("link", { name: /dashboard/i }).getAttribute("href"),
+    ).toBe("/admin");
   });
 });
 
 describe("dashboardHrefFor", () => {
   it("routes by role and defaults to the advertiser portal", () => {
     expect(dashboardHrefFor({ name: "a", role: "admin" })).toBe("/admin");
-    expect(dashboardHrefFor({ name: "a", role: "advertiser" })).toBe("/advertiser");
+    expect(dashboardHrefFor({ name: "a", role: "advertiser" })).toBe(
+      "/advertiser",
+    );
     expect(dashboardHrefFor({ name: "a" })).toBe("/advertiser");
     expect(dashboardHrefFor(null)).toBe("/advertiser");
   });
