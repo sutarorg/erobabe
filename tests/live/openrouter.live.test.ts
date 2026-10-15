@@ -42,9 +42,10 @@ suite("OpenRouter live API", () => {
   }, 60_000);
 
   /**
-   * The regression this guards: a description outside 30-40 words used to
-   * discard the whole suggestion and drop the upload back onto file-name
-   * metadata. Run this across every category the admin can pick.
+   * The regression this guards: a description outside 20-25 words, or a title
+   * over its word budget, used to discard the whole suggestion and drop the
+   * upload back onto offline metadata. Length slips are now repaired. Run this
+   * across every category the admin can pick.
    */
   it.each([...KNOWN_CATEGORIES])("returns usable %s metadata, whatever the model does with the word count", async (category) => {
     const suggestion = await suggestVideoMetadata({ fileName: "evening_in_velvet.mp4.ts.mp4", category });

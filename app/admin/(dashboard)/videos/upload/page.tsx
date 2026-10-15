@@ -45,6 +45,56 @@ type Item = {
 
 const PARALLEL_UPLOADS = 4;
 
+/** Requests per metadata draft before the browser composes one itself. */
+const METADATA_REQUEST_ATTEMPTS = 3;
+/** Longest a rate-limited draft waits before asking again. */
+const MAX_METADATA_RETRY_WAIT_MS = 30_000;
+
+type MetadataResponse = {
+  suggestion?: { title?: unknown; description?: unknown };
+  source?: unknown;
+  warning?: unknown;
+  error?: unknown;
+};
+
+/**
+ * How long to wait before asking the metadata route again, or `null` when a
+ * retry cannot help (an auth or request problem, or a reply without a draft).
+ */
+function metadataRetryDelay(
+  response: Response | null,
+  data: MetadataResponse | null,
+  attempt: number,
+): number | null {
+  if (!response) return 1000 * (attempt + 1);
+  if (response.status === 429) {
+    const seconds = Number(response.headers.get("Retry-After"));
+    return Math.min(
+      MAX_METADATA_RETRY_WAIT_MS,
+      Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 5000,
+    );
+  }
+  // 5xx, a platform timeout page, or a body that is not JSON at all.
+  if (response.status >= 500 || (response.ok && data === null)) return 1500 * (attempt + 1);
+  return null;
+}
+
+function describeMetadataFailure(response: Response | null, data: MetadataResponse | null): string {
+  if (!response) return "the metadata service could not be reached.";
+  if (response.status === 429) return "too many metadata requests in a row.";
+  if (response.status === 401 || response.status === 403)
+    return "the admin session was not accepted. Sign in again.";
+  if (response.ok) return "the metadata service returned no draft.";
+  const message = typeof data?.error === "string" ? data.error.trim().slice(0, 160) : "";
+  return `the metadata service failed (${message || `HTTP ${response.status}`}).`;
+}
+
+/** Shown only when no AI copy could be had at all; a repaired AI draft carries no notice. */
+function aiUnavailableNotice(reason: string): string {
+  const detail = reason.trim();
+  return `AI copy unavailable: ${detail}${/[.!?]$/.test(detail) ? "" : "."} This title was drafted from the category vocabulary instead. Review it, or press Generate explicit title to try the AI again.`;
+}
+
 /** Another queue entry already owns the server session for the same source file. */
 class DuplicateQueueEntryError extends Error {}
 
@@ -221,9 +271,11 @@ export default function UploadPage() {
 
   /**
    * One draft in the site's publishing voice (blunt adult copy by default).
-   * The route answers with the model's draft, or with an offline draft composed
-   * from the same vocabulary when the model is unconfigured, out of credits, or
-   * declines adults-only copy — so a queue entry never keeps its filename.
+   * The route repairs length slips in the model's reply rather than rejecting
+   * it, and answers with a category draft in the same voice only when the model
+   * is unconfigured, out of credits, or declines adults-only copy. A route that
+   * is unreachable, rate limited, or failing is asked again before the browser
+   * composes a draft itself, so a queue entry never keeps its filename.
    */
   function generateAiMetadataForCategory(
     targetCategoryId: string,
@@ -234,36 +286,46 @@ export default function UploadPage() {
       // Add titles only after the preceding request completes: upload workers
       // are parallel, but their category-only metadata generation is serialized.
       const existingList = Array.from(usedTitles.current).slice(-100);
-      try {
-        const response = await fetch("/api/metadata/suggest", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          // Deliberately omit filename, default title, and tags. Category drives
-          // generation; the title list is used only to prevent repetition.
-          body: JSON.stringify({
-            category: categoryLabel,
-            existingTitles: existingList,
-          }),
-          cache: "no-store",
-        });
-        const data = await response.json().catch(() => null);
-        if (response.ok && data?.suggestion?.title) {
+      let failure = describeMetadataFailure(null, null);
+      for (
+        let attempt = 0;
+        attempt < METADATA_REQUEST_ATTEMPTS && alive.current;
+        attempt += 1
+      ) {
+        let response: Response | null = null;
+        let data: MetadataResponse | null = null;
+        try {
+          response = await fetch("/api/metadata/suggest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            // Deliberately omit filename, default title, and tags. Category drives
+            // generation; the title list is used only to prevent repetition.
+            body: JSON.stringify({
+              category: categoryLabel,
+              existingTitles: existingList,
+            }),
+            cache: "no-store",
+          });
+          data = await response.json().catch(() => null);
+        } catch {
+          // An unreachable route is retried below, then composed in the browser.
+        }
+        if (response?.ok && data?.suggestion?.title) {
           const nextTitle = String(data.suggestion.title).trim();
           const nextDescription = String(data.suggestion.description || "").trim();
           usedTitles.current.add(nextTitle);
           return {
             title: nextTitle,
             description: nextDescription,
-            ...(data.source === "offline" && data.warning
-              ? {
-                  warning: `Written offline, not by the model: ${String(data.warning)}`,
-                }
+            ...(data.source === "offline"
+              ? { warning: aiUnavailableNotice(String(data.warning || "the model was not used.")) }
               : {}),
           };
         }
-      } catch {
-        // The deterministic category-only fallback below keeps the upload queue
-        // usable when the route itself is unreachable.
+        failure = describeMetadataFailure(response, data);
+        const delay = metadataRetryDelay(response, data, attempt);
+        if (delay === null || attempt === METADATA_REQUEST_ATTEMPTS - 1) break;
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
 
       const fallback = generateCategoryFallbackMetadata(
@@ -275,8 +337,7 @@ export default function UploadPage() {
       return {
         title: fallback.title,
         description: fallback.description,
-        warning:
-          "Written in the browser from the offline title composer — no model request succeeded.",
+        warning: aiUnavailableNotice(failure),
       };
     };
 
@@ -735,8 +796,9 @@ export default function UploadPage() {
         {policy && (
           <p className="mt-4 text-xs text-ink-3">
             {policy.mimeTypes.join(", ")} · {PARALLEL_UPLOADS} parallel uploads
-            · OpenRouter AI metadata in the site's adult title voice, with an
-            offline composer fallback · no application-level video size limit
+            · OpenRouter AI metadata in the site's adult title voice, with
+            category drafts only when the AI is unavailable · no
+            application-level video size limit
           </p>
         )}
       </div>

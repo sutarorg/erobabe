@@ -12,7 +12,10 @@ import {
   hasSelectedCategorySignal,
   isCompliantCopy,
   isValidDescription,
+  normalizeDescription,
   titleBands,
+  titleWordCount,
+  titlesAreTooSimilar,
   validateSuggestionPayload,
 } from "@/lib/metadata/suggestion";
 import {
@@ -330,5 +333,229 @@ describe("explicit vocabulary hygiene", () => {
         }
       }
     }
+  });
+});
+
+describe("repairing an explicit model reply instead of discarding it", () => {
+  const sceneDescription = (category: string) =>
+    `${category} couch fuck filmed at home: she rides my cock raw, switches to doggy style and takes a creampie on camera. 18+ adults only.`;
+  const reply = (title: string, category = "Amateur", description = sceneDescription(category)) =>
+    modelReply({ title, category, description });
+
+  it.each([
+    // The reported failure: "title must contain at most 16 words".
+    [
+      "Amateur",
+      "My Amateur Girlfriend Rides My Cock Raw On The Couch Until I Cum Inside Her Tight Wet Pussy Twice",
+      "My Amateur Girlfriend Rides My Cock Raw On The Couch",
+    ],
+    [
+      "Amateur",
+      "My Amateur Wife Grinds Her Pussy On My Cock In The Hammock Until I Cum Inside Her Twice After Midnight",
+      "My Amateur Wife Grinds Her Pussy On My Cock In The Hammock",
+    ],
+    // The category sits in the last clause, so a middle clause is dropped instead.
+    [
+      "Threesome",
+      "Two Horny Babes Share My Cock On The Hotel Bed While I Film Every Second Of Our Wild Threesome Fuck",
+      "Two Horny Babes Share My Cock While I Film Every Second Of Our Wild Threesome Fuck",
+    ],
+    [
+      "Big Ass",
+      "Big Ass Ebony Babe Bounces On My Dick In Reverse Cowgirl And Twerks Until I Cum All Over Her Huge Booty",
+      "Big Ass Ebony Babe Bounces On My Dick In Reverse Cowgirl And Twerks",
+    ],
+    [
+      "POV",
+      "POV Blowjob Then Deepthroat And Facial From My Gorgeous Brunette Girlfriend In Our Tiny Bathroom At Home Tonight",
+      "POV Blowjob Then Deepthroat And Facial From My Gorgeous Brunette Girlfriend In Our Tiny Bathroom",
+    ],
+  ])("cuts an overlong %s title at a clause boundary that keeps the act and the category", (category, title, expected) => {
+    expect(titleWordCount(title)).toBeGreaterThan(titleBands("explicit").words.max);
+    const result = validateSuggestionPayload(reply(title, category), category, { style: "explicit" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.suggestion.title).toBe(expected);
+    expect(titleWordCount(result.suggestion.title)).toBeLessThanOrEqual(titleBands("explicit").words.max);
+    expect(result.suggestion.title).toMatch(SEX_WORD);
+    expect(hasSelectedCategorySignal(result.suggestion.title, category)).toBe(true);
+    expect(result.repairCost).toBe(0);
+    expect(result.suggestion.reasoning).toMatch(/title trimmed from \d+ words/);
+  });
+
+  it("drops a stray magazine clause with the overflow instead of rejecting the reply", () => {
+    const result = validateSuggestionPayload(
+      reply("My Amateur Girlfriend Rides My Cock Raw On The Couch In Soft Focus Until I Cum Inside Her Twice Tonight"),
+      "Amateur",
+      { style: "explicit" },
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      suggestion: { title: "My Amateur Girlfriend Rides My Cock Raw On The Couch" },
+    });
+  });
+
+  it("asks again when no cut keeps the title in voice, and drops the opening only as a last resort", () => {
+    const title =
+      "Horny Wife Spends The Whole Lazy Sunday Afternoon Teasing Me Before She Finally Takes My Cock Doggy Style Amateur";
+    const standard = validateSuggestionPayload(reply(title), "Amateur", { style: "explicit" });
+    expect(standard.ok).toBe(false);
+    if (!standard.ok) expect(standard.message).toMatch(/at most 16 words/);
+
+    const lastResort = validateSuggestionPayload(reply(title), "Amateur", { style: "explicit", lenient: true });
+    expect(lastResort).toMatchObject({
+      ok: true,
+      repairCost: 1,
+      suggestion: { title: "She Finally Takes My Cock Doggy Style Amateur" },
+    });
+  });
+
+  it("never trims banned wording away, even when it sits in the overflow", () => {
+    const title =
+      "My Amateur Girlfriend Rides My Cock Raw On The Couch Until Her Teen Friend Joins In Too Tonight Again";
+    for (const lenient of [false, true]) {
+      const result = validateSuggestionPayload(reply(title), "Amateur", { style: "explicit", lenient });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.message).toMatch(/not publishable \(age-ambiguous wording \("Teen"\)\)/);
+    }
+  });
+
+  it.each([
+    // The reported failure: "description must contain 20-25 words".
+    "Amateur couch fuck filmed at home: she rides my cock raw, switches to doggy style, takes it deep and hard, then finishes with a creampie on camera while she moans my name loudly. 18+ adults only.",
+    "Amateur couch fuck filmed at home: she rides my cock raw until I cum.",
+  ])("brings a description outside 20-25 words into range: %s", (description) => {
+    const words = descriptionWordCount(description);
+    expect(words < MIN_DESCRIPTION_WORDS || words > MAX_DESCRIPTION_WORDS).toBe(true);
+    const result = validateSuggestionPayload(
+      reply("My Amateur Girlfriend Rides My Cock Raw On The Couch", "Amateur", description),
+      "Amateur",
+      { style: "explicit" },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(isValidDescription(result.suggestion.description)).toBe(true);
+    expect(result.suggestion.description.startsWith("Amateur couch fuck filmed at home")).toBe(true);
+    expect(result.suggestion.description).not.toMatch(/Review the|listing details|Browse related/);
+    expect(result.repairCost).toBe(0);
+  });
+
+  it.each([...KNOWN_CATEGORIES])("extends every short %s description with claim-free explicit sentences", (category) => {
+    for (let count = 8; count <= 60; count += 1) {
+      const result = normalizeDescription(Array(count).fill("word").join(" "), category, "explicit");
+      expect(result, `${count} words`).not.toBeNull();
+      expect(isValidDescription(result!.description), `${count} words → ${result!.description}`).toBe(true);
+      expect(result!.description).not.toMatch(/Review the|listing details|Browse related|For adult viewers/);
+      expect(copyPolicyViolation("", result!.description, "explicit")).toBeNull();
+    }
+  });
+
+  it("works a forgotten category into the title and description only as a last resort", () => {
+    const forgetful = modelReply({
+      title: "My Girlfriend Rides My Dick Raw On The Couch",
+      description:
+        "She rides my dick raw on the couch, bouncing hard until I cum deep inside her. 18+ adults only, one take, filmed at home.",
+      category: "Big Ass",
+    });
+    const standard = validateSuggestionPayload(forgetful, "Big Ass", { style: "explicit" });
+    expect(standard.ok).toBe(false);
+    if (!standard.ok) expect(standard.message).toMatch(/selected category/);
+
+    const lastResort = validateSuggestionPayload(forgetful, "Big Ass", { style: "explicit", lenient: true });
+    expect(lastResort).toMatchObject({
+      ok: true,
+      repairCost: 2,
+      suggestion: { title: "My Big Ass Girlfriend Rides My Dick Raw On The Couch" },
+    });
+    if (lastResort.ok) {
+      expect(lastResort.suggestion.description).toMatch(/^Big Ass scene: She rides my dick raw/);
+      expect(isValidDescription(lastResort.suggestion.description)).toBe(true);
+    }
+
+    const threesome = validateSuggestionPayload(
+      modelReply({
+        title: "Two Babes Share My Cock On The Hotel Bed",
+        description: "Threesome fuck: two babes share my cock on the hotel bed and take turns riding it until I cum. All performers are 18+.",
+        category: "Threesome",
+      }),
+      "Threesome",
+      { style: "explicit", lenient: true },
+    );
+    expect(threesome).toMatchObject({
+      ok: true,
+      repairCost: 1,
+      suggestion: { title: "Two Babes Share My Cock On The Hotel Bed In A Threesome" },
+    });
+  });
+
+  it("completes a short title with the setting its own description names", () => {
+    const result = validateSuggestionPayload(
+      reply("Amateur Babe Fucks", "Amateur", "Amateur babe fucks me hard at home on camera and takes a messy cumshot to finish the scene. 18+ adults only, one take."),
+      "Amateur",
+      { style: "explicit", lenient: true },
+    );
+    expect(result).toMatchObject({ ok: true, repairCost: 1, suggestion: { title: "Amateur Babe Fucks At Home On Camera" } });
+    expect(validateSuggestionPayload(reply("Amateur Babe Fucks"), "Amateur", { style: "explicit" }).ok).toBe(false);
+  });
+
+  it("composes a description only for a title that needed no repair of its own", () => {
+    const thin = validateSuggestionPayload(
+      reply("My Amateur Girlfriend Rides My Cock Raw On The Couch", "Amateur", "Too thin."),
+      "Amateur",
+      { style: "explicit", lenient: true },
+    );
+    expect(thin).toMatchObject({ ok: true, repairCost: 1, suggestion: { title: "My Amateur Girlfriend Rides My Cock Raw On The Couch" } });
+    if (thin.ok) {
+      expect(isValidDescription(thin.suggestion.description)).toBe(true);
+      expect(hasSelectedCategorySignal(thin.suggestion.description.split(" ").slice(0, 12).join(" "), "Amateur")).toBe(true);
+    }
+
+    // No category in the title and no description: too little of the model's work is left.
+    const titleOnly = validateSuggestionPayload(
+      JSON.stringify({ title: "My Girlfriend Rides My Cock Raw On The Couch" }),
+      "Amateur",
+      { style: "explicit", lenient: true },
+    );
+    expect(titleOnly.ok).toBe(false);
+  });
+
+  it("replaces an unpublishable description as a last resort, but never an unpublishable title", () => {
+    const badDescription = reply(
+      "My Amateur Girlfriend Rides My Cock Raw On The Couch",
+      "Amateur",
+      "Amateur fuck at home with my stepsister riding my cock raw on the couch until I cum inside her. 18+ adults only, one take.",
+    );
+    const standard = validateSuggestionPayload(badDescription, "Amateur", { style: "explicit" });
+    expect(standard.ok).toBe(false);
+    if (!standard.ok) expect(standard.message).toMatch(/not publishable \(family-role or incest wording \("stepsister"\)\)/);
+
+    const lastResort = validateSuggestionPayload(badDescription, "Amateur", { style: "explicit", lenient: true });
+    expect(lastResort).toMatchObject({ ok: true, repairCost: 1 });
+    if (lastResort.ok) {
+      expect(lastResort.suggestion.description).not.toMatch(/stepsister/i);
+      expect(copyPolicyViolation(lastResort.suggestion.title, lastResort.suggestion.description, "explicit")).toBeNull();
+    }
+
+    const badTitle = reply("My Amateur Stepsister Rides My Cock Raw On The Couch");
+    expect(validateSuggestionPayload(badTitle, "Amateur", { style: "explicit", lenient: true }).ok).toBe(false);
+  });
+});
+
+describe("near-duplicate detection on explicit titles", () => {
+  it.each([
+    ["Horny Amateur Babe Sucks My Dick Then Takes It Doggy Style In The Shower", "Busty MILF Gets Her Pussy Pounded Doggy Style On The Hotel Bed"],
+    ["My Amateur Girlfriend Rides My Cock Raw On The Couch Until I Cum Inside Her", "Big Ass Babe Bounces On My Cock Until I Cum All Over Her Ass"],
+    ["Japanese Babe Gives A Sloppy Blowjob Then Rides Cock In Reverse Cowgirl", "Romantic Morning Sex As My Wife Rides My Cock Slow Until She Cums"],
+    ["Massage Turns Into A Slippery Oiled Fuck And A Happy Ending Creampie", "Couples Sex Tape Of A Raw Doggy Style Fuck Ending In A Creampie"],
+  ])("does not treat a shared stock phrase as a near-duplicate: %s / %s", (left, right) => {
+    expect(titlesAreTooSimilar(left, right)).toBe(false);
+  });
+
+  it.each([
+    ["My Amateur Girlfriend Rides My Cock Raw On The Couch", "My Amateur Girlfriend Rides My Cock Raw On The Bed"],
+    ["Busty MILF Gets Her Pussy Pounded Doggy Style On The Hotel Bed", "Busty MILF Gets Pounded Doggy Style On The Hotel Bed"],
+    ["Ebony Babe Takes A Deep Creampie On The Couch", "On The Couch Ebony Babe Takes A Deep Creampie"],
+  ])("still flags a genuine near-duplicate: %s / %s", (left, right) => {
+    expect(titlesAreTooSimilar(left, right)).toBe(true);
   });
 });

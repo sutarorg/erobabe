@@ -677,8 +677,12 @@ route: `/api/metadata/suggest`.
    category and source, then publish. The server must generate title,
    description, and tags before it creates the video record. Alternatively POST
    to `/api/metadata/suggest` as an admin with `{ "fileName": "clip.mp4" }` and
-   expect a `{ suggestion, source, style, note }` response (`source: "offline"`
-   with a `warning` means the deterministic composer wrote the copy instead). To check a key from a terminal
+   expect a `{ suggestion, source, style, note }` response. `source: "ai"` is the
+   normal answer, including when the model overshot a word budget and the reply
+   was trimmed or extended into range. `source: "offline"` with a `warning` and a
+   `warningCode` (`not_configured`, `quota_exceeded`, `model_unavailable`,
+   `provider_error`, `bad_output`, `timeout`) means the model could not be used
+   at all and the deterministic composer wrote the copy instead. To check a key from a terminal
    instead (no deploy needed), run `OPENROUTER_API_KEY=sk-or-… npm run test:live`
    — see `tests/live/README.md`. It needs outbound HTTPS to openrouter.ai.
 6. Optional tuning: `VIDEO_TITLE_STYLE` (default `explicit`) sets the voice —
@@ -688,8 +692,12 @@ route: `/api/metadata/suggest`.
    (`reasoning: { enabled: false }`), so the whole budget goes to the JSON.
    If the provider rejects the JSON-mode or reasoning field, the client retries
    without that field.
-7. AI metadata is an enhancement, not a gate. If it is not configured, returns
-   malformed output, refuses adults-only copy, or hits quota, the upload still
+7. AI metadata is an enhancement, not a gate. Length slips in the model's reply
+   are repaired and published as AI copy, other unusable replies are retried up
+   to three times within the route's 60 s limit, and the upload page asks the
+   route again after a network error, a 5xx, or a 429 (honouring `Retry-After`)
+   before it drafts anything itself. If AI is not configured, keeps returning
+   unusable output, refuses adults-only copy, or hits quota, the upload still
    completes: the video is created with deterministic metadata built from the
    selected category in the same voice (the offline composer in
    `lib/metadata/explicit-titles.ts`, never from the file name)
@@ -707,6 +715,9 @@ route: `/api/metadata/suggest`.
    also shows an amber banner before you publish when the server cannot see the
    key); rejected key (401/403) → 503; no credits or rate limit (402/429) → 429;
    unknown model slug (404) → 502 naming the model; malformed model output → 502.
+   The suggest route itself answers these with an offline draft plus `warning`
+   and `warningCode`; it returns 429 with `Retry-After` only when one admin sends
+   more than 20 suggestion requests a minute.
    The key never appears in responses or logs; any key-shaped text echoed by a
    provider is redacted before it is shown.
 10. "The model's reply could not be parsed as JSON" means the model's text could
@@ -714,8 +725,8 @@ route: `/api/metadata/suggest`.
     the payload, raw newlines inside strings, smart quotes, trailing commas, and
     truncated output are all handled) and a retry. Raise
     `OPENROUTER_MAX_OUTPUT_TOKENS` and retry, or set `OPENROUTER_MODEL` to a model
-    with JSON output support. Uploads are unaffected — they fall back to
-    file-name metadata.
+    with JSON output support. Uploads are unaffected — they fall back to a
+    category draft in the site's title voice, never file-name metadata.
 
 ---
 
