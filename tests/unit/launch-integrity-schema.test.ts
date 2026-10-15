@@ -1,5 +1,13 @@
 // @vitest-environment node
-import { beforeAll, afterAll, describe, it, expect } from "vitest";
+import {
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  describe,
+  it,
+  expect,
+} from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { uuid_ossp } from "@electric-sql/pglite/contrib/uuid_ossp";
@@ -252,4 +260,183 @@ it("rolls back payment and campaign together when invoice persistence fails", as
     (await db.query(`select status from invoices where payment_id='${p}'`))
       .rows,
   ).toEqual([{ status: "paid" }]);
+});
+
+describe("forward migration 18: recovery RPC authorization, idempotence and rollback", () => {
+  const admin = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const owner = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const recovery = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const bind = (
+    provider = "987",
+    address = "fixture-address",
+    amount = "99.5",
+    actor = admin,
+  ) =>
+    `select bind_nowpayment('${actor}','${recovery}','${provider}','${address}','${amount}')`;
+  async function asRole(role: string, sql: string) {
+    await db.exec(`savepoint recovery_attempt; set local role ${role}`);
+    try {
+      return await db.query(sql);
+    } catch (error) {
+      await db.exec("rollback to savepoint recovery_attempt");
+      throw error;
+    } finally {
+      await db.exec("reset role; release savepoint recovery_attempt");
+    }
+  }
+  beforeEach(async () => {
+    await db.exec(`begin;
+      insert into auth.users(id,email) values('${admin}','recovery-admin@example.com'),('${owner}','recovery-owner@example.com');
+      update profiles set role='admin' where id='${admin}';
+      insert into payments(id,advertiser_id,external_id,invoice_number,provider,amount_cents,payment_currency,chain,pay_currency)
+      values('${recovery}','${owner}','nowpayments:recovery-test','INV-recovery-test','nowpayments',9900,'USDT','ethereum','usdterc20');`);
+  });
+  afterEach(async () => {
+    await db.exec("rollback");
+  });
+
+  it.each(["anon", "authenticated"])(
+    "denies direct %s execution even with an active admin argument",
+    async (role) => {
+      await expect(asRole(role, bind())).rejects.toThrow(/permission denied/);
+    },
+  );
+  it("removes the unaudited legacy RPC and rejects inactive/non-admin actors", async () => {
+    expect(
+      (
+        await db.query(
+          "select to_regprocedure('public.bind_nowpayment(uuid,text,text,text)') old",
+        )
+      ).rows,
+    ).toEqual([{ old: null }]);
+    await expect(
+      asRole("service_role", bind("987", "fixture-address", "99.5", owner)),
+    ).rejects.toThrow(/Active admin/);
+    await db.exec(`update profiles set status='suspended' where id='${admin}'`);
+    await expect(asRole("service_role", bind())).rejects.toThrow(
+      /Active admin/,
+    );
+  });
+  it.each(["0", "-1", "NaN", "Infinity", "1e2", "0.0000000000000000001"])(
+    "rejects invalid amount %s without changing payment identity",
+    async (amount) => {
+      await expect(
+        asRole("service_role", bind("987", "fixture-address", amount)),
+      ).rejects.toThrow(/Invalid recovery/);
+      expect(
+        (
+          await db.query(
+            `select status,provider_payment_id from payments where id='${recovery}'`,
+          )
+        ).rows,
+      ).toEqual([{ status: "pending", provider_payment_id: null }]);
+    },
+  );
+  it("rejects invalid provider IDs and empty/whitespace addresses", async () => {
+    for (const sql of [
+      bind("../987"),
+      bind("1".repeat(41)),
+      bind("987", ""),
+      bind("987", " "),
+    ]) {
+      await expect(asRole("service_role", sql)).rejects.toThrow(
+        /Invalid recovery/,
+      );
+    }
+  });
+  it("binds once, records its actor, and leaves pending invoices unpaid", async () => {
+    await db.exec(
+      `insert into invoices(number,advertiser_id,payment_id,amount_cents) values('INV-recovery-test','${owner}','${recovery}',9900)`,
+    );
+    await asRole("service_role", bind());
+    await asRole("service_role", bind("987", "fixture-address", "99.500"));
+    expect(
+      (
+        await db.query(
+          `select status,provider_payment_id,expected_amount from payments where id='${recovery}'`,
+        )
+      ).rows,
+    ).toEqual([
+      {
+        status: "awaiting_confirmation",
+        provider_payment_id: "987",
+        expected_amount: "99.5",
+      },
+    ]);
+    expect(
+      (
+        await db.query(
+          `select status from invoices where payment_id='${recovery}'`,
+        )
+      ).rows,
+    ).toEqual([{ status: "pending" }]);
+    expect(
+      (
+        await db.query(
+          `select actor_id,action from audit_logs where target_id='${recovery}'`,
+        )
+      ).rows,
+    ).toEqual([{ actor_id: admin, action: "provider_identity_recovered" }]);
+    expect(
+      (
+        await db.query(
+          `select count(*)::int n from payment_events where payment_id='${recovery}' and event_type='provider_identity_recovered'`,
+        )
+      ).rows,
+    ).toEqual([{ n: 1 }]);
+  });
+  it("never replaces an already-bound provider, address or amount", async () => {
+    await asRole("service_role", bind());
+    for (const sql of [
+      bind("123"),
+      bind("987", "other-address"),
+      bind("987", "fixture-address", "1"),
+    ]) {
+      await expect(asRole("service_role", sql)).rejects.toThrow(
+        /cannot be rebound/,
+      );
+    }
+    expect(
+      (
+        await db.query(
+          `select provider_payment_id,payment_address,expected_amount from payments where id='${recovery}'`,
+        )
+      ).rows,
+    ).toEqual([
+      {
+        provider_payment_id: "987",
+        payment_address: "fixture-address",
+        expected_amount: "99.5",
+      },
+    ]);
+  });
+  it("rolls identity and event back on audit failure; an identical retry succeeds", async () => {
+    await db.exec(`create function fail_recovery_audit_fixture() returns trigger language plpgsql as $$begin if new.action='provider_identity_recovered' then raise exception 'fixture recovery audit failure';end if;return new;end$$;
+      create trigger fail_recovery_audit_fixture before insert on audit_logs for each row execute function fail_recovery_audit_fixture();`);
+    await expect(asRole("service_role", bind())).rejects.toThrow(
+      /fixture recovery audit failure/,
+    );
+    expect(
+      (
+        await db.query(
+          `select provider_payment_id,status from payments where id='${recovery}'`,
+        )
+      ).rows,
+    ).toEqual([{ provider_payment_id: null, status: "pending" }]);
+    expect(
+      (
+        await db.query(
+          `select count(*)::int n from payment_events where payment_id='${recovery}'`,
+        )
+      ).rows,
+    ).toEqual([{ n: 0 }]);
+    await db.exec(
+      "drop trigger fail_recovery_audit_fixture on audit_logs; drop function fail_recovery_audit_fixture()",
+    );
+    await asRole("service_role", bind());
+    expect(
+      (await db.query(`select status from payments where id='${recovery}'`))
+        .rows,
+    ).toEqual([{ status: "awaiting_confirmation" }]);
+  });
 });

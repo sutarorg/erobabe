@@ -1,3 +1,4 @@
+import { matchesNowpaymentsQuote } from "@/lib/nowpayments/quote";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireActiveAdmin, errorStatusFrom } from "@/lib/video/publishing";
@@ -9,7 +10,7 @@ import {
 } from "@/lib/nowpayments/verify";
 export async function POST(req: Request) {
   try {
-    const { service } = await requireActiveAdmin();
+    const { user, service } = await requireActiveAdmin();
     const parsed = z
       .object({
         paymentId: z.string().uuid(),
@@ -36,37 +37,46 @@ export async function POST(req: Request) {
     if (
       p.provider !== "nowpayments" ||
       remote.paymentId !== parsed.data.providerPaymentId ||
-      remote.orderId !== p.invoice_number ||
-      remote.payCurrency?.toLowerCase() !== p.pay_currency ||
-      remote.priceCurrency?.toLowerCase() !== "usd" ||
-      !remote.priceAmount ||
-      Math.round(Number(remote.priceAmount) * 100) !== p.amount_cents ||
-      !remote.payAddress ||
-      !remote.payAmount
+      !matchesNowpaymentsQuote(remote, {
+        orderId: p.invoice_number,
+        payCurrency: p.pay_currency || "",
+        priceCents: p.amount_cents,
+      })
     )
       return NextResponse.json(
         { error: "Provider identity, order or price mismatch" },
         { status: 409 },
       );
-    if (!p.provider_payment_id) {
-      const { error } = await service.rpc("bind_nowpayment", {
-        p_payment: p.id,
-        p_provider: remote.paymentId,
-        p_address: remote.payAddress,
-        p_amount: remote.payAmount,
-      });
-      if (error) throw error;
-    } else if (p.provider_payment_id !== remote.paymentId)
+    // Always use the row-locked RPC: identical retries are harmless; a
+    // concurrent request may never replace an already bound identity/quote.
+    const { error: bindError } = await service.rpc("bind_nowpayment", {
+      p_admin: user.id,
+      p_payment: p.id,
+      p_provider: remote.paymentId,
+      p_address: remote.payAddress,
+      p_amount: remote.payAmount,
+    });
+    if (bindError) {
       return NextResponse.json(
-        { error: "Provider identity mismatch" },
+        {
+          error:
+            "Recovery could not bind this reference; reload and retry the same verified reference.",
+        },
         { status: 409 },
       );
+    }
     const result = await verifyAndProcessNowpaymentsIpn(remote.raw);
     if (result.ok && result.verified && result.status === "confirmed")
       await confirmNowpaymentsPayment(p.id, remote.paymentId);
     return NextResponse.json(
       { status: result.status || "unverified", verified: !!result.verified },
-      { status: result.ok || result.recorded ? 200 : 409 },
+      {
+        status: result.retryable
+          ? 503
+          : result.ok || result.recorded
+            ? 200
+            : 409,
+      },
     );
   } catch (e) {
     return NextResponse.json(

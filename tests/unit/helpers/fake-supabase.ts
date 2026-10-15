@@ -277,7 +277,39 @@ export function createFakeSupabase(seed: Partial<FakeDb> = {}) {
       rpc: async (name: string, args: Row) => {
         const p = db.payments.find((p) => p.id === args.p_payment);
         if (!p) return { data: null, error: new Error("Payment not found") };
-        if (name === "claim_checkout") {
+        if (name === "bind_nowpayment") {
+          const admin = db.profiles?.find((row) => row.id === args.p_admin);
+          if (admin?.role !== "admin" || admin.status !== "active")
+            return { error: new Error("Active admin required") };
+          if (p.provider !== "nowpayments")
+            return { error: new Error("Payment not found") };
+          if (p.provider_payment_id) {
+            return p.provider_payment_id === args.p_provider &&
+              p.payment_address === args.p_address &&
+              Number(p.expected_amount) === Number(args.p_amount)
+              ? { data: null, error: null }
+              : { error: new Error("Payment cannot be rebound") };
+          }
+          if (p.status !== "pending")
+            return { error: new Error("Payment cannot be recovered") };
+          p.provider_payment_id = args.p_provider;
+          p.payment_address = args.p_address;
+          p.expected_amount = args.p_amount;
+          p.status = "awaiting_confirmation";
+          db.payment_events.push({
+            payment_id: p.id,
+            event_type: "provider_identity_recovered",
+            payload: {
+              actor_id: args.p_admin,
+              provider_payment_id: args.p_provider,
+            },
+          });
+          db.audit_logs.push({
+            actor_id: args.p_admin,
+            action: "provider_identity_recovered",
+            target_id: p.id,
+          });
+        } else if (name === "claim_checkout") {
           const campaigns = db.campaigns.filter((c) =>
             args.p_campaigns.includes(c.id),
           );

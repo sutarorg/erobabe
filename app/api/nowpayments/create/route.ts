@@ -1,3 +1,4 @@
+import { matchesNowpaymentsQuote } from "@/lib/nowpayments/quote";
 import { boundedJson, RequestError } from "@/lib/http/safety";
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
@@ -280,14 +281,11 @@ export async function POST(req: NextRequest) {
         ipnCallbackUrl: nowpaymentsIpnUrl(getSiteUrl()),
       });
       if (
-        providerPayment.orderId !== orderId ||
-        providerPayment.payCurrency?.toLowerCase() !== choice.payCurrency ||
-        providerPayment.priceCurrency?.toLowerCase() !== "usd" ||
-        !providerPayment.priceAmount ||
-        Math.round(Number(providerPayment.priceAmount) * 100) !== priceCents ||
-        !providerPayment.payAmount ||
-        !Number.isFinite(Number(providerPayment.payAmount)) ||
-        Number(providerPayment.payAmount) <= 0
+        !matchesNowpaymentsQuote(providerPayment, {
+          orderId,
+          payCurrency: choice.payCurrency,
+          priceCents,
+        })
       ) {
         throw new Error(
           "Provider quote does not match the reserved order; reconciliation required",

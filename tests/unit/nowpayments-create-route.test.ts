@@ -340,3 +340,25 @@ it("does not expose a payable quote whose provider order differs from the reserv
   );
   expect(fake.db.campaigns[0].payment_id).toBe(fake.db.payments[0].id);
 });
+
+it.each([
+  { pay_amount: "Infinity" },
+  { pay_amount: "0" },
+  { pay_amount: "1e2" },
+  { price_amount: "99.004" },
+  { pay_address: " " },
+  { payment_id: "not-an-id" },
+])(
+  "preserves checkout claims without exposing malformed provider quotes %j",
+  async (quote) => {
+    const fake = seed();
+    stubProvider(jsonResponse(providerPayment(quote)));
+    const response = await POST(request(validBody));
+    expect(response.status).toBe(502);
+    expect((await response.json()).address).toBeUndefined();
+    expect(fake.db.payments[0].provider_response.reconciliation_required).toBe(
+      true,
+    );
+    expect(fake.db.campaigns[0].payment_id).toBe(fake.db.payments[0].id);
+  },
+);
