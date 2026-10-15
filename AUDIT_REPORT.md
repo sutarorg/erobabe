@@ -51,3 +51,14 @@ Existing tests were not removed/skipped. Changed expectations reflect explicit b
 ### Final request-boundary correction
 
 A final review found middleware previously checked session identity but left current role/suspension to layouts. Layouts can stay mounted across client/RSC navigation while service-backed pages query independently. Middleware now rechecks profile role/status on **every protected request**, fails closed on missing/failed profile reads, routes active admins to their own portal, and preserves refreshed session cookies on redirects. Ten new route-boundary regressions pass; final full suite: **47 files / 536 tests**. Private pending-review video rows also no longer offer public watch links that necessarily 404. Genuine authenticated staging verification remains required.
+
+
+### October 15 continuation: payment recovery and settlement corrections
+
+Additional review found malformed positive-amount evidence was not checked before recovery permanently bound a quote; recovery lacked an actor audit and treated identical raced retries as failures. A shared checkout/recovery quote validator and forward-only migration **18 payment_recovery** now enforce bounded positive decimal quotes, exact order/asset/USD-price identity, active-admin attribution, immutable row-locked binding, and atomic audit/event persistence. Existing migrations are unchanged.
+
+A second defect occurred when a finished notification disagreed with the subsequently fetched provider state: a standalone payment update could write a terminal status without its invoice/campaign effects. That path now returns a retry without changing payment state; normal settlement handles all effects together on current evidence. The settlement caller also still used a legacy 2% default tolerance; it now explicitly uses zero tolerance so near-miss under/overpayments remain in reconciliation. A controlled run of the prior verifier against five new cases reproduced **five failures**, then the repaired code passed. The filtered reproduction is diagnostic, not the full acceptance suite.
+
+New recovery-route coverage uses the real authorization/helper/verifier with provider and DB boundaries mocked, including absence of privileges, malformed/missing identity, replay, unknown funds, near-miss amounts, refund, provider drift and settlement failure/retry. New full-migration SQL cases independently test RPC grants, active-admin enforcement, malformed amounts, immutable retries, actor auditing and rollback when the audit insert fails. Sequential local retries do **not** prove independent-session concurrency.
+
+The October 15 npm registry/advisory recheck still reports **five high tooling findings**; available braces remains 3.0.3 and the latest Next ESLint plugin still declares the affected chain. No dependency risk was waived. Production-only audit remains zero. Genuine staging, policy, unfinished support/creative UI and operational release gates are unchanged.

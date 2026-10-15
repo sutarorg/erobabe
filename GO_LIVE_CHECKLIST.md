@@ -1,4 +1,4 @@
-# Erobabe launch gates — 2026-10-14
+# Erobabe launch gates — 2026-10-15
 
 **Release: HOLD.** PASS means verified in the named environment only. BLOCKED requires credentials/approval/external action; NOT TESTED means no valid acceptance evidence. Do not infer production PASS from local tests. Final command evidence: `PRODUCTION_READINESS.md`.
 
@@ -6,9 +6,10 @@
 |---|---|---|
 | Repository workflow map and baseline | PASS — repository | Fetched main `fe46b334…`; `docs/WORKFLOW_MAP.md`. |
 | Migration SQL, permission and settlement regressions | PASS — local PGlite only | All application migration files execute with auth/storage infrastructure fixtures; direct-role and transaction tests. Not a Supabase staging sign-off. |
-| Production Supabase schema/history/RLS | BLOCKED | Owner provisions isolated staging; backup/restore; run `docs/LAUNCH_PREFLIGHT.sql`; resolve overlaps/unsafe historic approvals; apply unapplied 14→15→16→17 after 00–13. Verify PostgREST and Storage policies with anon, two advertisers, active/suspended admin. |
+| Production Supabase schema/history/RLS | BLOCKED | Owner provisions isolated staging; backup/restore; run `docs/LAUNCH_PREFLIGHT.sql`; resolve overlaps/unsafe historic approvals; apply unapplied 14→15→16→17→18 after 00–13. Verify PostgREST and Storage policies with anon, two advertisers, active/suspended admin. |
 | Concurrent inventory purchase | NOT TESTED — staging | Two independent authenticated connections reserve identical slot/date ranges simultaneously; exactly one succeeds. Test nonoverlapping dates, expired hold reuse, deadlock/serialization retries, stale UI and uncertain provider response. |
 | Payment schema/quote/integrity | BLOCKED — provider staging | Exact real-schema checkout must create external_id, invoice and claim before address. Verify quote identity/price; replay signed IPN and status polling, failures, missing evidence, amount mismatch and refund. No production charges authorized by this audit. |
+| Audited recovery and provider snapshot drift | PASS — local route/SQL tests only | Migration 18 requires an active admin, validates immutable quotes and atomically audits binding. Identical retry and audit-failure rollback covered; drifting provider snapshots never bypass settlement. Real concurrent/provider acceptance remains blocked. |
 | NOWPayments account/settlement approval | BLOCKED | Written business approval, supported assets/networks, payout configuration, exact HTTPS IPN URL/secret, provider-approved test procedure, reconciliation/refund runbook and staffed exception handling. |
 | Per-request portal authorization | PASS — local 10 middleware tests | Active role/status checked on every protected RSC request, not cached layout alone; suspension, wrong-role, missing profile and refreshed-cookie regressions. Real sessions still require staging acceptance below. |
 | Auth/admin bootstrap | BLOCKED | Confirm signup metadata cannot set role; operator-controlled admin bootstrap; active/suspended roles via direct API/DB. Register PKCE callback/recovery redirects, verify inbox links, logout, recovery, session expiry and password policy. Never publish credentials. |
@@ -31,8 +32,8 @@
 ## Safe release order
 
 1. Clear legal/provider/hosting and security-tooling gates; obtain staging authorization without sharing secrets in chat.
-2. Restore backup in isolated staging, inspect history/preflight, apply migrations 14–17 in order, deploy matching app during a controlled write freeze.
+2. Restore backup in isolated staging, inspect history/preflight, apply migrations 14–18 in order, deploy matching app during a controlled write freeze.
 3. Execute real acceptance above, attach redacted provider IDs, dates, results and operator sign-off to `PRODUCTION_READINESS.md`. Local SQL mocks cannot replace this.
 4. Re-run checks and independent review. Only then approve merge/release and production deployment. Never restore permissive RLS as a rollback shortcut.
 
-Detailed recovery and provider setup: `DEPLOYMENT.md` (especially the October 14 audit addendum). No live charge, production migration, account-policy approval or remote deletion was performed in this session.
+Detailed recovery and provider setup: `DEPLOYMENT.md` (especially the October 14 audit and October 15 recovery addenda). No live charge, production migration, account-policy approval or remote deletion was performed in this session.
