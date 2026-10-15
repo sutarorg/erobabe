@@ -515,7 +515,12 @@ none of these providers/accounts has been approved by this implementation.
 - Interrupted, failed or cancelled upload: reselect the same source file. The
   server finds the existing session for that administrator/filename/size/MIME
   and resumes it automatically (same server UUID and provider GUID, latest
-  title/category applied); fresh authorization lasts 24 hours. Bunny expires incomplete resources at the
+  title/category applied); fresh authorization lasts 24 hours.
+- Bunny video deleted in the Bunny dashboard before its upload finished:
+  reselecting the file attaches one replacement video to the same session. If
+  the upload was already saved to the video library, delete it in
+  Admin → Videos first (stage/finish never re-point a catalog video to another
+  provider video), then reselect the file. Bunny expires incomplete resources at the
   original authorization expiry or roughly 48 hours inactivity, whichever first.
   Re-signing does not extend a resource's original life. tus-js-client handles a
   missing expired resource by restarting transfer to the **same** video object.
@@ -1013,5 +1018,5 @@ grep -R "pexels\|INITIAL_VIDEOS\|mock\|demo" --include="*.tsx" --include="*.ts" 
 
 ## October 15 upload-session follow-up — required
 
-- Apply **00000000000019_auto_publish_and_ai_metadata.sql** (Supabase → SQL Editor, or `supabase db push`). It adds `bunny_uploads.description` and the auto-publish versions of `stage_bunny_upload`/`finish_bunny_upload`. Until it is applied, uploads still succeed, but AI descriptions are not saved, finished videos wait in the video library for manual publishing, and the upload page shows a notice naming the migration.
+- Apply **00000000000019_auto_publish_and_ai_metadata.sql** (Supabase → SQL Editor, or `supabase db push`). It adds `bunny_uploads.description` and the auto-publish versions of `stage_bunny_upload`/`finish_bunny_upload`. Until it is applied, uploads still succeed, but AI descriptions are not saved, finished videos wait in the video library for manual publishing, and the upload page shows a notice naming the migration. Running it also **publishes every Bunny video currently in `pending_review`** (the auto-publish behaviour), so check that queue first. It is safe to re-run: one transaction, `add column if not exists`, `create or replace function`.
 - Re-selecting a file that was attempted before (failed, cancelled, interrupted or reloaded) no longer fails with "Session already reserved or database unavailable": the server resumes that file's existing session. Database failures while reserving a session now report their actual cause and PostgreSQL/PostgREST code (also logged as `[bunny] Could not …`).

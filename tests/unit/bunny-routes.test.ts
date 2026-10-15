@@ -713,4 +713,57 @@ describe("re-selected files resume their session instead of failing to reserve",
     expect(Number(response.headers.get("Retry-After"))).toBeGreaterThan(0);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+  it("replaces a Bunny video deleted in the dashboard when the file was never saved to the library", async () => {
+    seed("failed");
+    const REPLACEMENT = "88888888-8888-4888-8888-888888888888";
+    fetchMock.mockImplementation(async (_url: string, options: RequestInit) =>
+      options.method === "POST"
+        ? Response.json({ guid: REPLACEMENT })
+        : Response.json({ message: "Video not found" }, { status: 404 }),
+    );
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      sessionId: ID,
+      videoId: REPLACEMENT,
+      transferred: false,
+    });
+    const posts = fetchMock.mock.calls.filter(([, o]) => o.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(posts[0][1].body).title).toBe(`Clip [session:${ID}]`);
+    expect(h.db.bunny_uploads[0]).toMatchObject({
+      provider_id: REPLACEMENT,
+      provider_status: null,
+      state: "uploading",
+    });
+  });
+
+  it("explains the way out when a deleted Bunny video is still listed in the library", async () => {
+    seed("processing");
+    h.db.videos.push({ id: ID, provider: "bunny", provider_file_id: REMOTE });
+    fetchMock.mockResolvedValue(
+      Response.json({ message: "Video not found" }, { status: 404 }),
+    );
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toMatch(
+      /Delete it in Admin → Videos, then select the file again/,
+    );
+    expect(fetchMock.mock.calls.some(([, o]) => o.method === "POST")).toBe(
+      false,
+    );
+    expect(h.db.bunny_uploads[0].provider_id).toBe(REMOTE);
+  });
+
+  it("never replaces the Bunny video on other provider errors", async () => {
+    seed("failed");
+    fetchMock.mockResolvedValue(new Response("{}", { status: 401 }));
+    const response = await sessions({ sessionId: NEW_ID });
+    expect(response.status).toBe(502);
+    expect((await response.json()).error).toMatch(/authentication failed/);
+    expect(fetchMock.mock.calls.some(([, o]) => o.method === "POST")).toBe(
+      false,
+    );
+    expect(h.db.bunny_uploads[0].provider_id).toBe(REMOTE);
+  });
 });

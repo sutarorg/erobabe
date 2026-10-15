@@ -10,6 +10,8 @@ export class BunnyError extends Error {
     public status = 502,
     public retryAfter?: number,
     public definitelyRejected = false,
+    /** HTTP status Bunny answered with, when it answered at all. */
+    public providerStatus?: number,
   ) {
     super(message);
   }
@@ -154,6 +156,7 @@ export async function bunnyRequest(
         response.status === 429 ? 429 : 502,
         retryAfter || undefined,
         [400, 401, 403, 404, 413, 415, 422, 429].includes(response.status),
+        response.status,
       );
     }
     try {

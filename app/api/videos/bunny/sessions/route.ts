@@ -269,20 +269,39 @@ async function resumeSession(
       { headers },
     );
   }
-  const providerId =
+  let providerId =
     session.provider_id ||
     (await reconcileCreation(service, userId, session, input.title));
-  const remote = bunnyVideoSchema.parse(
-    await bunnyRequest(`/${providerId}`, "GET", undefined, session.library_id),
-  );
-  if (
-    remote.guid !== providerId ||
-    String(remote.videoLibraryId) !== session.library_id
-  )
-    throw new BunnyError("Provider session identity mismatch.");
-  if (remote.status === 5 || remote.status === 6)
+  let status: number;
+  try {
+    const remote = bunnyVideoSchema.parse(
+      await bunnyRequest(
+        `/${providerId}`,
+        "GET",
+        undefined,
+        session.library_id,
+      ),
+    );
+    if (
+      remote.guid !== providerId ||
+      String(remote.videoLibraryId) !== session.library_id
+    )
+      throw new BunnyError("Provider session identity mismatch.");
+    status = remote.status;
+  } catch (e) {
+    if (!(e instanceof BunnyError && e.providerStatus === 404)) throw e;
+    providerId = await replaceMissingVideo(
+      service,
+      userId,
+      session,
+      input.title,
+      providerId,
+    );
+    status = 0;
+  }
+  if (status === 5 || status === 6)
     throw new BunnyError(
-      `Bunny could not process this file earlier (${BUNNY_STATUS[remote.status]}). Inspect it in the Bunny dashboard; to upload the source again, rename the file and select it again.`,
+      `Bunny could not process this file earlier (${BUNNY_STATUS[status]}). Inspect it in the Bunny dashboard; to upload the source again, rename the file and select it again.`,
       409,
     );
   // The latest title/category apply, and cancelling or failing only paused the
@@ -321,12 +340,68 @@ async function resumeSession(
   return NextResponse.json(
     {
       ...signUpload(providerId, session.library_id),
-      transferred: remote.status !== 0,
+      transferred: status !== 0,
       sessionId: session.id,
       ...(resumed ? { resumed: true } : {}),
       ...(warning ? { warning } : {}),
     },
     { headers },
+  );
+}
+
+/**
+ * Replaces a Bunny video that no longer exists (e.g. deleted in the Bunny
+ * dashboard). Only sessions never saved to the catalog qualify: stage/finish
+ * refuse to re-point an existing catalog video to a different provider video.
+ */
+async function replaceMissingVideo(
+  service: ServiceClient,
+  userId: string,
+  session: UploadSession,
+  title: string,
+  missingId: string,
+): Promise<string> {
+  const { data: saved, error } = await service
+    .from("videos")
+    .select("id")
+    .eq("id", session.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (saved)
+    throw new BunnyError(
+      "This file's Bunny video was deleted in the Bunny dashboard, but it is still listed in the video library. Delete it in Admin → Videos, then select the file again.",
+      409,
+    );
+  const { guid } = createdVideoSchema.parse(
+    await bunnyRequest(
+      "",
+      "POST",
+      { title: `${title} [session:${session.id}]` },
+      session.library_id,
+    ),
+  );
+  // Only one request may swap in a replacement; a loser's empty video is inert.
+  const { data, error: attachError } = await service
+    .from("bunny_uploads")
+    .update({
+      provider_id: guid,
+      provider_status: null,
+      state: "uploading",
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", session.id)
+    .eq("created_by", userId)
+    .eq("provider_id", missingId)
+    .neq("state", "completed")
+    .select("provider_id")
+    .maybeSingle();
+  if (attachError)
+    throw databaseError("attach the replacement Bunny video", attachError);
+  if (data?.provider_id) return data.provider_id;
+  throw new BunnyError(
+    "The upload session changed while it was being recovered. Retry.",
+    409,
   );
 }
 
