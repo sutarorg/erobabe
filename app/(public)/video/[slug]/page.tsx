@@ -149,12 +149,12 @@ export default async function VideoPage({
     thumbnailUrl: video.thumbnail_url ? [video.thumbnail_url] : [],
     uploadDate: video.published_at
       ? new Date(video.published_at).toISOString()
-      : new Date().toISOString(),
+      : undefined,
     duration: video.duration_seconds
       ? `PT${video.duration_seconds}S`
       : undefined,
-    contentUrl: video.playable_url || undefined,
-    embedUrl: video.embed_url || `${SITE_URL}/video/${video.slug}`,
+    contentUrl: playbackSource.kind === "direct" ? playbackSource.url : undefined,
+    embedUrl: playbackSource.kind === "embed" ? playbackSource.url : undefined,
     publisher: {
       "@type": "Organization",
       name: "erobabe",
@@ -171,7 +171,7 @@ export default async function VideoPage({
       <ViewTracker videoId={video.id} />
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd) }}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd).replace(/</g, "\\u003c") }}
       />
 
       <Link

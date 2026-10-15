@@ -1,12 +1,13 @@
+import { publicPageMetadata } from "@/lib/metadata/page";
 import Link from "next/link";
 import type { Metadata } from "next";
 import { SITE_URL } from "@/lib/site";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = publicPageMetadata({
   title: "Parental Controls",
   description: "Parental control tools and age-restriction guidance for erobabe",
   alternates: { canonical: `${SITE_URL}/parental-controls` },
-};
+});
 
 const SECTIONS = [
   {

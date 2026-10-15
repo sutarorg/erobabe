@@ -1,3 +1,4 @@
+import { publicPageMetadata } from "@/lib/metadata/page";
 import { resolveCategoryIcon } from "@/src/components/categoryIcons";
 import Link from "next/link";
 import { SITE_URL } from "@/lib/site";
@@ -6,10 +7,11 @@ import type { Metadata } from "next";
 
 export const revalidate = 60;
 
-export const metadata: Metadata = {
+export const metadata: Metadata = publicPageMetadata({
   title: "All Categories",
+  description: "Explore Erobabe video categories to find relevant collections and discover published videos by interest. This catalog is exclusively for adults aged 18 and over.",
   alternates: { canonical: `${SITE_URL}/categories` },
-};
+});
 
 export default async function CategoriesPage() {
   const categories = await getPublicCategories();

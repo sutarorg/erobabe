@@ -619,6 +619,8 @@ export default function VideoManager({
             payload?.error || "Unable to delete the selected videos",
           );
         for (const id of payload.deleted || []) deleted.add(String(id));
+        if (payload.failed?.length)
+          throw new Error(`${payload.failed.length} videos could not be deleted from Bunny. They remain selected; check configuration and retry.`);
       }
       setVideos((current) => current.filter((video) => !deleted.has(video.id)));
       setSelected((current) => {

@@ -1,3 +1,4 @@
+import { selectPlaybackSource } from "@/lib/video/playback";
 import { tryCreateServiceClient } from "@/lib/supabase/server";
 import { getSiteUrl } from "@/lib/site";
 
@@ -10,26 +11,33 @@ export async function GET() {
   try {
     const supabase = tryCreateServiceClient();
     if (supabase) {
-      const { data } = await supabase
-        .from("videos")
-        .select(
-          "slug, title, description, thumbnail_url, published_at, duration_seconds, updated_at",
-        )
-        .eq("requires_reupload", false)
-        .eq("status", "published")
-        .eq("visibility", "public")
-        .eq("rights_status", "cleared")
-        .eq("moderation_status", "approved")
-        .order("published_at", { ascending: false })
-        .limit(5000);
-      videos = data || [];
+      for (let offset = 0; offset < 45000; offset += 1000) {
+        const { data, error } = await supabase
+          .from("videos")
+          .select(
+            "slug, title, description, thumbnail_url, published_at, duration_seconds, updated_at, provider, provider_file_id, bunny_library_id, playable_url, embed_url",
+          )
+          .eq("requires_reupload", false)
+          .eq("status", "published")
+          .eq("visibility", "public")
+          .eq("rights_status", "cleared")
+          .eq("moderation_status", "approved")
+          .order("published_at", { ascending: false })
+          .order("id", { ascending: true })
+          .range(offset, offset + 999);
+        if (error) throw error;
+        videos.push(...(data || []));
+        if (!data || data.length < 1000) break;
+      }
     }
   } catch (e) {
     console.warn("video-sitemap: supabase error", e);
   }
 
   const xmlEntries = videos
-    .map((v) => {
+    .flatMap((v) => {
+      const source = selectPlaybackSource(v.playable_url, v.embed_url, v.provider, v.bunny_library_id, v.provider_file_id);
+      if (!v.thumbnail_url || !v.title || (source.kind !== "direct" && source.kind !== "embed")) return [];
       const loc = `${siteUrl}/video/${v.slug}`;
       const thumb = v.thumbnail_url
         ? `<video:thumbnail_loc>${escapeXml(v.thumbnail_url)}</video:thumbnail_loc>`
@@ -42,7 +50,9 @@ export async function GET() {
       const duration = v.duration_seconds
         ? `<video:duration>${v.duration_seconds}</video:duration>`
         : "";
-      const playerLoc = `<video:player_loc>${escapeXml(`${siteUrl}/video/${v.slug}`)}</video:player_loc>`;
+      const playerLoc = source.kind === "direct"
+        ? `<video:content_loc>${escapeXml(source.url)}</video:content_loc>`
+        : `<video:player_loc>${escapeXml(source.url)}</video:player_loc>`;
 
       return `
   <url>

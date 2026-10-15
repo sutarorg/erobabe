@@ -1,13 +1,14 @@
+import { publicPageMetadata } from "@/lib/metadata/page";
 import { createClient } from "@/lib/supabase/server";
 import { SITE_URL } from "@/lib/site";
 import Link from "next/link";
 import type { Metadata } from "next";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = publicPageMetadata({
   title: "About",
   description: "About erobabe — premium adult entertainment platform",
   alternates: { canonical: `${SITE_URL}/about` },
-};
+});
 
 export default async function AboutPage() {
   const supabase = await createClient();

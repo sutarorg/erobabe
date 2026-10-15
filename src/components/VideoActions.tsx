@@ -51,7 +51,13 @@ export default function VideoActions({ title, videoId }: VideoActionsProps) {
   const [ratingBusy, setRatingBusy] = useState(false);
   const [ratingError, setRatingError] = useState("");
   useEffect(() => {
-    try { setLiked(localStorage.getItem(`video-like:${videoId}`) === "true"); } catch { /* storage unavailable */ }
+    const restore = () => {
+      try { setLiked(Boolean(videoId) && localStorage.getItem(`video-like:${videoId}`) === "true"); }
+      catch { setLiked(false); }
+    };
+    restore();
+    window.addEventListener("storage", restore);
+    return () => window.removeEventListener("storage", restore);
   }, [videoId]);
   const [shared, setShared] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,13 +93,15 @@ export default function VideoActions({ title, videoId }: VideoActionsProps) {
         disabled={ratingBusy}
         onClick={async () => {
           if (!videoId) return;
+          const nextLiked = !liked;
+          setLiked(nextLiked);
+          try { localStorage.setItem(`video-like:${videoId}`, String(nextLiked)); } catch { /* storage unavailable */ }
           setRatingBusy(true); setRatingError("");
           try {
-            const res = await fetch("/api/community", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ videoId, visitorId: anonymousProfile().id, liked: !liked }) });
+            const res = await fetch("/api/community", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ videoId, visitorId: anonymousProfile().id, liked: nextLiked }) });
             if (!res.ok) throw new Error("Unable to save your like. Please retry.");
-            setLiked(!liked);
-            try { localStorage.setItem(`video-like:${videoId}`, String(!liked)); } catch { /* storage unavailable */ }
-          } catch { setRatingError("Unable to save your like. Please retry."); }
+
+          } catch { setRatingError("Your preference is kept on this device; the community count could not be synced."); }
           finally { setRatingBusy(false); }
         }}
         aria-pressed={liked}

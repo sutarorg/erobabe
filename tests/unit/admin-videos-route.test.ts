@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHarness, jsonRequest, ADMIN_ID, CATEGORY_ID } from "./helpers/video-route-harness";
 import type { FakeDb } from "./helpers/fake-supabase";
 
@@ -332,5 +332,52 @@ describe("DELETE /api/admin/videos — bulk delete", () => {
     expect((await DELETE(jsonRequest("/api/admin/videos", { ids: [] }, "DELETE"))).status).toBe(400);
     const many = Array.from({ length: 201 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
     expect((await DELETE(jsonRequest("/api/admin/videos", { ids: many }, "DELETE"))).status).toBe(400);
+  });
+});
+
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+describe("Bunny media deletion", () => {
+  const remote = { provider: "bunny", provider_file_id: "33333333-3333-4333-8333-333333333333", bunny_library_id: "123" };
+  function bunnySetup() {
+    vi.stubEnv("BUNNY_STREAM_LIBRARY_ID", "123");
+    vi.stubEnv("BUNNY_STREAM_API_KEY", "test-server-key");
+    return setup({ videos: [videoRow(remote)] });
+  }
+  it("removes remote media before the catalog row, accepting a 204", async () => {
+    const h = bunnySetup();
+    const fetch = vi.fn(async () => {
+      expect(h.db.videos).toHaveLength(1);
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const response = await DELETE(jsonRequest("/api/admin/videos", { id: VIDEO_ID }, "DELETE"));
+    expect(response.status).toBe(200);
+    expect(h.db.videos).toHaveLength(0);
+    expect(fetch).toHaveBeenCalledWith(`https://video.bunnycdn.com/library/123/videos/${remote.provider_file_id}`, expect.objectContaining({ method: "DELETE" }));
+  });
+  it("retains the row and thumbnail after provider failure", async () => {
+    const h = bunnySetup();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("denied", { status: 403 })));
+    const response = await DELETE(jsonRequest("/api/admin/videos", { id: VIDEO_ID }, "DELETE"));
+    expect(response.ok).toBe(false);
+    expect(h.db.videos).toHaveLength(1);
+    expect(harnessState.removed).toEqual([]);
+  });
+  it("treats missing remote media as an idempotent success", async () => {
+    const h = bunnySetup();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 404 })));
+    const response = await DELETE(jsonRequest("/api/admin/videos", { id: VIDEO_ID }, "DELETE"));
+    expect(response.status).toBe(200);
+    expect(h.db.videos).toHaveLength(0);
+  });
+  it("reports bulk provider failures without deleting their catalog rows", async () => {
+    const h = bunnySetup();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 500 })));
+    const response = await DELETE(jsonRequest("/api/admin/videos", { ids: [VIDEO_ID] }, "DELETE"));
+    const body = await response.json();
+    expect(body.deleted).toEqual([]);
+    expect(body.failed).toEqual([expect.objectContaining({ id: VIDEO_ID })]);
+    expect(h.db.videos).toHaveLength(1);
   });
 });

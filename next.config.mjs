@@ -36,10 +36,14 @@ const nextConfig = {
   },
   async headers() {
     return [
+      ...['/admin/:path*', '/advertiser/:path*', '/auth/:path*', '/api/:path*'].map(source => ({
+        source, headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
+      })),
       {
         source: '/(.*)',
         headers: [
           ...(process.env.NODE_ENV === 'production' ? [{ key: 'X-Frame-Options', value: 'SAMEORIGIN' }] : []),
+          ...(process.env.NODE_ENV === 'production' ? [{ key: 'Strict-Transport-Security', value: 'max-age=31536000' }] : []),
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
         ],

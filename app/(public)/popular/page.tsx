@@ -1,3 +1,4 @@
+import { publicPageMetadata } from "@/lib/metadata/page";
 import { SITE_URL } from "@/lib/site";
 import { getPopularVideos } from "@/lib/public/catalog";
 import PublicVideoCard from "@/src/components/PublicVideoCard";
@@ -5,10 +6,11 @@ import type { Metadata } from "next";
 
 export const revalidate = 30;
 
-export const metadata: Metadata = {
+export const metadata: Metadata = publicPageMetadata({
   title: "Popular Videos",
+  description: "Discover popular videos on Erobabe, ordered by views. Explore the collection and browse related categories. Exclusively for adults aged 18 and over.",
   alternates: { canonical: `${SITE_URL}/popular` },
-};
+});
 
 export default async function PopularPage() {
   const videos = await getPopularVideos();

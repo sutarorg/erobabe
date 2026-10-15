@@ -164,6 +164,7 @@ export async function bunnyRequest(
         response.status,
       );
     }
+    if (method === "DELETE" && response.status === 204) return null;
     try {
       return await response.json();
     } catch {
@@ -224,4 +225,24 @@ export function providerError(error: unknown): ProviderErrorBody {
       "Could not finish this upload. Retry the existing session; check database migration and thumbnail storage. No new video is needed.",
     status: 502,
   };
+}
+
+/** Delete idempotently so a failed database write can safely be retried. */
+export async function deleteBunnyVideo(video: {
+  provider: string | null;
+  provider_file_id?: string | null;
+  bunny_library_id?: string | null;
+}): Promise<void> {
+  if (video.provider !== "bunny") return;
+  if (!video.provider_file_id || !video.bunny_library_id)
+    throw new BunnyError("Missing Bunny media identity. Repair this video before deleting it.", 409);
+  z.string().uuid().parse(video.provider_file_id);
+  try {
+    const result = await bunnyRequest(`/${video.provider_file_id}`, "DELETE", undefined, video.bunny_library_id);
+    if (result && typeof result === "object" && "success" in result && result.success === false)
+      throw new BunnyError("Bunny Stream did not confirm deletion. Retry before removing the catalog row.");
+  } catch (error) {
+    if (error instanceof BunnyError && error.providerStatus === 404) return;
+    throw error;
+  }
 }

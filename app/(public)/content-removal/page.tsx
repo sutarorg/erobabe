@@ -1,11 +1,12 @@
+import { publicPageMetadata } from "@/lib/metadata/page";
 import { SITE_URL } from "@/lib/site";
 import type { Metadata } from "next";
 import RemovalForm from "./RemovalForm";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = publicPageMetadata({
   title: "Content Removal",
   alternates: { canonical: `${SITE_URL}/content-removal` },
-};
+});
 
 export default function ContentRemovalPage() {
   return (

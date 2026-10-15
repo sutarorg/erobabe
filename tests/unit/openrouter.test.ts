@@ -35,8 +35,8 @@ const fetchMock = vi.fn();
 
 function modelOutput(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
-    title: "Evening in Velvet",
-    description: "An elegant, slow-paced portrait captured in soft cinematic light, with a focus on thoughtful composition and visual atmosphere. Browse the collection to discover related video listings with similar settings and thoughtfully composed visual presentations.",
+    title: "An Evening in Velvet",
+    description: "An elegant portrait captured in soft cinematic light, with thoughtful composition and visual atmosphere. Browse this collection to discover related video listings.",
     tags: ["mature", "boudoir", "4k"],
     category: "Boudoir",
     ...overrides,
@@ -118,7 +118,7 @@ describe("suggestVideoMetadata", () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput()));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
     expect(suggestion).toMatchObject({
-      title: "Evening in Velvet",
+      title: "An Evening in Velvet",
       tags: ["mature", "boudoir", "4k"],
       category: "Boudoir",
     });
@@ -160,18 +160,17 @@ describe("suggestVideoMetadata", () => {
     expect(messages[0].role).toBe("user");
     expect(messages[0].content).toMatch(/untrusted source data/i);
     // Whatever the model writes, the prompt holds the legal line.
-    expect(messages[0].content).toMatch(/consenting adult aged 18 or over/i);
-    expect(messages[0].content).toMatch(/Never mention or imply minors/i);
+    expect(messages[0].content).toMatch(/adults-only/i);
+    expect(messages[0].content).toMatch(/sexualized youth/i);
   });
 
   it("anchors the prompt on the admin-selected category and asks for a one-clause title", async () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ category: "Boudoir" })));
     await suggestVideoMetadata({ fileName: "evening_in_velvet.mp4", category: "Boudoir" });
     const messages = sentBody().messages as Array<{ content: string }>;
-    expect(messages[0].content).toContain('The admin has already chosen the category "Boudoir"');
-    expect(messages[0].content).toMatch(/ONE clause/i);
-    expect(messages[0].content).toMatch(/Never use a hyphen, en dash, em dash/i);
-    expect(messages[0].content).toMatch(/softly lit bedroom scene/i);
+    expect(messages[0].content).toContain('Category must be exactly "Boudoir"');
+    expect(messages[0].content).toContain("4-9 words");
+    expect(messages[0].content).toContain("Do not invent");
   });
 
   it("keeps the admin's category when the model answers with a different one", async () => {
@@ -198,7 +197,7 @@ describe("suggestVideoMetadata", () => {
   it("retries once with a larger budget when the first reply is empty", async () => {
     fetchMock.mockResolvedValueOnce(chatReply("   ")).mockResolvedValueOnce(chatReply(modelOutput()));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
-    expect(suggestion.title).toBe("Evening in Velvet");
+    expect(suggestion.title).toBe("An Evening in Velvet");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sentBody(1).max_tokens).toBe(4096);
   });
@@ -207,33 +206,28 @@ describe("suggestVideoMetadata", () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ description: "A short catalog description." })))
       .mockResolvedValueOnce(chatReply(modelOutput()));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
-    expect(suggestion.description.split(/\s+/)).toHaveLength(34);
+    expect(suggestion.description.split(/\s+/)).toHaveLength(22);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const messages = sentBody(1).messages as Array<{ content: string }>;
     expect(messages[0].content).toContain("previous suggestion failed validation");
-    expect(messages[0].content).toContain("description must contain 30-40 words");
+    expect(messages[0].content).toContain("description must contain 20-25 words");
   });
 
-  it("repairs a repeatedly overlong description instead of discarding the suggestion", async () => {
-    fetchMock.mockImplementation(async () => chatReply(modelOutput({ description: Array(41).fill("word").join(" ") })));
-    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
-    // The model was still asked to fix it once; when it did not, the count was
-    // repaired locally rather than losing the title, tags, and description.
+  it("rejects repeatedly overlong descriptions without adding invented filler", async () => {
+    fetchMock.mockImplementation(async () => chatReply(modelOutput({ description: Array(26).fill("word").join(" ") })));
+    await expect(suggestVideoMetadata({ fileName: "clip.mp4" })).rejects.toMatchObject({ code: "bad_output" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(suggestion.title).toBe("Evening in Velvet");
-    expect(suggestion.description.split(/\s+/)).toHaveLength(40);
-    expect(suggestion.category).toBe("Boudoir");
-    expect(suggestion.reasoning).toMatch(/trimmed from 41 words/);
   });
 
-  it("keeps the AI suggestion when the retry fails but the first reply was parseable", async () => {
-    fetchMock
-      .mockResolvedValueOnce(chatReply(modelOutput({ description: "Low light, soft fabric, and a long quiet moment." })))
+  it("does not salvage an invalid first response after a network failure", async () => {
+    fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ description: "Too short." })))
       .mockRejectedValueOnce(new Error("socket hang up"));
-    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
-    expect(suggestion.title).toBe("Evening in Velvet");
-    expect(suggestion.description.split(/\s+/).length).toBeGreaterThanOrEqual(30);
-    expect(suggestion.description.split(/\s+/).length).toBeLessThanOrEqual(40);
+    await expect(suggestVideoMetadata({ fileName: "clip.mp4" })).rejects.toBeInstanceOf(MetadataError);
+  });
+
+  it("rejects near-duplicate titles after both attempts", async () => {
+    fetchMock.mockImplementation(async () => chatReply(modelOutput()));
+    await expect(suggestVideoMetadata({ existingTitles: ["An Evening in Velvet"] })).rejects.toMatchObject({ code: "bad_output" });
   });
 
   it("still fails when the model returns nothing a repair can rescue", async () => {
@@ -241,7 +235,7 @@ describe("suggestVideoMetadata", () => {
     const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
     expect(error).toBeInstanceOf(MetadataError);
     expect(error.code).toBe("bad_output");
-    expect(error.message).toContain("30-40 words");
+    expect(error.message).toContain("20-25 words");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -318,7 +312,7 @@ describe("suggestVideoMetadata", () => {
       .mockResolvedValueOnce(jsonResponse(400, { error: { message: "response_format is not supported by this model" } }))
       .mockResolvedValueOnce(chatReply(modelOutput()));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
-    expect(suggestion.title).toBe("Evening in Velvet");
+    expect(suggestion.title).toBe("An Evening in Velvet");
     expect(sentBody(0).response_format).toBeDefined();
     expect(sentBody(1).response_format).toBeUndefined();
     expect(sentBody(1).reasoning).toEqual({ enabled: false });
@@ -459,7 +453,7 @@ describe("POST /api/metadata/suggest", () => {
 
     expect(response.status).toBe(200);
     const json = await response.json();
-    expect(json.suggestion).toMatchObject({ title: "Evening in Velvet", category: "Boudoir" });
+    expect(json.suggestion).toMatchObject({ title: "An Evening in Velvet", category: "Boudoir" });
     expect(json.note).toMatch(/human review/);
   });
 

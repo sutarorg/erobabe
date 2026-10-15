@@ -209,9 +209,8 @@ async function chatCompletion(prompt: string, model: string, key: string, option
  * Asks the model for title, description, tags, and category for one file.
  *
  * Retries once with corrective feedback when the reply is incomplete, outside
- * the description word limit, empty, or truncated. If the retry still misses
- * the word count, the description is repaired locally — a title and blurb the
- * model wrote for the selected category are never thrown away over a count.
+ * the word limits, empty, truncated, or too similar to a supplied title.
+ * Both attempts must satisfy the limits; invalid output is not padded or salvaged.
  */
 export async function suggestVideoMetadata(params: SuggestMetadataParams): Promise<SuggestedMetadata> {
   const key = openRouterApiKey();
@@ -222,7 +221,6 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
   let correction = "";
   const baseTokens = suggestionOutputTokens();
   let lastError: MetadataError | null = null;
-  let lastText = "";
 
   for (let attempt = 0; attempt < SUGGESTION_ATTEMPTS; attempt += 1) {
     const maxTokens = attempt === 0 ? baseTokens : Math.min(baseTokens * 2, 16_384);
@@ -256,17 +254,25 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
       continue;
     }
 
-    lastText = result.text;
 
-    // Ask for a clean answer on the first pass so the model still gets one
-    // corrective retry. After that, an off-count description is repaired rather
-    // than allowed to sink an otherwise good title, tags, and description.
-    const validation = validateSuggestionPayload(result.text, params.category, {
-      strictWordCount: attempt === 0,
+    // Enforce the same contract on every attempt; never add invented filler.
+    let validation = validateSuggestionPayload(result.text, params.category, {
+      strictWordCount: true,
     });
-    if (validation.ok) return validation.suggestion;
+    if (validation.ok) {
+      const normalize = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+      const candidate = normalize(validation.suggestion.title);
+      const duplicate = (params.existingTitles || []).some((title) => {
+        const words = new Set(normalize(title).split(" "));
+        const proposed = new Set(candidate.split(" "));
+        const overlap = [...proposed].filter((word) => words.has(word)).length;
+        return candidate === normalize(title) || overlap / new Set([...words, ...proposed]).size >= 0.8;
+      });
+      if (!duplicate) return validation.suggestion;
+      validation = { ok: false, message: "title is too similar to an existing listing" };
+    }
 
-    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object that meets every requirement: a distinct, attention-grabbing explicit adult SEO one-clause title without the category name or any dash, an explicit story-like description written for the selected category, and a description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
+    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object that meets every requirement: a factual non-graphic title of 4-9 words, without invented scenes or relationships, and an accurate non-graphic description, and a description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
     const truncated = result.finishReason === "length" && !parseLooseJson(result.text);
     lastError = new MetadataError(
       truncated
@@ -275,14 +281,6 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
       502,
       "bad_output"
     );
-  }
-
-  // Last resort: a network failure on the retry can still leave us holding a
-  // parseable first answer. Repair it instead of dropping back to file-name
-  // metadata, which is what the admin was seeing.
-  if (lastText) {
-    const salvaged = validateSuggestionPayload(lastText, params.category);
-    if (salvaged.ok) return salvaged.suggestion;
   }
 
   throw lastError ?? new MetadataError("AI metadata failed unexpectedly.", 502, "provider_error");

@@ -1,10 +1,11 @@
+import { publicPageMetadata } from "@/lib/metadata/page";
 import { SITE_URL } from "@/lib/site";
 import type { Metadata } from "next";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = publicPageMetadata({
   title: "FAQ",
   alternates: { canonical: `${SITE_URL}/faq` },
-};
+});
 
 const FAQS = [
   { q: "Do I need an account to watch?", a: "No. The public library is free to browse after the 18+ age gate. Accounts are only required for advertisers." },
