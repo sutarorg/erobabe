@@ -10,6 +10,15 @@ import { createFakeSupabase } from "./helpers/fake-supabase";
 
 const TEST_KEY = "sk-or-v1-testkeyabcdef0123456789";
 
+/*
+ * These suites drive the provider client and its route with an editorial
+ * fixture, so they pin `VIDEO_TITLE_STYLE=editorial` and keep the older
+ * expectations meaningful. The site default is `explicit`; the
+ * `describe("title voice")` block at the bottom of this file leaves the
+ * variable unset and asserts what the install actually does by default.
+ */
+const CONFIGURED_TITLE_STYLE = process.env.VIDEO_TITLE_STYLE;
+
 const authState = vi.hoisted(() => ({ client: null as unknown }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -84,6 +93,7 @@ function suggestRequest(body: unknown) {
 }
 
 beforeEach(() => {
+  if (CONFIGURED_TITLE_STYLE === undefined) process.env.VIDEO_TITLE_STYLE = "editorial";
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   process.env.OPENROUTER_API_KEY = TEST_KEY;
@@ -92,6 +102,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (CONFIGURED_TITLE_STYLE === undefined) delete process.env.VIDEO_TITLE_STYLE;
+  else process.env.VIDEO_TITLE_STYLE = CONFIGURED_TITLE_STYLE;
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.OPENROUTER_MODEL;
   delete process.env.OPENROUTER_MAX_OUTPUT_TOKENS;
@@ -345,6 +357,63 @@ describe("suggestVideoMetadata", () => {
   });
 });
 
+describe("explicit title voice (the installed default)", () => {
+  it("sends the blunt instruction first and a corrective retry second", async () => {
+    process.env.VIDEO_TITLE_STYLE = "explicit";
+    fetchMock.mockImplementation(async () => chatReply(modelOutput()));
+
+    const error = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" }).catch((e) => e);
+    // The euphemistic fixture is exactly what the site must not publish, so it
+    // is rejected rather than quietly accepted.
+    expect(error).toBeInstanceOf(MetadataError);
+    expect(error.message).toMatch(/name the sex plainly/);
+    const first = (sentBody(0).messages as Array<{ content: string }>)[0].content;
+    expect(first).toContain("porn tube listing, not a film review");
+    const second = (sentBody(1).messages as Array<{ content: string }>)[0].content;
+    expect(second).toContain("adult-tube title that names the sex plainly");
+    expect(second).toContain("never uses euphemisms or review language");
+  });
+
+  it("publishes an explicit title from the offline composer when the model declines", async () => {
+    process.env.VIDEO_TITLE_STYLE = "explicit";
+    // Same catalog row the other route tests expect to see cached.
+    seedAuth("admin-explicit", undefined, [{ title: "Catalog Reference Title" }]);
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(200, {
+        choices: [{ message: { content: "", refusal: "I can't help with that." }, finish_reason: "stop" }],
+      }),
+    );
+
+    const response = await suggest(suggestRequest({ fileName: "clip.mp4", category: "Boudoir" }));
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json.style).toBe("explicit");
+    expect(json.source).toBe("offline");
+    expect(json.warning).toMatch(/declined/);
+    expect(json.suggestion.title).toMatch(/\b(boudoir)\b/i);
+    expect(json.suggestion.title).toMatch(/fuck|cock|dick|pussy|ass|sex|tits|blowjob|creampie|cumshot/i);
+    expect(json.suggestion.title).not.toMatch(/cinema|velvet|editorial|mood/i);
+    expect(json.suggestion.description.split(/\s+/).length).toBeGreaterThanOrEqual(20);
+    expect(json.suggestion.description.split(/\s+/).length).toBeLessThanOrEqual(25);
+  });
+
+  it("keeps refusing to publish an age-ambiguous or coercive title even when explicit", async () => {
+    process.env.VIDEO_TITLE_STYLE = "explicit";
+    for (const title of [
+      "Boudoir Teen Girlfriend Takes My Cock Raw In Our Apartment",
+      "My Boudoir Stepsister Sucks My Cock On The Kitchen Counter",
+      "Boudoir Babe Takes My Dick After I Slip Her A Drink",
+    ]) {
+      fetchMock.mockImplementation(async () =>
+        chatReply(modelOutput({ title, description: `Boudoir sex with ${title.toLowerCase()} and nothing further to add here at all.` })),
+      );
+      const error = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" }).catch((e) => e);
+      expect(error, title).toBeInstanceOf(MetadataError);
+      expect(error.message, title).toMatch(/not publishable/);
+    }
+  });
+});
+
 describe("suggestCarouselCopy", () => {
   const SOURCE = {
     title: "I Catch My Stepsister-in-law Touching My Cock in the Tent",
@@ -488,7 +557,7 @@ describe("POST /api/metadata/suggest", () => {
   it("serializes parallel admin requests and retries a title reserved by the first request", async () => {
     seedAuth("admin-parallel");
     const firstDraft = modelOutput({ title: "Magenta Boudoir Cinema With Pulse" });
-    const secondAngle = modelOutput({ title: "Boudoir Contours in a New Light" });
+    const secondAngle = modelOutput({ title: "Boudoir Contours in a Slow New Light" });
     fetchMock
       .mockResolvedValueOnce(chatReply(firstDraft))
       .mockResolvedValueOnce(chatReply(firstDraft))
@@ -547,26 +616,47 @@ describe("POST /api/metadata/suggest", () => {
     expect(lastStatus).toBe(429);
   });
 
-  it("returns 503 when OpenRouter is not configured", async () => {
+  it("still answers from the offline composer when OpenRouter is not configured", async () => {
     delete process.env.OPENROUTER_API_KEY;
     seedAuth("admin-6");
-    const response = await suggest(suggestRequest({ fileName: "clip.mp4" }));
-    expect(response.status).toBe(503);
+    const response = await suggest(suggestRequest({ fileName: "clip.mp4", category: "Boudoir" }));
+    expect(response.status).toBe(200);
     expect(fetchMock).not.toHaveBeenCalled();
+    const json = await response.json();
+    expect(json.source).toBe("offline");
+    expect(json.suggestion.title).toBeTruthy();
+    expect(json.warning).toMatch(/OPENROUTER_API_KEY/);
   });
 
-  it("returns 429 on quota errors and 502 on provider failures without leaking", async () => {
+  it("answers with an offline draft on quota and provider failures without leaking", async () => {
     seedAuth("admin-7");
     fetchMock.mockResolvedValueOnce(jsonResponse(429, { error: { message: "Rate limit" } }));
-    expect((await suggest(suggestRequest({ fileName: "a.mp4" }))).status).toBe(429);
+    const limited = await suggest(suggestRequest({ fileName: "a.mp4", category: "Boudoir" }));
+    expect(limited.status).toBe(200);
+    expect((await limited.json()).warning).toMatch(/quota|credits/i);
 
     seedAuth("admin-8");
     fetchMock.mockImplementation(async () => 
       jsonResponse(500, { error: { message: "failed for sk-or-v1-FakeKeyMaterial1234567890" } })
     );
-    const failed = await suggest(suggestRequest({ fileName: "b.mp4" }));
-    expect(failed.status).toBe(502);
+    const failed = await suggest(suggestRequest({ fileName: "b.mp4", category: "Boudoir" }));
     const json = await failed.json();
+    expect(failed.status).toBe(200);
+    expect(json.source).toBe("offline");
     expect(JSON.stringify(json)).not.toContain("FakeKeyMaterial");
+  });
+
+  it("honours a per-request editorial voice", async () => {
+    seedAuth("admin-style");
+    // A title no earlier test in this file has reserved, so the catalog
+    // duplicate check cannot push this reply into the offline composer.
+    fetchMock.mockImplementation(async () =>
+      chatReply(modelOutput({ title: "Boudoir Silk Light Study" })),
+    );
+    const response = await suggest(suggestRequest({ category: "Boudoir", style: "editorial" }));
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json.style).toBe("editorial");
+    expect(json.suggestion.title).toBe("Boudoir Silk Light Study");
   });
 });

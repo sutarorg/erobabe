@@ -55,6 +55,13 @@ suite("OpenRouter live API", () => {
     expect(suggestion.title.length).toBeGreaterThan(2);
     expect(suggestion.title.length).toBeLessThanOrEqual(160);
     expect(suggestion.tags.length).toBeGreaterThan(0);
+    // The installed voice is explicit: a title that only hints at the scene is
+    // a regression, whatever the model decided to be polite about.
+    expect(
+      suggestion.title,
+      suggestion.title,
+    ).toMatch(/fuck|cock|dick|pussy|ass|sex|tits|blowjob|creampie|cumshot|slut|anal|strapon/i);
+    expect(suggestion.title).not.toMatch(/cinema|velvet|editorial|revelation/i);
   }, 90_000);
 
   it("rejects a bogus key with an actionable, secret-free message", async () => {

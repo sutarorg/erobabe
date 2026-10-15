@@ -341,12 +341,14 @@ describe("device-only upload queue", () => {
       if (url.endsWith("/api/metadata/suggest")) {
         return Response.json({
           suggestion: {
-            title: "Amateur Cinema With a Neon Pulse",
+            title: "My Amateur Girlfriend Grabs My Cock For A Raw Doggy Style Fuck",
             description:
-              "A concise adult amateur video listing with a distinct editorial voice, clear category context, and practical viewing details presented before playback begins.",
-            tags: ["mature", "hd", "featured"],
+              "Amateur fuck filmed at home: she grabs my cock, takes it raw doggy style and cums twice on camera. 18+ adults only, one take.",
+            tags: ["amateur", "doggy-style", "4k"],
             category: "Category one",
           },
+          source: "ai",
+          style: "explicit",
         });
       }
       if (url.endsWith("confirm")) {
@@ -377,7 +379,7 @@ describe("device-only upload queue", () => {
       }),
       expect.any(File),
       expect.objectContaining({
-        title: "Amateur Cinema With a Neon Pulse",
+        title: "My Amateur Girlfriend Grabs My Cock For A Raw Doggy Style Fuck",
       }),
     );
     expect(screen.getByText(/1 published/i)).toBeInTheDocument();
@@ -389,6 +391,107 @@ describe("device-only upload queue", () => {
     expect(metadataPayload).not.toHaveProperty("title");
     expect(metadataPayload).not.toHaveProperty("fileName");
     expect(metadataPayload).not.toHaveProperty("tags");
+  });
+
+  it("drafts the explicit title while files are still being added", async () => {
+    let suggestions = 0;
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (!options?.body)
+        return Response.json({
+          policy: { mimeTypes: ["video/mp4"], concurrency: 4, headers: {} },
+          sessions: [],
+        });
+      if (url.endsWith("/api/metadata/suggest")) {
+        suggestions += 1;
+        return Response.json({
+          suggestion: {
+            title: "My Amateur Girlfriend Takes My Dick Raw On Cam In Our Apartment",
+            description:
+              "Amateur blowjob turned doggy style fuck with one verified 18+ couple, uncut and filmed at home on a phone in a single continuous take.",
+            tags: ["amateur", "blowjob"],
+            category: "Category one",
+          },
+          source: "ai",
+        });
+      }
+      if (url.endsWith("confirm"))
+        return Response.json({
+          slug: "amateur-girlfriend-takes-dick-raw-cam-apartment",
+          status: "published",
+          visibility: "public",
+          published: true,
+        });
+      return Response.json({
+        uploadUrl: "https://storage.example.com/signed",
+        headers: {},
+        videoId: "provider",
+        storagePath: "admin/frame.jpg",
+      });
+    });
+
+    // Files first, category second: picking the category is enough to draft copy.
+    await select([
+      new File(["a"], "IMG_2041_final_v2.mp4", { type: "video/mp4" }),
+    ]);
+
+    // The queue shows real listing copy before "Start uploads" is pressed, so a
+    // filename never becomes the published title.
+    await waitFor(() =>
+      expect(
+        screen.getByDisplayValue(
+          "My Amateur Girlfriend Takes My Dick Raw On Cam In Our Apartment",
+        ),
+      ).toBeInTheDocument(),
+    );
+    // The source filename stays visible as a caption, but it is no longer the title.
+    expect(
+      screen.getByLabelText("Title for IMG_2041_final_v2.mp4"),
+    ).toHaveValue(
+      "My Amateur Girlfriend Takes My Dick Raw On Cam In Our Apartment",
+    );
+    expect(suggestions).toBe(1);
+    // The title is already drafted, so starting must not ask the model again.
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() => expect(screen.getByText("Completed")).toBeInTheDocument());
+    expect(suggestions).toBe(1);
+  });
+
+  it("surfaces why an offline draft replaced the model, so the admin can re-check it", async () => {
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (!options?.body)
+        return Response.json({
+          policy: { mimeTypes: ["video/mp4"], concurrency: 4, headers: {} },
+          sessions: [],
+        });
+      if (url.endsWith("/api/metadata/suggest"))
+        return Response.json({
+          suggestion: {
+            title: "My Amateur Girlfriend Grabs My Cock For A Raw Fuck On Cam",
+            description:
+              "Amateur fuck at home with a verified 18+ couple, uncut, in one continuous take, ending with a cumshot on her tits before the light changes.",
+            tags: ["amateur"],
+            category: "Category one",
+          },
+          source: "offline",
+          warning:
+            "The model declined to produce a suggestion for this file.",
+        });
+      return Response.json({
+        uploadUrl: "https://storage.example.com/signed",
+        headers: {},
+        videoId: "provider",
+        storagePath: "admin/frame.jpg",
+      });
+    });
+
+    await select();
+    await waitFor(() =>
+      expect(screen.getByText(/Written offline, not by the model/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/declined to produce a suggestion/)).toBeInTheDocument();
+    expect(
+      screen.getByDisplayValue(/My Amateur Girlfriend Grabs My Cock For A Raw Fuck On Cam/),
+    ).toBeInTheDocument();
   });
 });
 

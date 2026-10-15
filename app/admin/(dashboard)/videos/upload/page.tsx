@@ -100,6 +100,7 @@ export default function UploadPage() {
   const alive = useRef(true);
   const busy = useRef(false);
   const decodeQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const generatingIds = useRef(new Set<string>());
 
   function prepareThumbnail(file: File) {
     const result = decodeQueue.current.then(() =>
@@ -173,6 +174,41 @@ export default function UploadPage() {
     };
   }, [load]);
 
+  /**
+   * Draft listing copy for every queue entry the moment its category is known,
+   * so an admin who picks files first and a category second never sees a
+   * filename in a title field. Entries whose title was edited by hand are left
+   * alone, and `generatingIds` keeps one in-flight request per entry.
+   */
+  useEffect(() => {
+    if (!categoryId) return;
+    for (const item of current.current) {
+      if (
+        item.categoryId ||
+        item.userEditedTitle ||
+        item.aiGeneratedForCategory === categoryId ||
+        ["Completed", "Encoding"].includes(item.phase) ||
+        generatingIds.current.has(item.id)
+      )
+        continue;
+      generatingIds.current.add(item.id);
+      void generateAiMetadataForCategory(categoryId)
+        .then((meta) => {
+          if (!alive.current || !current.current.some((i) => i.id === item.id))
+            return;
+          patch(item.id, {
+            title: meta.title,
+            description: meta.description,
+            aiGeneratedForCategory: categoryId,
+            warning: meta.warning,
+          });
+        })
+        .finally(() => generatingIds.current.delete(item.id));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the queue is read
+    // from `current.current`; re-running on every item patch would restart work.
+  }, [categoryId]);
+
   useEffect(() => {
     if (!running) return;
     const warn = (e: BeforeUnloadEvent) => {
@@ -183,9 +219,15 @@ export default function UploadPage() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [running]);
 
+  /**
+   * One draft in the site's publishing voice (blunt adult copy by default).
+   * The route answers with the model's draft, or with an offline draft composed
+   * from the same vocabulary when the model is unconfigured, out of credits, or
+   * declines adults-only copy — so a queue entry never keeps its filename.
+   */
   function generateAiMetadataForCategory(
     targetCategoryId: string,
-  ): Promise<{ title: string; description: string }> {
+  ): Promise<{ title: string; description: string; warning?: string }> {
     const generate = async () => {
       const categoryLabel =
         categories.find((c) => c.id === targetCategoryId)?.label || "Mature";
@@ -209,11 +251,19 @@ export default function UploadPage() {
           const nextTitle = String(data.suggestion.title).trim();
           const nextDescription = String(data.suggestion.description || "").trim();
           usedTitles.current.add(nextTitle);
-          return { title: nextTitle, description: nextDescription };
+          return {
+            title: nextTitle,
+            description: nextDescription,
+            ...(data.source === "offline" && data.warning
+              ? {
+                  warning: `Written offline, not by the model: ${String(data.warning)}`,
+                }
+              : {}),
+          };
         }
       } catch {
         // The deterministic category-only fallback below keeps the upload queue
-        // usable when OpenRouter is temporarily unavailable.
+        // usable when the route itself is unreachable.
       }
 
       const fallback = generateCategoryFallbackMetadata(
@@ -222,7 +272,12 @@ export default function UploadPage() {
         existingList,
       );
       usedTitles.current.add(fallback.title);
-      return { title: fallback.title, description: fallback.description };
+      return {
+        title: fallback.title,
+        description: fallback.description,
+        warning:
+          "Written in the browser from the offline title composer — no model request succeeded.",
+      };
     };
 
     const queued = metadataQueue.current.then(generate, generate);
@@ -282,6 +337,20 @@ export default function UploadPage() {
             ? undefined
             : "Thumbnail generation failed. Retry with the same browser-decodable source file.",
       });
+      // Draft the listing copy while the admin is still picking files, so the
+      // queue shows a publishable title instead of `IMG_2041_final_v2`. Upload
+      // start regenerates only when the category changed in the meantime.
+      if (categoryId && !item.userEditedTitle) {
+        const meta = await generateAiMetadataForCategory(categoryId);
+        if (!alive.current || !current.current.some((i) => i.id === item.id))
+          continue;
+        patch(item.id, {
+          title: meta.title,
+          description: meta.description,
+          aiGeneratedForCategory: categoryId,
+          warning: meta.warning,
+        });
+      }
     }
   }
 
@@ -394,6 +463,7 @@ export default function UploadPage() {
             title: aiMeta.title,
             description: aiMeta.description,
             aiGeneratedForCategory: targetCategoryId,
+            warning: aiMeta.warning,
           });
           latest = current.current.find((i) => i.id === sessionId)!;
         }
@@ -665,7 +735,8 @@ export default function UploadPage() {
         {policy && (
           <p className="mt-4 text-xs text-ink-3">
             {policy.mimeTypes.join(", ")} · {PARALLEL_UPLOADS} parallel uploads
-            · OpenRouter AI metadata · no application-level video size limit
+            · OpenRouter AI metadata in the site's adult title voice, with an
+            offline composer fallback · no application-level video size limit
           </p>
         )}
       </div>
@@ -756,12 +827,13 @@ export default function UploadPage() {
                             description: meta.description,
                             aiGeneratedForCategory: categoryId,
                             userEditedTitle: false,
+                            warning: meta.warning,
                           });
                         }}
                         className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-line bg-void px-3 py-2 text-xs text-accent hover:border-accent/50"
                       >
                         <Sparkles className="h-3.5 w-3.5" aria-hidden />
-                        Generate SEO copy
+                        Generate explicit title
                       </button>
                     )}
                 </div>
