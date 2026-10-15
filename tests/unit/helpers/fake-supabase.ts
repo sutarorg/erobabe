@@ -19,6 +19,13 @@ export interface FakeDb {
   [table: string]: Row[];
 }
 
+export interface FakeSupabaseOptions {
+  /** Unique constraints enforced on insert, by table: constraint name → columns. */
+  unique?: Record<string, Record<string, string[]>>;
+  /** Columns PostgREST cannot find (an unapplied migration), by table. */
+  missingColumns?: Record<string, string[]>;
+}
+
 type Filter =
   | { kind: "eq"; column: string; value: any }
   | { kind: "neq"; column: string; value: any }
@@ -103,6 +110,7 @@ class Query
   constructor(
     private db: FakeDb,
     private table: string,
+    private options: FakeSupabaseOptions = {},
   ) {}
 
   select(_columns?: string) {
@@ -215,19 +223,56 @@ class Query
   private execute(): { data: any; error: any } {
     const rows = (this.db[this.table] ||= []);
 
+    if (this.action === "insert" || this.action === "update") {
+      const payloads = Array.isArray(this.payload)
+        ? this.payload
+        : [this.payload || {}];
+      const missing = this.options.missingColumns?.[this.table]?.find(
+        (column) => payloads.some((entry) => column in entry),
+      );
+      if (missing)
+        return {
+          data: null,
+          error: {
+            code: "PGRST204",
+            message: `Could not find the '${missing}' column of '${this.table}' in the schema cache`,
+          },
+        };
+    }
+
     if (this.action === "insert") {
       const payloads = Array.isArray(this.payload)
         ? this.payload
         : [this.payload || {}];
-      const inserted = payloads.map((entry) => {
-        const row = {
-          id: `fake-${this.table}-${rows.length + 1}`,
-          created_at: new Date().toISOString(),
-          ...entry,
-        };
-        rows.push(row);
-        return row;
-      });
+      const inserted = payloads.map((entry, index) => ({
+        id: `fake-${this.table}-${rows.length + index + 1}`,
+        created_at: new Date().toISOString(),
+        ...entry,
+      }));
+      for (const [name, columns] of Object.entries(
+        this.options.unique?.[this.table] || {},
+      )) {
+        // Like PostgreSQL, rows with a NULL key column never conflict.
+        const key = (row: Row) =>
+          columns.some((c) => row[c] === null || row[c] === undefined)
+            ? null
+            : JSON.stringify(columns.map((c) => row[c]));
+        const taken = new Set(rows.map(key));
+        for (const row of inserted) {
+          const value = key(row);
+          if (value === null) continue;
+          if (taken.has(value))
+            return {
+              data: null,
+              error: {
+                code: "23505",
+                message: `duplicate key value violates unique constraint "${name}"`,
+              },
+            };
+          taken.add(value);
+        }
+      }
+      rows.push(...inserted);
       if (this.singleRow) return { data: inserted[0] ?? null, error: null };
       return { data: inserted, error: null };
     }
@@ -257,7 +302,10 @@ class Query
   }
 }
 
-export function createFakeSupabase(seed: Partial<FakeDb> = {}) {
+export function createFakeSupabase(
+  seed: Partial<FakeDb> = {},
+  options: FakeSupabaseOptions = {},
+) {
   const db: FakeDb = {
     payments: [],
     payment_events: [],
@@ -271,7 +319,7 @@ export function createFakeSupabase(seed: Partial<FakeDb> = {}) {
   return {
     db,
     client: {
-      from: (table: string) => new Query(db, table),
+      from: (table: string) => new Query(db, table, options),
       // Route-test boundary only. Real SQL/role/transaction behavior is tested
       // independently in launch-integrity-schema.test.ts using all migrations.
       rpc: async (name: string, args: Row) => {

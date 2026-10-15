@@ -66,6 +66,19 @@ export const bunnyVideoSchema = z.object({
   encodeProgress: z.number().min(0).max(100),
 });
 export const createdVideoSchema = z.object({ guid: z.string().uuid() });
+/** `GET /videos?search=` — Bunny filters titles by case-insensitive substring. */
+export const bunnyVideoListSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        guid: z.string().uuid(),
+        title: z.string().nullable().optional(),
+        videoLibraryId: z.number().int().positive(),
+      }),
+    )
+    .nullable()
+    .optional(),
+});
 export const BUNNY_STATUS = [
   "Created",
   "Uploaded",

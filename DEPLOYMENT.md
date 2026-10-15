@@ -92,7 +92,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 2. Open `supabase/migrations/00000000000000_initial_schema.sql` in your editor, copy entire content, paste into SQL Editor, click **Run**
 3. Repeat for `00000000000001_rls_policies.sql`
 4. Repeat for `00000000000002_seed_fixed_data.sql`
-5. Apply the remaining checked-in migrations in order through `00000000000018_payment_recovery.sql`; do not re-run or edit migrations already recorded as applied.
+5. Apply the remaining checked-in migrations in order through `00000000000019_auto_publish_and_ai_metadata.sql`; do not re-run or edit migrations already recorded as applied.
 6. Verify in **Table Editor** that tables exist: `profiles`, `categories`, `videos`, `ad_slots` (should have 10 rows), `site_settings` (1 row), etc.
 
 **Option B — via Supabase CLI**
@@ -512,8 +512,10 @@ none of these providers/accounts has been approved by this implementation.
 
 - Thumbnail error: Retry thumbnail/processing/save. After reload, reselect the
   source; server metadata is restored. Frames are not sent to AI by default.
-- Interrupted upload: reselect source to reuse the server UUID and provider GUID;
-  fresh authorization lasts 24 hours. Bunny expires incomplete resources at the
+- Interrupted, failed or cancelled upload: reselect the same source file. The
+  server finds the existing session for that administrator/filename/size/MIME
+  and resumes it automatically (same server UUID and provider GUID, latest
+  title/category applied); fresh authorization lasts 24 hours. Bunny expires incomplete resources at the
   original authorization expiry or roughly 48 hours inactivity, whichever first.
   Re-signing does not extend a resource's original life. tus-js-client handles a
   missing expired resource by restarting transfer to the **same** video object.
@@ -523,23 +525,25 @@ none of these providers/accounts has been approved by this implementation.
   admin opens the library. It is not eligible for review until status 4 and is not published until explicit approval. Status
   5/6 is a provider failure; inspect provider diagnostics rather than pretending
   the transfer succeeded.
-- Uncertain creation (timeout/lost response): creation is not automatically replayed.
-  Find the exact `[session:UUID]` title marker in the selected Bunny library. Compare
-  the session owner, title, filename and library. If exactly one video exists, an
-  authorized DBA can set that row's `provider_id` to the verified GUID and `state`
-  to `uploading` via the SQL editor; then reselect the same file. If uncertain or
-  multiple objects exist, reconcile with Bunny support. Never fabricate an ID.
+- Uncertain creation (timeout/lost response): creation is never replayed while
+  the original request could still be running (2 minutes). After that,
+  reselecting the file searches the session's library for the exact
+  `[session:UUID]` title marker: exactly one match is attached to the session;
+  no match means Bunny never created it, so one video is created; several
+  matches are refused until the extras are deleted in the Bunny dashboard.
+  Never fabricate an ID.
 - Duplicate policy: same administrator/filename/size/MIME cannot reserve a second
-  session. Use the recovery row; for genuinely different media sharing this tuple,
-  rename the authorized file before starting. This is duplicate prevention, not a
-  cryptographic proof of source identity. Renaming a partial source loses file
-  matching and is not a resume workflow.
+  session; reselecting resumes the existing one. A file that already completed
+  shows its existing video instead of uploading again. For genuinely different
+  media sharing this tuple, rename the authorized file before starting. This is
+  duplicate prevention, not a cryptographic proof of source identity. Renaming
+  a partial source loses file matching and is not a resume workflow.
 - Cancelling pauses local transfer, not deletion of provider media. Catalog deletion
   remains catalog/thumbnail-only. Review incomplete/orphan remote videos and delete
   confirmed unused objects manually in Bunny dashboard after retention approval.
   Keep completed session audit rows; retries cannot republish a subsequently deleted
-  or moderated video. If the old record was deleted, completed recovery may point to
-  a missing record; it does not recreate it.
+  or moderated video. Reselecting a file whose video was deleted is refused with an
+  explanation; rename the file to deliberately upload it again.
 
 ### 6. Legacy media migration report/workflow
 
@@ -1006,3 +1010,8 @@ grep -R "pexels\|INITIAL_VIDEOS\|mock\|demo" --include="*.tsx" --include="*.ts" 
 - Automatic fulfillment requires provider `finished` plus exactly matching received crypto at the supported 18-decimal working precision; it no longer uses the comparison utility's legacy 2% tolerance. Shortfalls/excesses are recorded for manual reconciliation, not silently forgiven or auto-delivered. Missing `actually_paid` never falls back to quoted funds.
 - If provider snapshots disagree, IPN/recovery returns a retry rather than directly changing only the payment. Retry with current provider evidence; terminal outcomes must pass through the transactional settlement RPC. Inspect the added historical payment/invoice preflight query: past mismatches are **not automatically repaired**. Any repair needs verified provider evidence and an audited, approved operator action.
 - Local tests prove route behavior, SQL authorization, identical retries and rollback on audit failure. They are not evidence of real-provider API delivery or independent concurrent PostgreSQL sessions; both remain release gates.
+
+## October 15 upload-session follow-up — required
+
+- Apply **00000000000019_auto_publish_and_ai_metadata.sql** (Supabase → SQL Editor, or `supabase db push`). It adds `bunny_uploads.description` and the auto-publish versions of `stage_bunny_upload`/`finish_bunny_upload`. Until it is applied, uploads still succeed, but AI descriptions are not saved, finished videos wait in the video library for manual publishing, and the upload page shows a notice naming the migration.
+- Re-selecting a file that was attempted before (failed, cancelled, interrupted or reloaded) no longer fails with "Session already reserved or database unavailable": the server resumes that file's existing session. Database failures while reserving a session now report their actual cause and PostgreSQL/PostgREST code (also logged as `[bunny] Could not …`).

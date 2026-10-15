@@ -1,5 +1,9 @@
 import { NextRequest } from "next/server";
-import { createFakeSupabase, type FakeDb } from "./fake-supabase";
+import {
+  createFakeSupabase,
+  type FakeDb,
+  type FakeSupabaseOptions,
+} from "./fake-supabase";
 
 /**
  * Shared setup for the video-route tests: an in-memory Supabase service client,
@@ -31,17 +35,23 @@ export function withExtras(client: any, db: FakeDb, userId = ADMIN_ID) {
 }
 
 /** A fresh DB with one active admin and one category, plus a signed-in session. */
-export function createHarness(overrides: Partial<FakeDb> = {}): Harness {
-  const fake = createFakeSupabase({
-    profiles: [{ id: ADMIN_ID, role: "admin", status: "active" }],
-    categories: [{ id: CATEGORY_ID, label: "Boudoir" }],
-    videos: [],
-    tags: [],
-    video_tags: [],
-    upload_jobs: [],
-    audit_logs: [],
-    ...overrides,
-  });
+export function createHarness(
+  overrides: Partial<FakeDb> = {},
+  options: FakeSupabaseOptions = {},
+): Harness {
+  const fake = createFakeSupabase(
+    {
+      profiles: [{ id: ADMIN_ID, role: "admin", status: "active" }],
+      categories: [{ id: CATEGORY_ID, label: "Boudoir" }],
+      videos: [],
+      tags: [],
+      video_tags: [],
+      upload_jobs: [],
+      audit_logs: [],
+      ...overrides,
+    },
+    options,
+  );
   const service = withExtras(fake.client, fake.db);
   const auth = {
     auth: { getUser: async () => ({ data: { user: { id: ADMIN_ID } } }) },

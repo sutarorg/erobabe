@@ -335,3 +335,110 @@ describe("device-only upload queue", () => {
     expect(screen.getByText(/1 published/i)).toBeInTheDocument();
   });
 });
+
+describe("re-selected files and server session recovery", () => {
+  const policyResponse = () =>
+    Response.json({
+      policy: { mimeTypes: ["video/mp4"], concurrency: 4, headers: {} },
+      sessions: [],
+    });
+  const target = {
+    uploadUrl: "https://storage.example.com/signed",
+    headers: {},
+    videoId: "provider",
+    storagePath: "admin/frame.jpg",
+  };
+  /** Routes the session reservation to `session`; everything else succeeds. */
+  function serverReturns(session: (body: any) => Record<string, unknown>) {
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (!options?.body) return policyResponse();
+      if (
+        url.endsWith("/api/videos/bunny/sessions") &&
+        options.method === "POST"
+      )
+        return Response.json(session(JSON.parse(String(options.body))));
+      if (url.endsWith("confirm"))
+        return Response.json({ slug: "saved-video" });
+      return Response.json(target);
+    });
+  }
+  const calls = (suffix: string, method = "POST") =>
+    fetchMock.mock.calls
+      .filter(([u, o]) => String(u).endsWith(suffix) && o?.method === method)
+      .map(([, o]) => JSON.parse(String(o.body)));
+
+  it("continues on the earlier server session that the re-selected file resumed", async () => {
+    serverReturns(() => ({
+      ...target,
+      sessionId: "earlier-session",
+      resumed: true,
+    }));
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    expect(transfer).toHaveBeenCalledTimes(1);
+    expect(calls("confirm").map((b) => b.sessionId)).toEqual([
+      "earlier-session",
+    ]);
+  });
+
+  it("shows an already uploaded file as completed without uploading it again", async () => {
+    serverReturns(() => ({
+      completed: true,
+      slug: "existing-video",
+      sessionId: "earlier-session",
+      alreadyUploaded: true,
+    }));
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/already uploaded earlier/i)).toBeInTheDocument();
+    expect(screen.getByText("View published video")).toHaveAttribute(
+      "href",
+      "/video/existing-video",
+    );
+    expect(transfer).not.toHaveBeenCalled();
+    expect(calls("confirm")).toHaveLength(0);
+  });
+
+  it("shows the server's database migration warning", async () => {
+    serverReturns((body) => ({
+      ...target,
+      sessionId: body.sessionId,
+      warning:
+        "Database migration 00000000000019_auto_publish_and_ai_metadata.sql has not been applied.",
+    }));
+    await select();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/00000000000019_auto_publish_and_ai_metadata\.sql/),
+    ).toBeInTheDocument();
+  });
+
+  it("never uploads one source twice when two queue entries resolve to the same session", async () => {
+    serverReturns(() => ({ ...target, sessionId: "shared-session" }));
+    await select([
+      new File(["a"], "one.mp4", { type: "video/mp4" }),
+      new File(["b"], "two.mp4", { type: "video/mp4" }),
+    ]);
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText(/already being uploaded by another entry/i),
+      ).toBeInTheDocument(),
+    );
+    expect(transfer).toHaveBeenCalledTimes(1);
+    // The duplicate entry must not mark the shared session as failed.
+    expect(calls("/api/videos/bunny/sessions", "PATCH")).toHaveLength(0);
+  });
+});

@@ -45,6 +45,9 @@ type Item = {
 
 const PARALLEL_UPLOADS = 4;
 
+/** Another queue entry already owns the server session for the same source file. */
+class DuplicateQueueEntryError extends Error {}
+
 async function json<T>(url: string, body?: unknown): Promise<T> {
   const response = await fetch(url, {
     method: body === undefined ? "GET" : "POST",
@@ -70,6 +73,7 @@ export default function UploadPage() {
   const [categoryId, setCategoryId] = useState("");
   const [items, setItems] = useState<Item[]>([]);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [dragging, setDragging] = useState(false);
   const [running, setRunning] = useState(false);
@@ -97,6 +101,19 @@ export default function UploadPage() {
     current.current = current.current.map((i) =>
       i.id === id ? { ...i, ...value } : i,
     );
+    if (alive.current) setItems(current.current);
+  };
+
+  /** Re-keys a queue entry to the server session resumed for the same file. */
+  const adoptSession = (from: string, to: string) => {
+    current.current = current.current.map((i) =>
+      i.id === from ? { ...i, id: to } : i,
+    );
+    const controller = controllers.current.get(from);
+    if (controller) {
+      controllers.current.delete(from);
+      controllers.current.set(to, controller);
+    }
     if (alive.current) setItems(current.current);
   };
 
@@ -329,20 +346,23 @@ export default function UploadPage() {
   }
 
   async function upload(item: Item) {
-    let latest = current.current.find((i) => i.id === item.id)!;
+    // Re-selected files can resume an earlier server session (after a reload,
+    // failure or cancellation); every call after reservation uses its ID.
+    let sessionId = item.id;
+    let latest = current.current.find((i) => i.id === sessionId)!;
     const controller = new AbortController();
-    controllers.current.set(item.id, controller);
+    controllers.current.set(sessionId, controller);
     try {
       if (!latest.thumbnail && !latest.thumbnailPath) {
-        patch(item.id, { phase: "Preparing", error: undefined });
+        patch(sessionId, { phase: "Preparing", error: undefined });
         const generated = await prepareThumbnail(item.file);
-        patch(item.id, {
+        patch(sessionId, {
           ...generated,
           preview: generated.thumbnail
             ? URL.createObjectURL(generated.thumbnail)
             : undefined,
         });
-        latest = current.current.find((i) => i.id === item.id)!;
+        latest = current.current.find((i) => i.id === sessionId)!;
         if (!latest.thumbnail)
           throw new Error(
             "Thumbnail generation failed. Retry with a browser-decodable source; video will not be published without a real frame thumbnail.",
@@ -351,12 +371,12 @@ export default function UploadPage() {
       if (controller.signal.aborted) throw new UploadAbortedError();
       if (!latest.transferred) {
         const targetCategoryId = latest.categoryId || categoryId;
-        patch(item.id, {
+        patch(sessionId, {
           phase: "Preparing",
           error: undefined,
           categoryId: targetCategoryId,
         });
-        latest = current.current.find((i) => i.id === item.id)!;
+        latest = current.current.find((i) => i.id === sessionId)!;
 
         if (
           !latest.userEditedTitle &&
@@ -367,18 +387,18 @@ export default function UploadPage() {
             targetCategoryId,
           );
           if (controller.signal.aborted) throw new UploadAbortedError();
-          patch(item.id, {
+          patch(sessionId, {
             title: aiMeta.title,
             description: aiMeta.description,
             aiGeneratedForCategory: targetCategoryId,
           });
-          latest = current.current.find((i) => i.id === item.id)!;
+          latest = current.current.find((i) => i.id === sessionId)!;
         }
 
         const session = await json<BunnyUploadTarget>(
           "/api/videos/bunny/sessions",
           {
-            sessionId: item.id,
+            sessionId,
             title: latest.title,
             ...(latest.description ? { description: latest.description } : {}),
             originalName: item.file.name,
@@ -390,28 +410,43 @@ export default function UploadPage() {
               : { durationSeconds: Math.floor(item.duration) }),
           },
         );
+        if (session.warning && alive.current) setNotice(session.warning);
+        if (session.sessionId && session.sessionId !== sessionId) {
+          if (current.current.some((i) => i.id === session.sessionId))
+            throw new DuplicateQueueEntryError(
+              "This file is already being uploaded by another entry in this queue.",
+            );
+          adoptSession(sessionId, session.sessionId);
+          sessionId = session.sessionId;
+        }
         if (session.completed) {
-          patch(item.id, {
+          patch(sessionId, {
             phase: "Completed",
             slug: session.slug,
             percent: 100,
+            ...(session.alreadyUploaded
+              ? {
+                  warning:
+                    "This file was already uploaded earlier, so no duplicate was created.",
+                }
+              : {}),
           });
           return;
         }
         if (controller.signal.aborted) throw new UploadAbortedError();
         if (!session.transferred) {
-          patch(item.id, { phase: "Uploading", percent: 0 });
+          patch(sessionId, { phase: "Uploading", percent: 0 });
           await uploadBunnyVideo(session, item.file, {
             title: latest.title,
             signal: controller.signal,
-            onProgress: (p) => patch(item.id, { percent: p.percent }),
+            onProgress: (p) => patch(sessionId, { percent: p.percent }),
           });
         }
-        patch(item.id, { transferred: true });
+        patch(sessionId, { transferred: true });
       }
       // Cancellation is disabled after transfer: persistence must not be abandoned accidentally.
-      patch(item.id, { phase: "Confirming", error: undefined });
-      latest = current.current.find((i) => i.id === item.id)!;
+      patch(sessionId, { phase: "Confirming", error: undefined });
+      latest = current.current.find((i) => i.id === sessionId)!;
       if (latest.thumbnail && !latest.thumbnailPath) {
         try {
           const target = await json<{ uploadUrl: string; storagePath: string }>(
@@ -427,14 +462,14 @@ export default function UploadPage() {
             contentType: "image/jpeg",
             headers: { "x-upsert": "false" },
           });
-          patch(item.id, { thumbnailPath: target.storagePath });
+          patch(sessionId, { thumbnailPath: target.storagePath });
         } catch {
           throw new Error(
             "Video transferred, but thumbnail storage failed. Retry to store the thumbnail and confirm without re-uploading the video.",
           );
         }
       }
-      latest = current.current.find((i) => i.id === item.id)!;
+      latest = current.current.find((i) => i.id === sessionId)!;
       if (controller.signal.aborted) throw new UploadAbortedError();
       const done = await json<{
         slug?: string;
@@ -442,11 +477,11 @@ export default function UploadPage() {
         providerStatus?: string;
         progress?: number;
       }>("/api/videos/bunny/confirm", {
-        sessionId: item.id,
+        sessionId,
         thumbnailPath: latest.thumbnailPath || null,
       });
       if (!done.processing && done.slug) {
-        patch(item.id, {
+        patch(sessionId, {
           phase: "Completed",
           percent: 100,
           slug: done.slug,
@@ -454,7 +489,7 @@ export default function UploadPage() {
         });
         return;
       }
-      patch(item.id, {
+      patch(sessionId, {
         phase: "Encoding",
         percent: 100,
         slug: done.slug,
@@ -462,23 +497,25 @@ export default function UploadPage() {
       });
       // Keep encoding checks separate from the upload worker so the next file
       // starts immediately instead of waiting for Bunny's transcoder.
-      void watchEncoding(item.id);
+      void watchEncoding(sessionId);
     } catch (e) {
       if (
         /Thumbnail (storage failed|generation required)/i.test(
           (e as Error).message,
         )
       )
-        patch(item.id, { thumbnailPath: undefined });
-      patch(item.id, {
+        patch(sessionId, { thumbnailPath: undefined });
+      patch(sessionId, {
         phase: e instanceof UploadAbortedError ? "Cancelled" : "Failed",
         error: (e as Error).message,
       });
+      // The shared session belongs to the other queue entry; leave it untouched.
+      if (e instanceof DuplicateQueueEntryError) return;
       await fetch("/api/videos/bunny/sessions", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId: item.id,
+          sessionId,
           reason:
             e instanceof UploadAbortedError
               ? "user_cancelled"
@@ -489,7 +526,7 @@ export default function UploadPage() {
         signal: AbortSignal.timeout(5000),
       }).catch(() => undefined);
     } finally {
-      controllers.current.delete(item.id);
+      controllers.current.delete(sessionId);
     }
   }
 
@@ -547,6 +584,14 @@ export default function UploadPage() {
           className="mb-4 whitespace-pre-line rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm"
         >
           {error}
+        </p>
+      )}
+      {notice && (
+        <p
+          role="status"
+          className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200"
+        >
+          {notice}
         </p>
       )}
       <label className="mb-5 block text-sm">
