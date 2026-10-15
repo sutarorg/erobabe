@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { FIXED_CATEGORIES } from "@/lib/public/fixed-categories";
 import {
   buildPrompt,
   CATEGORY_STORIES,
@@ -11,9 +12,13 @@ import {
   fallbackSuggestion,
   humanizeFileName,
   normalizeDescription,
+  isSafeAdultEditorialCopy,
   parseLooseJson,
   redactKeyMaterial,
+  sanitizeGeneratedTitle,
   sanitizeTitle,
+  titleWordCount,
+  titlesAreTooSimilar,
   validateSuggestionPayload,
 } from "@/lib/metadata/suggestion";
 
@@ -24,8 +29,8 @@ import {
 
 function modelOutput(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
-    title: "An Evening in Velvet",
-    description: "An elegant portrait captured in soft cinematic light, with thoughtful composition and visual atmosphere. Browse this collection to discover related video listings.",
+    title: "Boudoir in Velvet After Dark",
+    description: "A refined adult boudoir portrait captured in soft cinematic light, with thoughtful composition and visual atmosphere. Browse this collection to discover related video listings.",
     tags: ["mature", "boudoir", "4k"],
     category: "Boudoir",
     ...overrides,
@@ -38,7 +43,7 @@ describe("validateSuggestionPayload", () => {
     expect(result).toMatchObject({
       ok: true,
       suggestion: {
-        title: "An Evening in Velvet",
+        title: "Boudoir in Velvet After Dark",
         description: expect.stringContaining("cinematic light"),
         tags: ["mature", "boudoir", "4k"],
         category: "Boudoir",
@@ -88,7 +93,7 @@ describe("validateSuggestionPayload", () => {
 
 describe("description word limits and title prompt", () => {
   it.each([20, 25])("accepts a description containing %i words", (count) => {
-    const description = Array(count).fill("word").join(" ");
+    const description = ["Boudoir", ...Array(count - 1).fill("word")].join(" ");
     const result = validateSuggestionPayload(modelOutput({ description }));
     expect(result.ok).toBe(true);
     expect(descriptionWordCount(description)).toBe(count);
@@ -101,35 +106,37 @@ describe("description word limits and title prompt", () => {
   });
 
   it.each([29, 41, 100])("repairs a %i-word description into the published range instead of discarding it", (count) => {
-    const result = validateSuggestionPayload(modelOutput({ description: Array(count).fill("word").join(" ") }), "Boudoir");
+    const description = ["Boudoir", ...Array(count - 1).fill("word")].join(" ");
+    const result = validateSuggestionPayload(modelOutput({ description }), "Boudoir");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(isValidDescription(result.suggestion.description)).toBe(true);
-      expect(result.suggestion.title).toBe("An Evening in Velvet");
+      expect(result.suggestion.title).toBe("Boudoir in Velvet After Dark");
       expect(result.suggestion.reasoning).toMatch(/human review/);
     }
   });
 
   it("keeps the model's own words when it trims an overlong description", () => {
-    const source = `${Array(20).fill("word").join(" ")}. ${Array(31).fill("extra").join(" ")}.`;
+    const firstSentence = `Boudoir ${Array(19).fill("word").join(" ")}`;
+    const source = `${firstSentence}. ${Array(31).fill("extra").join(" ")}.`;
     const result = validateSuggestionPayload(modelOutput({ description: source }), "Boudoir");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(descriptionWordCount(result.suggestion.description)).toBe(20);
-      expect(result.suggestion.description.startsWith(Array(20).fill("word").join(" "))).toBe(true);
+      expect(result.suggestion.description.startsWith(firstSentence)).toBe(true);
       // Trimming only ever removes model words; it never substitutes generated ones.
       expect(result.suggestion.description).not.toContain("unhurried");
     }
   });
 
   it("extends a short description with story sentences for the selected category", () => {
-    const short = "Low light, soft fabric, and a long quiet moment before anything else begins.";
+    const short = "Boudoir low light, soft fabric, and a long quiet moment before anything else begins.";
     const boudoir = validateSuggestionPayload(modelOutput({ description: short }), "Boudoir");
     expect(boudoir.ok).toBe(true);
     if (boudoir.ok) {
       expect(isValidDescription(boudoir.suggestion.description)).toBe(true);
       expect(boudoir.suggestion.description.startsWith(short)).toBe(true);
-      expect(boudoir.suggestion.reasoning).toMatch(/extended from 13 words/);
+      expect(boudoir.suggestion.reasoning).toMatch(/extended from 14 words/);
     }
   });
 
@@ -140,7 +147,12 @@ describe("description word limits and title prompt", () => {
   });
 
   it("lets the model choose a category only when the admin chose none", () => {
-    const result = validateSuggestionPayload(modelOutput({ category: "Solo" }));
+    const result = validateSuggestionPayload(modelOutput({
+      title: "Solo Cinema With a Fresh Perspective",
+      description: "Explore adult solo video with a category-focused editorial preview, clear listing details, and practical viewing information for adults browsing this collection online.",
+      tags: ["solo", "mature", "editorial"],
+      category: "Solo",
+    }));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.suggestion.category).toBe("Solo");
   });
@@ -148,9 +160,10 @@ describe("description word limits and title prompt", () => {
   it("counts irregular and Unicode whitespace consistently and normalizes output", () => {
     expect(descriptionWordCount("  one\n two\tthree\u00a0four  ")).toBe(4);
     expect(descriptionWordCount(" \n ")).toBe(0);
-    const result = validateSuggestionPayload(modelOutput({ description: Array(22).fill("word").join(" \n\t") }));
+    const words = ["Boudoir", ...Array(21).fill("word")];
+    const result = validateSuggestionPayload(modelOutput({ description: words.join(" \n\t") }));
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.suggestion.description).toBe(Array(22).fill("word").join(" "));
+    if (result.ok) expect(result.suggestion.description).toBe(words.join(" "));
   });
 
   it.each([...KNOWN_CATEGORIES])("keeps fallback descriptions within 20-25 words for %s", (category) => {
@@ -162,17 +175,17 @@ describe("description word limits and title prompt", () => {
     expect(prompt).toContain("4-9 words");
     expect(prompt).toContain("20-25 words");
     expect(prompt).toContain("untrusted source data");
-    expect(prompt).toContain("Do not invent");
+    expect(prompt).toContain("not by inventing actions");
     expect(prompt).toContain("non-graphic");
   });
 
   it("never lets a dash survive into a validated title", () => {
-    const payload = { ...JSON.parse(modelOutput()), title: "An Evening in Velvet \u2014 A Story in Low Light" };
+    const payload = { ...JSON.parse(modelOutput()), title: "Boudoir in Velvet \u2014 A Story in Low Light" };
     const result = validateSuggestionPayload(JSON.stringify(payload), "Boudoir");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.suggestion.title).not.toMatch(/[\u2010-\u2015\u2212]/);
-      expect(result.suggestion.title).toBe("An Evening in Velvet A Story in Low Light");
+      expect(result.suggestion.title).toBe("Boudoir in Velvet A Story in Low Light");
     }
   });
 
@@ -182,6 +195,17 @@ describe("description word limits and title prompt", () => {
 
   it.each([...KNOWN_CATEGORIES])("writes a 20-25 word story blurb for %s", (category) => {
     expect(isValidDescription(CATEGORY_STORIES[category].blurb)).toBe(true);
+  });
+});
+
+describe("fixed admin categories", () => {
+  it("supports every live upload category with its own SEO topic and writing voice", () => {
+    for (const { label } of FIXED_CATEGORIES) {
+      expect(KNOWN_CATEGORIES).toContain(label);
+      expect(CATEGORY_STORIES[label as keyof typeof CATEGORY_STORIES].primaryKeyword).toBeTruthy();
+      expect(CATEGORY_STORIES[label as keyof typeof CATEGORY_STORIES].titlePool.length).toBeGreaterThan(0);
+      expect(buildPrompt({ category: label })).toContain(`Category must be exactly ${JSON.stringify(label)}`);
+    }
   });
 });
 
@@ -256,24 +280,39 @@ describe("parseLooseJson", () => {
 });
 
 describe("fallbackSuggestion", () => {
-  it("builds reviewable metadata from the file name and category, with no invented subtitle", () => {
-    const suggestion = fallbackSuggestion("evening_in_velvet-4k.mov", "Boudoir");
-    expect(suggestion.title).toBe("Evening In Velvet 4k");
+  it("builds reviewable category-only metadata without using the file name", () => {
+    const suggestion = fallbackSuggestion("private_zzunique_991234.mov", "Boudoir");
+    expect(suggestion.title).not.toMatch(/private|zzunique|991234/i);
     expect(suggestion.category).toBe("Boudoir");
     expect(suggestion.tags).toContain("boudoir");
     expect(suggestion.tags.length).toBeGreaterThan(0);
     expect(isValidDescription(suggestion.description)).toBe(true);
-    expect(suggestion.description).not.toMatch(/AI metadata|replace|unavailable/i);
+    expect(CATEGORY_STORIES.Boudoir.blurbPool).toContain(suggestion.description);
+    expect(suggestion.reasoning).toMatch(/category-only fallback/i);
   });
 
-  it.each([...KNOWN_CATEGORIES])("writes %s metadata without a dash in the title", (category) => {
+  it.each([...KNOWN_CATEGORIES])("writes %s category-led metadata within the word budgets", (category) => {
     const suggestion = fallbackSuggestion("evening_in_velvet.mov", category);
     expect(suggestion.category).toBe(category);
-    expect(suggestion.title).toBe("Evening In Velvet");
+    expect(titleWordCount(suggestion.title)).toBeGreaterThanOrEqual(4);
+    expect(titleWordCount(suggestion.title)).toBeLessThanOrEqual(9);
     expect(suggestion.title).not.toMatch(/[\u2010-\u2015\u2212-]/);
-    expect(suggestion.description).toBe(CATEGORY_STORIES[category].blurb);
+    expect(CATEGORY_STORIES[category].titlePool).toContain(suggestion.title);
     expect(suggestion.reasoning).toMatch(/requires human review/);
     expect(isValidDescription(suggestion.description)).toBe(true);
+  });
+
+  it("chooses a new category-led fallback even after the starter title pool is exhausted", () => {
+    const existingTitles = [
+      ...CATEGORY_STORIES.Amateur.titlePool,
+      "Amateur Cinema With a Neon Pulse",
+      "Amateur Cinema With a Velvet Mood",
+    ];
+    const suggestion = fallbackSuggestion("ignored_filename.mp4", "Amateur", existingTitles);
+    expect(titleWordCount(suggestion.title)).toBeGreaterThanOrEqual(4);
+    expect(titleWordCount(suggestion.title)).toBeLessThanOrEqual(9);
+    expect(existingTitles.some((title) => titlesAreTooSimilar(suggestion.title, title))).toBe(false);
+    expect(isSafeAdultEditorialCopy(suggestion.title, suggestion.description)).toBe(true);
   });
 
   it("always lands on a known category and a permitted tag", () => {
@@ -282,8 +321,10 @@ describe("fallbackSuggestion", () => {
     expect(suggestion.tags.length).toBeGreaterThan(0);
   });
 
-  it("drops long id runs and uses a category-free placeholder for empty names", () => {
-    expect(fallbackSuggestion("", "Solo").title).toBe("Untitled Video Listing");
+  it("uses the selected category even when the source file name is empty", () => {
+    const suggestion = fallbackSuggestion("", "Solo");
+    expect(suggestion.category).toBe("Solo");
+    expect(CATEGORY_STORIES.Solo.titlePool).toContain(suggestion.title);
     expect(humanizeFileName("evening_in_velvet_20240512_1080p.mov")).toBe("Evening In Velvet 1080p");
   });
 
@@ -402,26 +443,65 @@ describe("sanitizeTitle", () => {
 });
 
 
-describe("category-free generated titles", () => {
+describe("category-led generated titles", () => {
   it.each([
-    ["Amateur", "Amateur Couple Share A Quiet Evening", "Couple Share A Quiet Evening"],
-    ["Amateur", "A Quiet amateur Evening On Camera", "A Quiet Evening On Camera"],
-    ["Mature 18+", "Mature 18+ Performer In Evening Light", "Performer In Evening Light"],
+    ["Amateur", "Amateur Couple Share A Quiet Evening", "Amateur Couple Share A Quiet Evening"],
+    ["Amateur", "A Quiet amateur Evening On Camera", "A Quiet amateur Evening On Camera"],
+    ["Mature 18+", "Mature 18+ Performer In Evening Light", "Mature 18+ Performer In Evening Light"],
     ["Solo", "Solomon Enjoys A Quiet Evening", "Solomon Enjoys A Quiet Evening"],
-  ])("removes only the whole category label %s", (category, title, expected) => {
-    const result = validateSuggestionPayload(modelOutput({ title }), category);
+  ])("preserves the selected category signal without stripping substrings (%s)", (category, title, expected) => {
+    expect(sanitizeGeneratedTitle(title, category)).toBe(expected);
+  });
+
+  it("removes the youth-coded category word from public title copy", () => {
+    const result = validateSuggestionPayload(modelOutput({
+      title: "Eighteen Plus Adults Only in Focus",
+      description: CATEGORY_STORIES["Teen (18+)"].blurb,
+      category: "Teen (18+)",
+    }), "Teen (18+)");
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.suggestion.title).toBe(expected);
+    if (result.ok) expect(result.suggestion.title).not.toMatch(/\b(?:teen|school|girl|boy)\b/i);
   });
 
   it.each([29, 41])("rejects %i words under strict validation", (count) => {
     expect(validateSuggestionPayload(modelOutput({ description: Array(count).fill("word").join(" ") }), "Boudoir", { strictWordCount: true }).ok).toBe(false);
   });
 
-  it("asks for source-specific titles and supplies titles to avoid", () => {
-    const prompt = buildPrompt({ fileName: "quiet_evening.mp4", category: "Amateur", existingTitles: ["A Quiet Evening On Camera"] });
-    expect(prompt).toContain("near-duplicates");
+  it("uses only the selected category and an exclusion list, never file/default metadata", () => {
+    const prompt = buildPrompt({
+      title: "DEFAULT TITLE MUST NOT LEAK",
+      fileName: "private_filename_must_not_leak.mp4",
+      existingTags: "default tags must not leak",
+      category: "Amateur",
+      existingTitles: ["A Quiet Evening On Camera"],
+    }, "Art-house phrasing with a memorable image.");
+    expect(prompt).toContain("adminSelectedCategory");
     expect(prompt).toContain("A Quiet Evening On Camera");
-    expect(prompt).toContain("Do not produce graphic sexual descriptions");
+    expect(prompt).toContain("Art-house phrasing with a memorable image.");
+    expect(prompt).toContain("ONLY content signal");
+    expect(prompt).not.toContain("DEFAULT TITLE MUST NOT LEAK");
+    expect(prompt).not.toContain("private_filename_must_not_leak.mp4");
+    expect(prompt).not.toContain("default tags must not leak");
+    expect(prompt).toContain("Do not create graphic sexual descriptions");
+  });
+
+  it("rejects near-duplicates while allowing distinct category angles", () => {
+    expect(titlesAreTooSimilar("A Velvet Evening in Soft Focus", "Velvet Evening in Soft Focus" )).toBe(true);
+    expect(titlesAreTooSimilar("Amateur Cinema With a Confident Editorial Edge", "Amateur Cinema With a Confident Editorial Mood")).toBe(true);
+    expect(titlesAreTooSimilar("Amateur Energy With a Cinematic Pulse", "Amateur Energy With a Cinematic Mood")).toBe(true);
+    expect(titlesAreTooSimilar("A Velvet Evening in Soft Focus", "Japanese Adult Cinema With a Neon Pulse")).toBe(false);
+  });
+
+  it.each([
+    "Teen schoolgirl video",
+    "My stepmother surprises me",
+    "A woman is forced into the scene",
+    "Explicit cock and pussy action",
+  ])("blocks unsafe category copy: %s", (text) => {
+    expect(isSafeAdultEditorialCopy(text, "A restrained adult-only category description." )).toBe(false);
+  });
+
+  it("accepts non-graphic copy about clearly adult performers", () => {
+    expect(isSafeAdultEditorialCopy("Japanese Adult Cinema With a Neon Pulse", "Browse Japanese adult video with a clear category description for adults exploring this collection online." )).toBe(true);
   });
 });

@@ -103,6 +103,8 @@ class Query
   private filters: Filter[] = [];
   private containsFilters: Array<[string, any]> = [];
   private limitCount: number | null = null;
+  private rangeStart: number | null = null;
+  private rangeEnd: number | null = null;
   private singleRow = false;
   private action: "select" | "insert" | "update" | "delete" = "select";
   private payload: Row | Row[] | null = null;
@@ -194,6 +196,12 @@ class Query
 
   limit(count: number) {
     this.limitCount = count;
+    return this;
+  }
+
+  range(from: number, to: number) {
+    this.rangeStart = Math.max(0, from);
+    this.rangeEnd = Math.max(this.rangeStart, to);
     return this;
   }
 
@@ -297,8 +305,11 @@ class Query
 
     const limited =
       this.limitCount === null ? matching : matching.slice(0, this.limitCount);
-    if (this.singleRow) return { data: limited[0] ?? null, error: null };
-    return { data: limited, error: null };
+    const ranged = this.rangeStart === null
+      ? limited
+      : limited.slice(this.rangeStart, (this.rangeEnd ?? this.rangeStart) + 1);
+    if (this.singleRow) return { data: ranged[0] ?? null, error: null };
+    return { data: ranged, error: null };
   }
 }
 

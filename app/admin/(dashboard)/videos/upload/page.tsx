@@ -94,6 +94,9 @@ export default function UploadPage() {
   const controllers = useRef(new Map<string, AbortController>());
   const encodingWatchers = useRef(new Map<string, AbortController>());
   const usedTitles = useRef(new Set<string>());
+  // AI copy runs one-at-a-time so concurrent upload workers share the latest
+  // generated title in their near-duplicate exclusion list.
+  const metadataQueue = useRef<Promise<void>>(Promise.resolve());
   const alive = useRef(true);
   const busy = useRef(false);
   const decodeQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -180,59 +183,51 @@ export default function UploadPage() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [running]);
 
-  async function generateAiMetadataForItem(
-    item: Item,
+  function generateAiMetadataForCategory(
     targetCategoryId: string,
   ): Promise<{ title: string; description: string }> {
-    const categoryLabel =
-      categories.find((c) => c.id === targetCategoryId)?.label || "Mature";
-    const existingList = Array.from(usedTitles.current);
-    try {
-      const response = await fetch("/api/metadata/suggest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: item.file.name,
-          title: item.title,
-          category: categoryLabel,
-          existingTitles: existingList,
-        }),
-        cache: "no-store",
-      });
-      const data = await response.json().catch(() => null);
-      if (response.ok && data?.suggestion?.title) {
-        const nextTitle = String(data.suggestion.title).trim();
-        const nextDescription = String(data.suggestion.description || "").trim();
-        usedTitles.current.add(nextTitle);
-        return { title: nextTitle, description: nextDescription };
+    const generate = async () => {
+      const categoryLabel =
+        categories.find((c) => c.id === targetCategoryId)?.label || "Mature";
+      // Add titles only after the preceding request completes: upload workers
+      // are parallel, but their category-only metadata generation is serialized.
+      const existingList = Array.from(usedTitles.current).slice(-100);
+      try {
+        const response = await fetch("/api/metadata/suggest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // Deliberately omit filename, default title, and tags. Category drives
+          // generation; the title list is used only to prevent repetition.
+          body: JSON.stringify({
+            category: categoryLabel,
+            existingTitles: existingList,
+          }),
+          cache: "no-store",
+        });
+        const data = await response.json().catch(() => null);
+        if (response.ok && data?.suggestion?.title) {
+          const nextTitle = String(data.suggestion.title).trim();
+          const nextDescription = String(data.suggestion.description || "").trim();
+          usedTitles.current.add(nextTitle);
+          return { title: nextTitle, description: nextDescription };
+        }
+      } catch {
+        // The deterministic category-only fallback below keeps the upload queue
+        // usable when OpenRouter is temporarily unavailable.
       }
-      if (!response.ok) {
-        const fallback = generateCategoryFallbackMetadata(
-          item.file.name,
-          categoryLabel,
-          existingList,
-        );
-        usedTitles.current.add(fallback.title);
-        return { title: fallback.title, description: fallback.description };
-      }
-    } catch {
+
       const fallback = generateCategoryFallbackMetadata(
-        item.file.name,
+        "",
         categoryLabel,
         existingList,
       );
       usedTitles.current.add(fallback.title);
       return { title: fallback.title, description: fallback.description };
-    }
-    const fallback = generateCategoryFallbackMetadata(
-      item.file.name,
-      categoryLabel,
-      existingList,
-    );
-    return {
-      title: item.title,
-      description: item.description || fallback.description,
     };
+
+    const queued = metadataQueue.current.then(generate, generate);
+    metadataQueue.current = queued.then(() => undefined, () => undefined);
+    return queued;
   }
 
   async function add(files: File[]) {
@@ -393,10 +388,7 @@ export default function UploadPage() {
           !latest.userEditedTitle &&
           latest.aiGeneratedForCategory !== targetCategoryId
         ) {
-          const aiMeta = await generateAiMetadataForItem(
-            latest,
-            targetCategoryId,
-          );
+          const aiMeta = await generateAiMetadataForCategory(targetCategoryId);
           if (controller.signal.aborted) throw new UploadAbortedError();
           patch(sessionId, {
             title: aiMeta.title,
@@ -583,8 +575,10 @@ export default function UploadPage() {
         <div>
           <h1 className="text-2xl font-semibold">Upload videos</h1>
           <p className="mt-2 text-sm text-ink-3">
-            Local files → Bunny Stream with OpenRouter AI metadata and automatic
-            publishing on encoding completion.
+            Local files → Bunny Stream. AI title and description drafts use the
+            selected category only, not the filename or default title. Generate
+            and review the copy before starting when possible; videos publish
+            automatically after encoding, and no search ranking is guaranteed.
           </p>
         </div>
         <Link href="/admin/videos" className="text-sm text-accent">
@@ -740,12 +734,14 @@ export default function UploadPage() {
                     disabled={
                       running || !!item.categoryId || item.phase === "Completed"
                     }
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const editedTitle = e.target.value;
+                      if (editedTitle.trim()) usedTitles.current.add(editedTitle.trim());
                       patch(item.id, {
-                        title: e.target.value,
+                        title: editedTitle,
                         userEditedTitle: true,
-                      })
-                    }
+                      });
+                    }}
                     className="w-full rounded-lg border border-line bg-void px-3 py-2 text-sm"
                   />
                   {["Queued", "Failed", "Cancelled"].includes(item.phase) &&
@@ -754,10 +750,7 @@ export default function UploadPage() {
                       <button
                         type="button"
                         onClick={async () => {
-                          const meta = await generateAiMetadataForItem(
-                            item,
-                            categoryId,
-                          );
+                          const meta = await generateAiMetadataForCategory(categoryId);
                           patch(item.id, {
                             title: meta.title,
                             description: meta.description,
@@ -768,7 +761,7 @@ export default function UploadPage() {
                         className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-line bg-void px-3 py-2 text-xs text-accent hover:border-accent/50"
                       >
                         <Sparkles className="h-3.5 w-3.5" aria-hidden />
-                        AI Meta
+                        Generate SEO copy
                       </button>
                     )}
                 </div>
