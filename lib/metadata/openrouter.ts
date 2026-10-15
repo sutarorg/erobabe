@@ -2,7 +2,8 @@
  * OpenRouter client for AI video metadata — server-only.
  *
  * Calls the OpenAI-compatible chat completions endpoint with DeepSeek V3.2 by
- * default. Suggestions always require human review before publishing.
+ * default. The upload flow can publish after encoding, so the admin should
+ * preview and edit category-led drafts before starting whenever possible.
  *
  * Configuration (server environment only, never shipped to the browser):
  *   OPENROUTER_API_KEY           required, starts with `sk-or-`
@@ -17,6 +18,7 @@ import {
   parseLooseJson,
   redactKeyMaterial,
   suggestionOutputTokens,
+  titlesAreTooSimilar,
   validateSuggestionPayload,
   type SuggestMetadataParams,
   type SuggestedMetadata,
@@ -228,7 +230,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
     try {
       result = await chatCompletion(prompt + correction, model, key, {
         maxTokens,
-        temperature: attempt === 0 ? 0.7 : 0.2,
+        temperature: attempt === 0 ? 0.9 : 0.75,
       });
     } catch (error: unknown) {
       const mapped =
@@ -260,19 +262,15 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
       strictWordCount: true,
     });
     if (validation.ok) {
-      const normalize = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-      const candidate = normalize(validation.suggestion.title);
-      const duplicate = (params.existingTitles || []).some((title) => {
-        const words = new Set(normalize(title).split(" "));
-        const proposed = new Set(candidate.split(" "));
-        const overlap = [...proposed].filter((word) => words.has(word)).length;
-        return candidate === normalize(title) || overlap / new Set([...words, ...proposed]).size >= 0.8;
-      });
-      if (!duplicate) return validation.suggestion;
-      validation = { ok: false, message: "title is too similar to an existing listing" };
+      const suggestion = validation.suggestion;
+      const duplicate = (params.existingTitles || []).some((title) =>
+        titlesAreTooSimilar(suggestion.title, title),
+      );
+      if (!duplicate) return suggestion;
+      validation = { ok: false, message: "title is a near-duplicate of an existing listing" };
     }
 
-    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object that meets every requirement: a factual non-graphic title of 4-9 words, without invented scenes or relationships, and an accurate non-graphic description, and a description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
+    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object. Keep the admin-selected category as the only content signal, choose a distinctly different angle and word order, never add a fake story or extra keywords, use a factual non-graphic 4-9-word title, and write a category-led description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
     const truncated = result.finishReason === "length" && !parseLooseJson(result.text);
     lastError = new MetadataError(
       truncated

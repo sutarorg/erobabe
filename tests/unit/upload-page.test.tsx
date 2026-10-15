@@ -159,8 +159,9 @@ describe("device-only upload queue", () => {
         uploadUrl: "https://storage.example.com/signed",
       }),
       expect.any(File),
-      expect.objectContaining({ title: "clip" }),
+      expect.objectContaining({ title: expect.any(String) }),
     );
+    expect(transfer.mock.calls[0]?.[2]?.title).not.toBe("clip");
     const postBodies = fetchMock.mock.calls
       .filter(([, o]) => o?.body)
       .map(([, o]) => o.body);
@@ -340,9 +341,9 @@ describe("device-only upload queue", () => {
       if (url.endsWith("/api/metadata/suggest")) {
         return Response.json({
           suggestion: {
-            title: "Stepmom surprises me while I shave and we end up fucking",
+            title: "Amateur Cinema With a Neon Pulse",
             description:
-              "An experienced seductress takes full control in the bedroom, teasing his hard cock with a sloppy deep throat blowjob before climbing on top for rough fucking until he fills her wet pussy with a warm creampie.",
+              "A concise adult amateur video listing with a distinct editorial voice, clear category context, and practical viewing details presented before playback begins.",
             tags: ["mature", "hd", "featured"],
             category: "Category one",
           },
@@ -350,7 +351,7 @@ describe("device-only upload queue", () => {
       }
       if (url.endsWith("confirm")) {
         return Response.json({
-          slug: "stepmom-surprises-me",
+          slug: "amateur-cinema-neon-pulse",
           status: "published",
           visibility: "public",
           published: true,
@@ -376,10 +377,18 @@ describe("device-only upload queue", () => {
       }),
       expect.any(File),
       expect.objectContaining({
-        title: "Stepmom surprises me while I shave and we end up fucking",
+        title: "Amateur Cinema With a Neon Pulse",
       }),
     );
     expect(screen.getByText(/1 published/i)).toBeInTheDocument();
+    const metadataCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/metadata/suggest"),
+    );
+    const metadataPayload = JSON.parse(String(metadataCall?.[1]?.body));
+    expect(metadataPayload).toMatchObject({ category: "Category one" });
+    expect(metadataPayload).not.toHaveProperty("title");
+    expect(metadataPayload).not.toHaveProperty("fileName");
+    expect(metadataPayload).not.toHaveProperty("tags");
   });
 });
 

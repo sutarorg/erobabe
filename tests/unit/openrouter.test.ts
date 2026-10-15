@@ -28,6 +28,7 @@ import {
   suggestVideoMetadata,
 } from "@/lib/metadata/openrouter";
 import { POST as suggest } from "@/app/api/metadata/suggest/route";
+import { titlesAreTooSimilar } from "@/lib/metadata/suggestion";
 
 const SUGGEST_URL = "https://erobabe.vercel.app/api/metadata/suggest";
 
@@ -35,8 +36,8 @@ const fetchMock = vi.fn();
 
 function modelOutput(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
-    title: "An Evening in Velvet",
-    description: "An elegant portrait captured in soft cinematic light, with thoughtful composition and visual atmosphere. Browse this collection to discover related video listings.",
+    title: "Boudoir in Velvet After Dark",
+    description: "A refined adult boudoir portrait captured in soft cinematic light, with thoughtful composition and visual atmosphere. Browse this collection to discover related video listings.",
     tags: ["mature", "boudoir", "4k"],
     category: "Boudoir",
     ...overrides,
@@ -59,9 +60,14 @@ function sentBody(callIndex = 0): Record<string, unknown> {
   return JSON.parse(String(init.body));
 }
 
-function seedAuth(userId: string | null, profile?: Record<string, unknown> | null) {
+function seedAuth(
+  userId: string | null,
+  profile?: Record<string, unknown> | null,
+  videos: Array<Record<string, unknown>> = [],
+) {
   const fake = createFakeSupabase({
     profiles: userId && profile !== null ? [{ id: userId, role: "admin", status: "active", ...(profile || {}) }] : [],
+    videos,
   });
   authState.client = {
     ...fake.client,
@@ -118,7 +124,7 @@ describe("suggestVideoMetadata", () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput()));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
     expect(suggestion).toMatchObject({
-      title: "An Evening in Velvet",
+      title: "Boudoir in Velvet After Dark",
       tags: ["mature", "boudoir", "4k"],
       category: "Boudoir",
     });
@@ -164,13 +170,17 @@ describe("suggestVideoMetadata", () => {
     expect(messages[0].content).toMatch(/sexualized youth/i);
   });
 
-  it("anchors the prompt on the admin-selected category and asks for a one-clause title", async () => {
+  it("anchors copy on the admin category, randomizes the editorial voice, and ignores filename metadata", async () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ category: "Boudoir" })));
     await suggestVideoMetadata({ fileName: "evening_in_velvet.mp4", category: "Boudoir" });
     const messages = sentBody().messages as Array<{ content: string }>;
     expect(messages[0].content).toContain('Category must be exactly "Boudoir"');
     expect(messages[0].content).toContain("4-9 words");
-    expect(messages[0].content).toContain("Do not invent");
+    expect(messages[0].content).toContain("ONLY content signal");
+    expect(messages[0].content).toContain("adult boudoir video");
+    expect(messages[0].content).toMatch(/Randomized writing direction/);
+    expect(messages[0].content).not.toContain("evening_in_velvet.mp4");
+    expect(messages[0].content).toMatch(/inventing actions/);
   });
 
   it("keeps the admin's category when the model answers with a different one", async () => {
@@ -197,7 +207,7 @@ describe("suggestVideoMetadata", () => {
   it("retries once with a larger budget when the first reply is empty", async () => {
     fetchMock.mockResolvedValueOnce(chatReply("   ")).mockResolvedValueOnce(chatReply(modelOutput()));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
-    expect(suggestion.title).toBe("An Evening in Velvet");
+    expect(suggestion.title).toBe("Boudoir in Velvet After Dark");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sentBody(1).max_tokens).toBe(4096);
   });
@@ -206,7 +216,7 @@ describe("suggestVideoMetadata", () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ description: "A short catalog description." })))
       .mockResolvedValueOnce(chatReply(modelOutput()));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
-    expect(suggestion.description.split(/\s+/)).toHaveLength(22);
+    expect(suggestion.description.split(/\s+/)).toHaveLength(24);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const messages = sentBody(1).messages as Array<{ content: string }>;
     expect(messages[0].content).toContain("previous suggestion failed validation");
@@ -227,7 +237,7 @@ describe("suggestVideoMetadata", () => {
 
   it("rejects near-duplicate titles after both attempts", async () => {
     fetchMock.mockImplementation(async () => chatReply(modelOutput()));
-    await expect(suggestVideoMetadata({ existingTitles: ["An Evening in Velvet"] })).rejects.toMatchObject({ code: "bad_output" });
+    await expect(suggestVideoMetadata({ existingTitles: ["Boudoir in Velvet After Dark"] })).rejects.toMatchObject({ code: "bad_output" });
   });
 
   it("still fails when the model returns nothing a repair can rescue", async () => {
@@ -312,7 +322,7 @@ describe("suggestVideoMetadata", () => {
       .mockResolvedValueOnce(jsonResponse(400, { error: { message: "response_format is not supported by this model" } }))
       .mockResolvedValueOnce(chatReply(modelOutput()));
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
-    expect(suggestion.title).toBe("An Evening in Velvet");
+    expect(suggestion.title).toBe("Boudoir in Velvet After Dark");
     expect(sentBody(0).response_format).toBeDefined();
     expect(sentBody(1).response_format).toBeUndefined();
     expect(sentBody(1).reasoning).toEqual({ enabled: false });
@@ -446,15 +456,54 @@ describe("probeOpenRouter / openRouterDiagnostics", () => {
 
 describe("POST /api/metadata/suggest", () => {
   it("returns a suggestion to an active admin", async () => {
-    seedAuth("admin-1");
+    seedAuth("admin-1", undefined, [{ title: "Catalog Reference Title" }]);
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput()));
 
     const response = await suggest(suggestRequest({ fileName: "clip.mp4", category: "Boudoir" }));
 
     expect(response.status).toBe(200);
     const json = await response.json();
-    expect(json.suggestion).toMatchObject({ title: "An Evening in Velvet", category: "Boudoir" });
+    expect(json.suggestion).toMatchObject({ title: "Boudoir in Velvet After Dark", category: "Boudoir" });
     expect(json.note).toMatch(/human review/);
+  });
+
+  it("loads catalog titles for dedupe but never feeds video defaults into AI copy", async () => {
+    seedAuth("admin-catalog", undefined, [{ title: "Catalog Reference Title" }]);
+    fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ title: "A Different Boudoir Mood in Focus" })));
+
+    const response = await suggest(suggestRequest({
+      fileName: "private_filename.mp4",
+      title: "Default uploader title",
+      tags: "default tags",
+      category: "Boudoir",
+    }));
+    expect(response.status).toBe(200);
+    const content = (sentBody().messages as Array<{ content: string }>)[0].content;
+    expect(content).toContain("Catalog Reference Title");
+    expect(content).not.toContain("private_filename.mp4");
+    expect(content).not.toContain("Default uploader title");
+    expect(content).not.toContain("default tags");
+  });
+
+  it("serializes parallel admin requests and retries a title reserved by the first request", async () => {
+    seedAuth("admin-parallel");
+    const firstDraft = modelOutput({ title: "Magenta Boudoir Cinema With Pulse" });
+    const secondAngle = modelOutput({ title: "Boudoir Contours in a New Light" });
+    fetchMock
+      .mockResolvedValueOnce(chatReply(firstDraft))
+      .mockResolvedValueOnce(chatReply(firstDraft))
+      .mockResolvedValueOnce(chatReply(secondAngle));
+
+    const [firstResponse, secondResponse] = await Promise.all([
+      suggest(suggestRequest({ category: "Boudoir" })),
+      suggest(suggestRequest({ category: "Boudoir" })),
+    ]);
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    const first = (await firstResponse.json()).suggestion.title as string;
+    const second = (await secondResponse.json()).suggestion.title as string;
+    expect(titlesAreTooSimilar(first, second)).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("requires authentication", async () => {
@@ -483,7 +532,7 @@ describe("POST /api/metadata/suggest", () => {
 
   it("rejects oversized request bodies", async () => {
     seedAuth("admin-4");
-    const response = await suggest(suggestRequest("x".repeat(17 * 1024)));
+    const response = await suggest(suggestRequest("x".repeat(33 * 1024)));
     expect(response.status).toBe(413);
   });
 
