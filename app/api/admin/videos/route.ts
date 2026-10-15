@@ -1,4 +1,6 @@
 import { bunnyRequest, bunnyVideoSchema } from "@/lib/video/bunny";
+import { suggestCarouselCopy } from "@/lib/metadata/openrouter";
+import type { CarouselCopyResult } from "@/lib/metadata/openrouter";
 import { NextRequest, NextResponse } from "next/server";
 import {
   httpErrorStatus,
@@ -9,12 +11,18 @@ import { removeThumbnailObject, resolveImageValue } from "@/lib/video/storage";
 import { revalidatePublicTag } from "@/lib/public/revalidate";
 
 /**
- * Admin video maintenance: change/remove a thumbnail, or delete a video.
+ * Admin video maintenance: change/remove a thumbnail, place a video in the
+ * homepage carousel, regenerate its carousel copy, or delete a video.
  *
  * Nothing here touches provider video bytes. Deleting removes the catalog row,
  * not remote Bunny Stream media; provider-side retention/cleanup is separate. The thumbnail, which
  * *is* uploaded to Supabase Storage, is removed from the bucket as well (best
  * effort: a missing object never fails the database change).
+ *
+ * Placing a video in a carousel slot also generates that video's short carousel
+ * copy through the AI (max 5 words headline, max 10 words teaser). A failure
+ * there never blocks the assignment: the copy degrades to the listing text,
+ * trimmed to the same budget, and the response says what happened.
  */
 
 export const CAROUSEL_SLOTS = 3;
@@ -62,26 +70,64 @@ export function parseCarouselPosition(
 
 /**
  * Puts a video into a carousel slot. A slot holds one video, so whatever held
- * the slot before is moved out first. Passing `null` clears the video's slot.
+ * the slot before is moved out first. Passing `null` clears the video's slot —
+ * and the short copy that only the carousel card uses.
  */
 async function assignCarouselSlot(
   service: ServiceClient,
   id: string,
   position: number | null,
-) {
+  copy: CarouselCopyResult | null,
+): Promise<boolean> {
   if (position !== null) {
+    // Whatever held the slot keeps neither the slot nor the short copy that was
+    // written for it.
     const { error: clearError } = await service
       .from("videos")
-      .update({ carousel_position: null })
+      .update({
+        carousel_position: null,
+        carousel_title: null,
+        carousel_description: null,
+      })
       .eq("carousel_position", position)
       .neq("id", id);
-    if (clearError) throw clearError;
+    if (clearError && !isMissingColumnError(clearError)) throw clearError;
+    if (clearError) {
+      const { error: slotOnlyError } = await service
+        .from("videos")
+        .update({ carousel_position: null })
+        .eq("carousel_position", position)
+        .neq("id", id);
+      if (slotOnlyError) throw slotOnlyError;
+    }
   }
-  const { error } = await service
+
+  const payload = {
+    carousel_position: position,
+    carousel_title: position === null ? null : copy?.title || null,
+    carousel_description: position === null ? null : copy?.description || null,
+  };
+
+  const { error } = await service.from("videos").update(payload).eq("id", id);
+  if (!error) return true;
+
+  // Migration 00000000000020 adds the copy columns. Until it is applied the slot
+  // itself still works, so degrade instead of failing the assignment.
+  if (!isMissingColumnError(error)) throw error;
+  const { error: slotError } = await service
     .from("videos")
     .update({ carousel_position: position })
     .eq("id", id);
-  if (error) throw error;
+  if (slotError) throw slotError;
+  return false;
+}
+
+/** PostgREST reports a column the running schema does not have yet. */
+function isMissingColumnError(error: unknown): boolean {
+  const candidate = error as { code?: unknown; message?: unknown } | null;
+  if (!candidate) return false;
+  if (candidate.code === "PGRST204") return true;
+  return /could not find the '.*' column/i.test(String(candidate.message || ""));
 }
 
 async function loadVideo(service: ServiceClient, id: string) {
@@ -97,6 +143,76 @@ async function loadVideo(service: ServiceClient, id: string) {
     title: string;
     thumbnail_url: string | null;
     provider: string | null;
+  };
+}
+
+/**
+ * The extra fields the carousel needs to write a card: the listing the copy is
+ * derived from, the slot the video is in, and its category.
+ *
+ * Kept separate from `loadVideo` so a thumbnail or delete request never depends
+ * on the carousel columns or on the category relationship.
+ */
+async function loadCarouselVideo(service: ServiceClient, id: string) {
+  const { data, error } = await service
+    .from("videos")
+    .select(
+      "id, slug, title, description, carousel_position, category:categories(label)",
+    )
+    .eq("id", id)
+    .single();
+  if (error || !data) throw new Error("Video not found");
+  const row = data as {
+    id: string;
+    slug: string;
+    title: string;
+    description: string | null;
+    carousel_position: number | null;
+    category: { label?: string } | { label?: string }[] | null;
+  };
+  const category = Array.isArray(row.category) ? row.category[0] : row.category;
+  return {
+    id: row.id,
+    slug: row.slug,
+    title: row.title,
+    description: row.description,
+    carousel_position: row.carousel_position ?? null,
+    category_label: category?.label ? String(category.label) : "",
+  };
+}
+
+/** The AI call that writes the two short lines of a carousel card. */
+async function carouselCopyFor(video: {
+  title: string;
+  description: string | null;
+  category_label: string;
+}): Promise<CarouselCopyResult> {
+  return suggestCarouselCopy({
+    title: video.title,
+    description: video.description,
+    category: video.category_label,
+  });
+}
+
+const CAROUSEL_COPY_UNSTORED =
+  "The carousel copy columns are missing from the database — apply migration 00000000000020_carousel_ai_copy.sql. The slot was still saved.";
+
+/** What the admin UI needs to know about the copy, without the key or prompt. */
+function carouselCopyReport(
+  copy: CarouselCopyResult | null,
+  stored: boolean,
+) {
+  if (!copy) return null;
+  return {
+    source: copy.source,
+    model: copy.model,
+    trimmed: copy.trimmed,
+    stored,
+    ...(stored
+      ? copy.warning
+        ? { warning: copy.warning }
+        : {}
+      : { warning: CAROUSEL_COPY_UNSTORED }),
   };
 }
 
@@ -200,8 +316,11 @@ export async function PATCH(req: NextRequest) {
       const position = parseCarouselPosition(body.carousel_position);
       if (position === undefined)
         return badRequest("carousel_position must be 1, 2, 3, or null");
-      const video = await loadVideo(service, id);
-      await assignCarouselSlot(service, id, position);
+      const video = await loadCarouselVideo(service, id);
+      // The homepage card needs its own two short lines; only a video that is
+      // entering the carousel is asked for them.
+      const copy = position === null ? null : await carouselCopyFor(video);
+      const copyStored = await assignCarouselSlot(service, id, position, copy);
       await audit(
         service,
         user.id,
@@ -210,10 +329,59 @@ export async function PATCH(req: NextRequest) {
         {
           slug: video.slug,
           slot: position,
+          ...(position
+            ? {
+                carousel_title: copy?.title,
+                carousel_description: copy?.description,
+                carousel_copy_source: copy?.source,
+                ...(copy?.trimmed ? { carousel_copy_trimmed: true } : {}),
+              }
+            : {}),
         },
       );
       revalidatePublicTag("videos");
-      return NextResponse.json({ video: { id, carousel_position: position } });
+      return NextResponse.json({
+        video: {
+          id,
+          carousel_position: position,
+          carousel_title: position === null ? null : copy?.title || null,
+          carousel_description: position === null ? null : copy?.description || null,
+        },
+        carouselCopy: position === null ? null : carouselCopyReport(copy, copyStored),
+      });
+    }
+
+    // Re-run the AI for a video that is already in a carousel slot — useful
+    // after the listing was rewritten, or after a fallback copy was stored.
+    if (body.action === "regenerate_carousel_copy") {
+      const video = await loadCarouselVideo(service, id);
+      if (!video.carousel_position)
+        return badRequest("Video is not in the homepage carousel");
+      const copy = await carouselCopyFor(video);
+      const copyStored = await assignCarouselSlot(
+        service,
+        id,
+        video.carousel_position,
+        copy,
+      );
+      await audit(service, user.id, "video_carousel_copy_regenerated", id, {
+        slug: video.slug,
+        slot: video.carousel_position,
+        carousel_title: copy.title,
+        carousel_description: copy.description,
+        carousel_copy_source: copy.source,
+        ...(copy.trimmed ? { carousel_copy_trimmed: true } : {}),
+      });
+      revalidatePublicTag("videos");
+      return NextResponse.json({
+        video: {
+          id,
+          carousel_position: video.carousel_position,
+          carousel_title: copy.title,
+          carousel_description: copy.description,
+        },
+        carouselCopy: carouselCopyReport(copy, copyStored),
+      });
     }
 
     if (!("thumbnail_url" in body))

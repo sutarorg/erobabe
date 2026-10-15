@@ -92,7 +92,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 2. Open `supabase/migrations/00000000000000_initial_schema.sql` in your editor, copy entire content, paste into SQL Editor, click **Run**
 3. Repeat for `00000000000001_rls_policies.sql`
 4. Repeat for `00000000000002_seed_fixed_data.sql`
-5. Apply the remaining checked-in migrations in order through `00000000000019_auto_publish_and_ai_metadata.sql`; do not re-run or edit migrations already recorded as applied.
+5. Apply the remaining checked-in migrations in order through `00000000000020_carousel_ai_copy.sql`; do not re-run or edit migrations already recorded as applied.
 6. Verify in **Table Editor** that tables exist: `profiles`, `categories`, `videos`, `ad_slots` (should have 10 rows), `site_settings` (1 row), etc.
 
 **Option B — via Supabase CLI**
@@ -632,6 +632,17 @@ JPEGs. `next.config.mjs` traces the binary for `/api/admin/videos/thumbnails`;
 `FFMPEG_PATH` optionally selects another executable. This is independent of the
 new automatic local-frame pipeline described in section D. Embed pages cannot be
 used as source videos. Existing manual thumbnail/category/carousel tools remain.
+
+**Homepage carousel copy (migration 00000000000020).** Apply
+`supabase/migrations/00000000000020_carousel_ai_copy.sql` to store the two short
+lines the homepage card prints. When an admin assigns a carousel slot, the admin
+API asks OpenRouter for a headline of at most 5 words and a description of at most
+10 words (`videos.carousel_title`, `videos.carousel_description`) instead of
+printing the search-optimised listing title. The slot card and the table row in
+**/admin/videos** show that copy, with **Regenerate copy** to run it again. If
+`OPENROUTER_API_KEY` is missing or the model answers unusably, the listing text is
+shortened to the same budget, the slot is still saved, and the row says a fallback
+was used. Clearing or taking over a slot clears the copy with it.
 
 **Duplicate protection.** The uploader now reserves a private session and a unique
 administrator/filename/size/MIME tuple. There is no URL publisher, override gate,

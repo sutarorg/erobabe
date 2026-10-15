@@ -33,6 +33,22 @@ describe("Hero carousel", () => {
     expect(screen.queryByText("Watch now")).toBeNull();
   });
 
+  it("keeps the thumbnail visible with light overlays instead of a solid panel", () => {
+    const { container } = render(<Hero slides={[]} />);
+    const overlays = Array.from(
+      container.querySelectorAll("section > div > div.absolute.inset-0"),
+    ).filter((node) => node.className.includes("bg-gradient"));
+
+    expect(overlays.length).toBeGreaterThan(0);
+    for (const overlay of overlays) {
+      // A full-opacity `from-panel`/`to-panel` layer would hide the frame again.
+      expect(overlay.className).not.toMatch(/(?:^|\s)(?:from|via|to)-panel(?:\s|$)/);
+      expect(overlay.className).not.toMatch(/(?:^|\s)(?:from|via|to)-black(?:\s|$)/);
+      // The readable text zone stays, at a reduced opacity.
+      expect(overlay.className).toMatch(/panel\/\d+/);
+    }
+  });
+
   it("uses taller mobile height, hides next/previous buttons on mobile, and changes slide on horizontal swipe", async () => {
     const { fireEvent } = await import("@testing-library/react");
     render(<Hero slides={[]} />);

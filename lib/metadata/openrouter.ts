@@ -21,6 +21,13 @@ import {
   type SuggestMetadataParams,
   type SuggestedMetadata,
 } from "./suggestion";
+import {
+  buildCarouselPrompt,
+  carouselCopyFromValue,
+  carouselCopyNeedsTrim,
+  fallbackCarouselCopy,
+  type CarouselCopySource,
+} from "./carousel-copy";
 
 export const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 export const DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v3.2";
@@ -119,6 +126,8 @@ interface ChatResult {
 interface ChatOptions {
   maxTokens: number;
   temperature: number;
+  /** Overrides the default request timeout (an admin action waits on this). */
+  timeoutMs?: number;
 }
 
 /**
@@ -151,7 +160,7 @@ async function chatCompletion(prompt: string, model: string, key: string, option
           "X-Title": "Erobabe",
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
       });
     } catch (error: unknown) {
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
@@ -277,6 +286,110 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
   }
 
   throw lastError ?? new MetadataError("AI metadata failed unexpectedly.", 502, "provider_error");
+}
+
+/** Output-token budget for one carousel copy — two short fields, nothing more. */
+export const CAROUSEL_COPY_MAX_TOKENS = 256;
+export const CAROUSEL_COPY_ATTEMPTS = 2;
+/** Shorter than the listing-metadata budget: an admin is waiting on this click. */
+export const CAROUSEL_COPY_TIMEOUT_MS = 30_000;
+
+export interface CarouselCopyResult {
+  /** Headline for the homepage card — never more than 5 words. */
+  title: string;
+  /** Teaser for the homepage card — never more than 10 words. */
+  description: string;
+  /** `ai` when OpenRouter wrote it (possibly trimmed to the word budget). */
+  source: "ai" | "fallback";
+  /** Model that was asked (or would have been asked). */
+  model: string;
+  /** The model answered over budget and the answer was cut to fit the card. */
+  trimmed: boolean;
+  /** Secret-free reason the AI copy was not used, for the admin UI. */
+  warning?: string;
+}
+
+const CAROUSEL_COPY_REJECTED =
+  "AI carousel copy was unusable — the listing text was shortened to fit the card instead.";
+
+/**
+ * Asks the model for the two short fields the homepage carousel card shows when
+ * an admin puts a video in a slot: a headline of at most 5 words and a teaser of
+ * at most 10 words.
+ *
+ * This never throws. Putting a video in the carousel must not fail because the
+ * AI is unreachable, unconfigured, or wordy: an unusable answer degrades to the
+ * listing itself, trimmed to the same budget, and the admin is told why.
+ */
+export async function suggestCarouselCopy(
+  source: CarouselCopySource,
+): Promise<CarouselCopyResult> {
+  const fallback = fallbackCarouselCopy(source);
+  const model = openRouterModelName();
+  const key = openRouterApiKey();
+  const base = { model, trimmed: false };
+
+  if (!key) {
+    return {
+      ...fallback,
+      ...base,
+      source: "fallback",
+      warning: OPENROUTER_NOT_CONFIGURED_MESSAGE,
+    };
+  }
+
+  const prompt = buildCarouselPrompt(source);
+  let warning = CAROUSEL_COPY_REJECTED;
+  let correction = "";
+
+  for (let attempt = 0; attempt < CAROUSEL_COPY_ATTEMPTS; attempt += 1) {
+    let text = "";
+    try {
+      const result = await chatCompletion(prompt + correction, model, key, {
+        maxTokens: CAROUSEL_COPY_MAX_TOKENS,
+        temperature: attempt === 0 ? 0.6 : 0.2,
+        timeoutMs: CAROUSEL_COPY_TIMEOUT_MS,
+      });
+      text = result.text;
+    } catch (error: unknown) {
+      const mapped =
+        error instanceof MetadataError
+          ? error
+          : new MetadataError(
+              "AI carousel copy failed unexpectedly.",
+              502,
+              "provider_error",
+            );
+      warning = mapped.message;
+      // Auth, quota, model, and slow-provider errors will not fix themselves on
+      // a retry — and a second timeout would double the admin's wait.
+      if (
+        mapped.code === "not_configured" ||
+        mapped.code === "quota_exceeded" ||
+        mapped.code === "model_unavailable" ||
+        mapped.code === "timeout"
+      ) {
+        break;
+      }
+      continue;
+    }
+
+    const parsed = parseLooseJson(text);
+    const copy = parsed ? carouselCopyFromValue(parsed.value) : null;
+    if (copy) {
+      return {
+        ...copy,
+        ...base,
+        source: "ai",
+        trimmed: Boolean(parsed && carouselCopyNeedsTrim(parsed.value)),
+      };
+    }
+
+    correction =
+      "\n\nYour previous answer was rejected: it must be a single JSON object with a non-empty \"title\" of at most 5 words and a non-empty \"description\" of at most 10 words. Answer again with only that JSON object.";
+  }
+
+  return { ...fallback, ...base, source: "fallback", warning };
 }
 
 export interface OpenRouterProbeResult {

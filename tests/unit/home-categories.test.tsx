@@ -59,6 +59,25 @@ describe("homepage categories", () => {
     expect(grid.querySelectorAll("svg")).toHaveLength(8);
   });
 
+  it("switches to the 8-card desktop row on a viewport breakpoint, never on the container", () => {
+    // The centre panel is a container query context, and a 390–430px phone panel
+    // is wider than the 24rem container breakpoint — a `@sm:` variant here used
+    // to leak the 8-card desktop row into the mobile view. The mobile/desktop
+    // switch must stay viewport-based.
+    const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
+    const grid = container.querySelector(".category-grid") as HTMLElement;
+    expect(grid.className).not.toMatch(/@sm:grid-cols-8/);
+
+    const cards = Array.from(grid.children) as HTMLElement[];
+    const mobileHidden = cards.filter((card) => card.className.includes("hidden"));
+    expect(mobileHidden).toHaveLength(2);
+    for (const card of mobileHidden) {
+      expect(card.className).toContain("hidden");
+      expect(card.className).toContain("sm:flex");
+      expect(card.className).not.toMatch(/@sm:flex/);
+    }
+  });
+
   it("lets each card shrink to its grid track instead of forcing overflow", () => {
     const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
     const grid = container.querySelector(".category-grid") as HTMLElement;

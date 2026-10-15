@@ -11,7 +11,7 @@ export default async function AdminVideosPage() {
     supabase
       .from("videos")
       .select(
-        "id, slug, title, status, visibility, provider, requires_reupload, thumbnail_url, playable_url, embed_url, view_count, created_at, carousel_position, category_id, provider_progress, provider_error, category:categories(label)",
+        "id, slug, title, status, visibility, provider, requires_reupload, thumbnail_url, playable_url, embed_url, view_count, created_at, carousel_position, carousel_title, carousel_description, category_id, provider_progress, provider_error, category:categories(label)",
       )
       .order("created_at", { ascending: false })
       .limit(1000),
@@ -39,6 +39,12 @@ export default async function AdminVideosPage() {
       category_label: category?.label ? String(category.label) : null,
       carousel_position: video.carousel_position
         ? Number(video.carousel_position)
+        : null,
+      carousel_title: video.carousel_title
+        ? String(video.carousel_title)
+        : null,
+      carousel_description: video.carousel_description
+        ? String(video.carousel_description)
         : null,
       provider_progress:
         video.provider_progress == null

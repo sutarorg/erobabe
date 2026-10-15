@@ -42,7 +42,7 @@ function warmCalls() {
 }
 
 describe("video player", () => {
-  it("shows Bunny poster before mounting validated playback", () => {
+  it("opens straight into the Bunny player — no erobabe play icon, no loading text", () => {
     const guid = "44444444-4444-4444-8444-444444444444";
     const url = `https://iframe.mediadelivery.net/embed/123/${guid}`;
     const { container } = render(
@@ -54,9 +54,6 @@ describe("video player", () => {
         embedUrl={url}
       />,
     );
-    expect(container.querySelector("iframe")).toBeNull();
-    expect(container.querySelector("img")).toHaveAttribute("src", props.poster);
-    fireEvent.click(screen.getByRole("button", { name: "Play video" }));
     const frame = container.querySelector("iframe")!;
     expect(frame).toHaveAttribute(
       "src",
@@ -64,7 +61,44 @@ describe("video player", () => {
     );
     expect(frame).toHaveAttribute("allowfullscreen");
     fireEvent.load(frame);
+    // The page shows the Bunny embed itself: no poster, no play button, no
+    // "Loading Bunny player…" placeholder.
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
+    expect(screen.queryByText(/Loading Bunny player/i)).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("offers a retry only when the Bunny embed never loads", () => {
+    vi.useFakeTimers();
+    try {
+      const guid = "44444444-4444-4444-8444-444444444444";
+      const url = `https://iframe.mediadelivery.net/embed/123/${guid}`;
+      const { container } = render(
+        <VideoPlayer
+          {...props}
+          provider="bunny"
+          libraryId="123"
+          videoId={guid}
+          embedUrl={url}
+        />,
+      );
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(20_000);
+      });
+
+      expect(screen.getByRole("alert")).toHaveTextContent("Player unavailable");
+      fireEvent.click(screen.getByRole("button", { name: /Retry playback/i }));
+      expect(container.querySelector("iframe")).toHaveAttribute(
+        "src",
+        `${url}?autoplay=true&responsive=true`,
+      );
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("shows unsupported historic records without calling an API", () => {
     render(<VideoPlayer {...props} embedUrl={embed} />);

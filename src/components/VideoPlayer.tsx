@@ -169,83 +169,62 @@ function NativePlayer({
   );
 }
 
-function BunnyPlayer({
-  url,
-  title,
-  poster,
-}: {
-  url: string;
-  title: string;
-  poster?: string | null;
-}) {
-  const [started, setStarted] = useState(false);
+/** How long the Bunny embed gets to load before the visitor is offered a retry. */
+const BUNNY_LOAD_TIMEOUT_MS = 20_000;
+
+/**
+ * Bunny Stream player.
+ *
+ * The embed mounts straight away and autoplays: opening a video shows the Bunny
+ * player itself — no erobabe poster with a play button in front of it, and no
+ * loading message over it. The only thing this component adds is a retry path
+ * for the rare case where the embed never loads at all.
+ */
+function BunnyPlayer({ url, title }: { url: string; title: string }) {
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+
   useEffect(() => {
-    if (!started || loaded) return;
-    const timer = setTimeout(() => setFailed(true), 20000);
-    return () => clearTimeout(timer);
-  }, [started, loaded, attempt]);
-  return (
-    <div className="relative h-full w-full">
-      {started && (
-        <iframe
-          key={attempt}
-          src={`${url}?autoplay=true&responsive=true`}
-          title={title}
-          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-          allowFullScreen
-          referrerPolicy="strict-origin-when-cross-origin"
-          className="h-full w-full border-0"
-          onLoad={() => {
-            setLoaded(true);
-            setFailed(false);
-          }}
-          onError={() => setFailed(true)}
-        />
-      )}
-      {!started && (
-        <button
-          onClick={() => setStarted(true)}
-          aria-label="Play video"
-          className="absolute inset-0 flex items-center justify-center"
-        >
-          {poster && (
-            <img
-              src={poster}
-              alt=""
-              className="absolute inset-0 h-full w-full object-cover opacity-80"
-            />
-          )}
-          <Play className="relative h-16 w-16 rounded-full bg-accent p-4 text-white" />
-        </button>
-      )}
-      {started && !loaded && !failed && (
-        <p
-          role="status"
-          className="absolute inset-0 flex items-center justify-center bg-black/70 text-white"
-        >
-          Loading Bunny player…
+    if (loaded || failed) return;
+    const timer = window.setTimeout(() => setFailed(true), BUNNY_LOAD_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [loaded, failed, attempt]);
+
+  if (failed) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-black p-4 text-center text-sm text-white">
+        <p role="alert">
+          Player unavailable. Check your connection or try again.
         </p>
-      )}
-      {failed && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-white">
-          <p role="alert">
-            Player unavailable. Check your connection or try again.
-          </p>
-          <button
-            onClick={() => {
-              setFailed(false);
-              setLoaded(false);
-              setAttempt((a) => a + 1);
-            }}
-          >
-            Retry playback
-          </button>
-        </div>
-      )}
-    </div>
+        <button
+          type="button"
+          onClick={() => {
+            setFailed(false);
+            setLoaded(false);
+            setAttempt((value) => value + 1);
+          }}
+          className="inline-flex items-center gap-2 rounded-lg bg-white/15 px-4 py-2 font-medium hover:bg-white/25"
+        >
+          <RotateCcw className="h-4 w-4" aria-hidden />
+          Retry playback
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <iframe
+      key={attempt}
+      src={`${url}?autoplay=true&responsive=true`}
+      title={title}
+      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+      allowFullScreen
+      referrerPolicy="strict-origin-when-cross-origin"
+      className="h-full w-full border-0"
+      onLoad={() => setLoaded(true)}
+      onError={() => setFailed(true)}
+    />
   );
 }
 
@@ -269,12 +248,7 @@ export default function VideoPlayer(props: Props) {
           poster={props.poster}
         />
       ) : source.kind === "embed" && props.provider === "bunny" ? (
-        <BunnyPlayer
-          key={key}
-          url={source.url}
-          title={props.title}
-          poster={props.poster}
-        />
+        <BunnyPlayer key={key} url={source.url} title={props.title} />
       ) : source.kind === "embed" ? (
         <iframe
           key={key}

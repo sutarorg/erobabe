@@ -65,6 +65,20 @@ edit applied history. See [deployment section D](DEPLOYMENT.md#d-bunny-stream-de
 for credentials, content policy, recovery and a genuine staging upload test.
 **Automated mocks/build are not live Bunny acceptance evidence.**
 
+## Homepage carousel
+
+`/admin/videos` places up to three videos in the homepage hero carousel (slots
+1–3). The card is a thumbnail with two short lines, so the listing title — written
+for search — is never printed there. Assigning a slot also generates that video's
+own copy through the AI (DeepSeek V3.2 via OpenRouter): a headline of **at most 5
+words** and a description of **at most 10 words**, stored in
+`videos.carousel_title` / `videos.carousel_description` (migration
+`00000000000020_carousel_ai_copy.sql`). The admin page shows the copy and can
+regenerate it per slot. If OpenRouter is unconfigured or answers with something
+unusable, the listing text is shortened to the same budget instead — the slot is
+always saved, and the row says which happened. `lib/metadata/carousel-copy.ts`
+holds the word budget, so every path (AI prompt, API, public card) agrees.
+
 ## Routes
 
 Public: `/`, `/categories`, `/category/[slug]`, `/latest`, `/popular`, `/video/[slug]`, `/about`, `/terms`, `/privacy`, `/contact`, `/faq`, `/content-removal`
