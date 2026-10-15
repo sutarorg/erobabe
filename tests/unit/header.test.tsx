@@ -84,6 +84,10 @@ describe("public header navigation", () => {
 
     const dashboard = screen.getByRole("link", { name: /dashboard/i });
     expect(dashboard.getAttribute("href")).toBe("/advertiser");
+    expect(dashboard.className).toContain("border");
+    expect(dashboard.className).toContain("border-line");
+    expect(dashboard.className).toContain("bg-transparent");
+    expect(dashboard.className).not.toContain("bg-accent");
     // Signing out must still be one click away.
     expect(screen.getByRole("button", { name: /sign out/i })).toBeTruthy();
   });

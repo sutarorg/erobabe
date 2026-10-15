@@ -40,6 +40,9 @@ const [
   faqModule,
   privacyModule,
   termsModule,
+  dmcaModule,
+  compliance2257Module,
+  parentalControlsModule,
 ] = await Promise.all([
   import("@/app/(public)/categories/page"),
   import("@/app/(public)/latest/page"),
@@ -51,6 +54,9 @@ const [
   import("@/app/(public)/faq/page"),
   import("@/app/(public)/privacy/page"),
   import("@/app/(public)/terms/page"),
+  import("@/app/(public)/dmca/page"),
+  import("@/app/(public)/2257/page"),
+  import("@/app/(public)/parental-controls/page"),
 ]);
 
 async function renderPage(page: () => any) {
@@ -96,6 +102,9 @@ describe("public video listing copy", () => {
     ["/faq", () => (faqModule.default as any)()],
     ["/privacy", () => (privacyModule.default as any)()],
     ["/terms", () => (termsModule.default as any)()],
+    ["/dmca", () => (dmcaModule.default as any)()],
+    ["/2257", () => (compliance2257Module.default as any)()],
+    ["/parental-controls", () => (parentalControlsModule.default as any)()],
   ])(
     "aligns tag, title, and description consistently on %s",
     async (_path, page) => {
@@ -111,4 +120,18 @@ describe("public video listing copy", () => {
       );
     },
   );
+
+  it("explicitly states on Terms, Privacy, About, FAQ, DMCA, and 2257 that erobabe does not own uploaded videos", async () => {
+    for (const mod of [
+      termsModule,
+      privacyModule,
+      aboutModule,
+      faqModule,
+      dmcaModule,
+      compliance2257Module,
+    ]) {
+      const html = await renderPage(mod.default as any);
+      expect(html).toMatch(/does not own/i);
+    }
+  });
 });

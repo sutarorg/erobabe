@@ -143,6 +143,7 @@ export async function POST(req: NextRequest) {
       id: input.sessionId,
       created_by: user.id,
       title: input.title,
+      ...(input.description ? { description: input.description } : {}),
       original_name: input.originalName,
       mime_type: input.mimeType,
       size_bytes: input.sizeBytes,

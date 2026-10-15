@@ -14,6 +14,7 @@ const bodySchema = z.object({
   fileName: z.string().max(240).optional().default(""),
   category: z.string().max(80).optional().default(""),
   tags: z.string().max(240).optional().default(""),
+  existingTitles: z.array(z.string().max(240)).max(50).optional().default([]),
 });
 
 /** Bounded request body — suggestions need a few hundred bytes, not megabytes. */
@@ -74,7 +75,12 @@ export async function POST(req: NextRequest) {
         fileName: parsed.data.fileName,
         category: parsed.data.category,
         existingTags: parsed.data.tags,
-        existingTitles: (recentVideos || []).map((video: { title: unknown }) => String(video.title)),
+        existingTitles: Array.from(
+          new Set([
+            ...parsed.data.existingTitles,
+            ...(recentVideos || []).map((video: { title: unknown }) => String(video.title)),
+          ])
+        ),
       });
       return NextResponse.json({
         suggestion,

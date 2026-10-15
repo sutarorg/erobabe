@@ -18,29 +18,31 @@ const DATABASE_CATEGORIES = [
 ];
 
 describe("homepage categories", () => {
-  it("shows all eight category cards in one horizontal row without horizontal scrolling", () => {
+  it("shows 6 category cards on mobile with More as the last card, and 8 on desktop without horizontal scrolling", () => {
     const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
     const grid = container.querySelector(".category-grid");
     expect(grid).toBeTruthy();
     expect(grid?.className).toMatch(/\bgrid\b/);
-    // Eight columns for eight cards (seven featured + More) — a single row.
-    expect(grid?.className).toContain("grid-cols-8");
-    expect(grid?.className).not.toMatch(/grid-cols-[1-7]\b|grid-cols-9|grid-cols-10|grid-cols-11|grid-cols-12/);
+    // Six columns on mobile (five featured + More) and eight columns on desktop.
+    expect(grid?.className).toContain("grid-cols-6");
+    expect(grid?.className).toContain("sm:grid-cols-8");
     expect(grid?.className).not.toMatch(/overflow-x-auto|snap-x/);
     expect(grid?.children).toHaveLength(8);
 
     const links = within(grid as HTMLElement).getAllByRole("link");
     expect(links).toHaveLength(8);
-    expect(links.slice(0, 7).map((link) => link.textContent?.trim())).toEqual([
+    const mobileVisibleLinks = links.filter((link) => !link.className.includes("hidden"));
+    expect(mobileVisibleLinks).toHaveLength(6);
+    expect(mobileVisibleLinks.map((link) => link.textContent?.trim())).toEqual([
       "Mature",
       "Amateur",
       "POV",
       "Lesbian",
       "Kinky",
-      "Mature 18+",
-      "Couples",
+      "More",
     ]);
-    expect(links[6].getAttribute("href")).toBe("/category/couples");
+    expect(mobileVisibleLinks[5].textContent?.trim()).toBe("More");
+    expect(mobileVisibleLinks[5].getAttribute("href")).toBe("/categories");
     expect(links[7].textContent?.trim()).toBe("More");
     expect(links[7].getAttribute("href")).toBe("/categories");
   });

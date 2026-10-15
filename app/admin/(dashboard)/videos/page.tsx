@@ -67,10 +67,10 @@ export default async function AdminVideosPage() {
           <p className="mt-1 text-[12px] text-ink-3">
             Remote video bytes are retained after catalog deletion; each
             deletion is recorded in media_retention for operator review. Manage
-            the video library: encoding uploads appear here immediately, then
-            await explicit rights and moderation review when Bunny finishes.
-            Filter by category, manage thumbnails, set the homepage carousel, or
-            delete videos.{" "}
+            the video library: encoding uploads appear here immediately and
+            publish automatically once Bunny encoding completes. Filter by
+            category, manage thumbnails, set the homepage carousel, or delete
+            videos.{" "}
             {rows.length > 0 && (
               <span className="tabular-nums">
                 {rows.length} videos · {withThumbnails} with a thumbnail

@@ -177,7 +177,7 @@ describe("description word limits and title prompt", () => {
     expect(prompt).toContain('The admin has already chosen the category "Massage"');
     expect(prompt).toContain('must be exactly "Massage"');
     expect(prompt).toContain("story-like description");
-    expect(prompt).toContain("a quiet wellness session with a relaxed atmosphere");
+    expect(prompt).toContain("a sensual oiled rubdown that escalates into pussy fingering, deep oral sex, and intense fucking");
     // The example the model is shown must itself be valid for that category.
     const example = prompt.split("Example JSON:\n")[1];
     const validated = validateSuggestionPayload(example, "Massage");
@@ -456,6 +456,7 @@ describe("category-free generated titles", () => {
     expect(prompt).toContain("Never include the selected category name");
     expect(prompt).toContain("do not copy the example or any existingTitles");
     expect(prompt).toContain("A Quiet Evening On Camera");
-    expect(prompt).toContain("neutral, non-graphic");
+    expect(prompt).toContain("explicit adult keywords");
+    expect(prompt).toContain("Stepmom surprises me while I shave and we end up fucking");
   });
 });

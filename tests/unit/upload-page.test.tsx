@@ -153,10 +153,16 @@ describe("device-only upload queue", () => {
       .filter(([, o]) => o?.body)
       .map(([, o]) => o.body);
     expect(postBodies.every((b: unknown) => typeof b === "string")).toBe(true);
-    expect(screen.getByText("Review in Videos")).toHaveAttribute(
+    expect(screen.getByText("View published video")).toHaveAttribute(
+      "href",
+      "/video/saved-video",
+    );
+    expect(screen.getByText("View in Videos")).toHaveAttribute(
       "href",
       "/admin/videos",
     );
+    expect(screen.queryByText(/ready for review/i)).toBeNull();
+    expect(screen.queryByText(/Recover interrupted sessions/i)).toBeNull();
   });
   it("retries database failures without re-transferring bytes", async () => {
     saveFails = true;
@@ -271,5 +277,61 @@ describe("device-only upload queue", () => {
     );
     expect(transfer).toHaveBeenCalledTimes(1);
     expect(uploadWithProgress).toHaveBeenCalledTimes(2);
+  });
+
+  it("generates AI title and description via OpenRouter for the selected category and removes session recovery UI", async () => {
+    fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+      if (!options?.body)
+        return Response.json({
+          policy: {
+            mimeTypes: ["video/mp4"],
+            concurrency: 4,
+            headers: {},
+          },
+          sessions: [],
+        });
+      if (url.endsWith("/api/metadata/suggest")) {
+        return Response.json({
+          suggestion: {
+            title: "Stepmom surprises me while I shave and we end up fucking",
+            description:
+              "An experienced seductress takes full control in the bedroom, teasing his hard cock with a sloppy deep throat blowjob before climbing on top for rough fucking until he fills her wet pussy with a warm creampie.",
+            tags: ["mature", "hd", "featured"],
+            category: "Category one",
+          },
+        });
+      }
+      if (url.endsWith("confirm")) {
+        return Response.json({
+          slug: "stepmom-surprises-me",
+          status: "published",
+          visibility: "public",
+          published: true,
+        });
+      }
+      return Response.json({
+        uploadUrl: "https://storage.example.com/signed",
+        headers: {},
+        videoId: "provider",
+        storagePath: "admin/frame.jpg",
+      });
+    });
+
+    await select();
+    expect(screen.queryByText(/Recover interrupted sessions/i)).toBeNull();
+    fireEvent.click(screen.getByText("Start uploads"));
+    await waitFor(() =>
+      expect(screen.getByText("Completed")).toBeInTheDocument(),
+    );
+    expect(transfer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uploadUrl: "https://storage.example.com/signed",
+      }),
+      expect.any(File),
+      expect.objectContaining({
+        title: "Stepmom surprises me while I shave and we end up fucking",
+      }),
+    );
+    expect(screen.getByText(/1 published/i)).toBeInTheDocument();
   });
 });

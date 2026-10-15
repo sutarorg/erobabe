@@ -9,9 +9,9 @@ export const metadata: Metadata = {
 const FAQS = [
   { q: "Do I need an account to watch?", a: "No. The public library is free to browse after the 18+ age gate. Accounts are only required for advertisers." },
   { q: "How does advertising work?", a: "Pick any available slot, reserve it for USD $99 per 30 days, upload a 16:9 creative (1200×675 recommended). Creatives are reviewed before going live. Payments are via cryptocurrency through NOWPayments." },
-  { q: "Is the content verified?", a: "Yes. All scenes are owned or licensed by erobabe, with rights clearance tracked privately and verified before publication." },
-  { q: "How do I request removal?", a: "Use the Content Removal form with video URL and reason. Valid requests are processed within 24–48 hours." },
-  { q: "What payment methods?", a: "Cryptocurrency via NOWPayments. You receive a payment address, amount, and network. Campaigns activate only after the payment reaches verified completed status." },
+  { q: "Does erobabe own the uploaded videos?", a: "No. erobabe does not own, produce, or claim copyright over any of the videos uploaded to the platform. All videos remain the property of their respective third-party creators, studios, or copyright owners." },
+  { q: "How do I request removal or file a DMCA notice?", a: "Use the Content Removal or DMCA Notice page with the video URL and reason. Valid takedown and removal requests are processed promptly within 24–48 hours." },
+  { q: "What payment methods?", a: "USDT on Ethereum (ERC-20) via NOWPayments. You receive a payment QR code, address, and payable amount at checkout. Campaigns activate once payment is confirmed." },
 ];
 
 export default function FAQPage() {

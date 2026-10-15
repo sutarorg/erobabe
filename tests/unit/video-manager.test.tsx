@@ -112,7 +112,7 @@ describe("VideoManager", () => {
     });
   });
 
-  it("changes an Encoding row to pending review after Bunny reports Finished", async () => {
+  it("changes an Encoding row to published after Bunny reports Finished", async () => {
     const encoding: AdminVideo = {
       ...VIDEO,
       id: "44444444-4444-4444-8444-444444444444",
@@ -133,13 +133,12 @@ describe("VideoManager", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText("pending_review", { selector: "span" }),
+        screen.getByText("published", { selector: "span" }),
       ).toBeTruthy(),
     );
-    expect(screen.queryByRole("link", { name: "View" })).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Review & publish" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View" }).getAttribute("href")).toBe(
+      "/video/just-finished",
+    );
   });
 
   it("uploads a replacement thumbnail and saves its public URL", async () => {
