@@ -53,20 +53,26 @@ export default function Categories({ activeCategory = null, onSelect, onMore, ca
       </div>
 
       {/*
-        On mobile: 6 cards (5 featured categories + More as the last card) in a
-        6-column row. On sm/desktop: all 8 cards (7 featured + More) in an
-        8-column row without horizontal scrolling.
+        Mobile: exactly 6 cards — five featured categories plus More as the last
+        card — in one 6-column row. Desktop (sm and up): all 8 cards (7 featured
+        + More) in an 8-column row without horizontal scrolling.
+
+        The switch is a viewport breakpoint, never the `@container` variant: the
+        centre panel is a container, and a 390-430px phone panel is wider than
+        the 24rem container breakpoint, which used to leak the 8-card desktop
+        row into the mobile view.
       */}
-      <div className="category-grid mt-3.5 grid grid-cols-6 gap-1.5 sm:grid-cols-8 sm:gap-1 @sm:grid-cols-8 @md:gap-1.5 @2xl:gap-2.5">
+      <div className="category-grid mt-3.5 grid grid-cols-6 gap-1.5 sm:grid-cols-8 sm:gap-1 @md:gap-1.5 @2xl:gap-2.5">
         {list.map((cat, index) => {
           const isMore = cat.label.trim().toLowerCase() === "more";
           const hideOnMobile = !isMore && index >= 5;
           const Icon = resolveCategoryIcon(cat.icon, cat.slug || cat.label);
           const active = !isMore && activeCategory === cat.label;
           const className = cn(
-            // Compact vertical cards keep all categories on one row
-            // without horizontal scrolling in the center content panel.
-            hideOnMobile ? "hidden sm:flex @sm:flex" : "flex",
+            // Compact vertical cards keep all categories on one row of the
+            // mobile view without horizontal scrolling. Only the categories
+            // past the sixth are dropped on mobile, and More never is.
+            hideOnMobile ? "hidden sm:flex" : "flex",
             "group min-h-[58px] min-w-0 flex-col items-center justify-center gap-1.5 rounded-lg border px-0 py-1.5 text-center transition-colors duration-150 @sm:min-h-[68px] @sm:gap-2 @sm:px-0.5 @sm:py-2 @md:px-1 @2xl:min-h-[76px]",
             active
               ? "border-accent/70 bg-accent/8"

@@ -124,9 +124,13 @@ export default function Hero({ onExplore, onBrowseCategories, slides }: HeroProp
               draggable={false}
               className="absolute inset-0 h-full w-full object-cover object-[70%_center]"
             />
-            {/* Readability overlays: keep the left text zone dark */}
-            <div className="absolute inset-0 bg-gradient-to-r from-panel via-panel/85 to-panel/5" />
-            <div className="absolute inset-0 bg-gradient-to-t from-panel/75 via-transparent to-panel/25" />
+            {/*
+              Readability overlays. Kept deliberately light — the thumbnail is
+              the point of the card — so the text zone fades rather than blocks:
+              about 75% opacity behind the headline instead of a solid panel.
+            */}
+            <div className="absolute inset-0 bg-gradient-to-r from-panel/75 via-panel/40 to-transparent" />
+            <div className="absolute inset-0 bg-gradient-to-t from-panel/60 via-transparent to-panel/5" />
 
             <div className="absolute inset-0 flex items-center">
               <div className="w-full max-w-[92%] px-5 pt-4 pb-9 sm:max-w-[68%] sm:py-0 @sm:max-w-[64%] @2xl:max-w-[60%] @2xl:px-7">

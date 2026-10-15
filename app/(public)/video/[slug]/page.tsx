@@ -122,6 +122,13 @@ export default async function VideoPage({
       mediaOrigin = null;
     }
   }
+  // A Bunny video opens straight into the Bunny player, so warm the embed host
+  // instead of the poster: the thumbnail is not shown before playback anymore.
+  const embedOrigin =
+    playbackSource.kind === "embed" && video.provider === "bunny"
+      ? "https://iframe.mediadelivery.net"
+      : null;
+  const showsPoster = playbackSource.kind !== "embed";
 
   const videoJsonLd = {
     "@context": "https://schema.org",
@@ -163,10 +170,11 @@ export default async function VideoPage({
         ← Back to home
       </Link>
 
-      {/* Instant play starts before React hydrates: connect to the media host and
-          fetch the poster the visitor is about to look at. */}
+      {/* Instant play starts before React hydrates: connect to the host the
+          player will use, and fetch the poster only when one is displayed. */}
       {mediaOrigin && <link rel="preconnect" href={mediaOrigin} />}
-      {video.thumbnail_url && (
+      {embedOrigin && <link rel="preconnect" href={embedOrigin} />}
+      {showsPoster && video.thumbnail_url && (
         <link
           rel="preload"
           as="image"

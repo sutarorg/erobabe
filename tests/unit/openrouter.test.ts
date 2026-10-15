@@ -24,6 +24,7 @@ import {
   OPENROUTER_ENDPOINT,
   OPENROUTER_NOT_CONFIGURED_MESSAGE,
   probeOpenRouter,
+  suggestCarouselCopy,
   suggestVideoMetadata,
 } from "@/lib/metadata/openrouter";
 import { POST as suggest } from "@/app/api/metadata/suggest/route";
@@ -337,6 +338,77 @@ describe("suggestVideoMetadata", () => {
     const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
     expect(error.code).toBe("provider_error");
     expect(JSON.stringify(error.message)).not.toContain(TEST_KEY);
+  });
+});
+
+describe("suggestCarouselCopy", () => {
+  const SOURCE = {
+    title: "I Catch My Stepsister-in-law Touching My Cock in the Tent",
+    description: "A slow late-night scene with a lot of explicit detail and camera work.",
+    category: "Mature 18+",
+  };
+
+  it("asks for two short fields and returns copy inside the card budget", async () => {
+    fetchMock.mockResolvedValueOnce(
+      chatReply(JSON.stringify({ title: "Seduced By The Neighbour", description: "She never expected him to knock tonight" })),
+    );
+    const copy = await suggestCarouselCopy(SOURCE);
+    expect(copy).toMatchObject({
+      title: "Seduced By The Neighbour",
+      description: "She never expected him to knock tonight",
+      source: "ai",
+      trimmed: false,
+    });
+    const messages = sentBody().messages as Array<{ content: string }>;
+    expect(messages[0].content).toMatch(/never more than 5 words/);
+    expect(messages[0].content).toMatch(/never more than 10 words/);
+    expect(messages[0].content).toMatch(/untrusted source data/i);
+    expect(messages[0].content).toMatch(/consenting adult aged 18 or over/i);
+  });
+
+  it("trims an over-long answer to 5 words and 10 words instead of failing", async () => {
+    fetchMock.mockResolvedValueOnce(
+      chatReply(
+        JSON.stringify({
+          title: "I Catch My Stepsister-in-law Touching My Cock in the Tent",
+          description:
+            "A slow late-night scene with a lot of explicit detail and camera work for everyone watching right now",
+        }),
+      ),
+    );
+    const copy = await suggestCarouselCopy(SOURCE);
+    expect(copy.source).toBe("ai");
+    expect(copy.trimmed).toBe(true);
+    expect(copy.title.split(" ").length).toBeLessThanOrEqual(5);
+    expect(copy.description.split(" ").length).toBeLessThanOrEqual(10);
+  });
+
+  it("retries once, then shortens the listing itself when the model returns rubbish", async () => {
+    fetchMock.mockResolvedValue(chatReply("not json at all"));
+    const copy = await suggestCarouselCopy(SOURCE);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(copy.source).toBe("fallback");
+    expect(copy.title.split(" ").length).toBeLessThanOrEqual(5);
+    expect(copy.description.split(" ").length).toBeLessThanOrEqual(10);
+    expect(copy.warning).toBeTruthy();
+  });
+
+  it("falls back to the listing without a network call when no key is set", async () => {
+    delete process.env.OPENROUTER_API_KEY;
+    const copy = await suggestCarouselCopy(SOURCE);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(copy.source).toBe("fallback");
+    expect(copy.warning).toBe(OPENROUTER_NOT_CONFIGURED_MESSAGE);
+    expect(copy.title).toBe("I Catch My Stepsister-in-law Touching");
+  });
+
+  it("never leaks key material when the provider fails", async () => {
+    fetchMock.mockImplementation(
+      async () => jsonResponse(500, { error: { message: "failed for sk-or-v1-FakeKeyMaterial1234567890" } }),
+    );
+    const copy = await suggestCarouselCopy(SOURCE);
+    expect(copy.source).toBe("fallback");
+    expect(JSON.stringify(copy)).not.toContain("FakeKeyMaterial");
   });
 });
 

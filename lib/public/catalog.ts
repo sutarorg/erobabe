@@ -13,6 +13,12 @@ export type PublicVideo = {
   quality: string | null;
   category_label: string | null;
   category_slug: string | null;
+  /**
+   * Short AI-written homepage carousel copy (max 5 words / max 10 words).
+   * Only the carousel query asks for these columns; cards ignore them.
+   */
+  carousel_title?: string | null;
+  carousel_description?: string | null;
 };
 
 export type PublicCategory = {
@@ -68,12 +74,16 @@ function mapVideo(row: any): PublicVideo {
   };
 }
 
+/** Adds the short carousel copy the homepage hero card prints (migration 20). */
+const CAROUSEL_SELECT = `${VIDEO_SELECT}, carousel_title, carousel_description`;
+
 function publishedQuery(
   supabase: NonNullable<ReturnType<typeof tryCreateServiceClient>>,
+  columns: string = VIDEO_SELECT,
 ) {
   return supabase
     .from("videos")
-    .select(VIDEO_SELECT)
+    .select(columns)
     .eq("requires_reupload", false)
     .eq("status", "published")
     .eq("visibility", "public")
@@ -180,23 +190,36 @@ async function loadActiveAds(): Promise<PublicAd[]> {
 
 /**
  * The videos the admin placed in the homepage carousel (slots 1–3), in slot
- * order. Only live videos are returned, so a slot pointing at a draft or
- * hidden video is simply not shown.
+ * order, with the short copy generated when the slot was assigned. Only live
+ * videos are returned, so a slot pointing at a draft or hidden video is simply
+ * not shown.
  */
 async function loadCarouselVideos(): Promise<
   Array<PublicVideo & { carousel_position: number }>
 > {
   const supabase = tryCreateServiceClient();
   if (!supabase) return [];
-  const { data, error } = await publishedQuery(supabase)
-    .not("carousel_position", "is", null)
-    .order("carousel_position", { ascending: true })
-    .limit(3);
+  const carouselQuery = (columns: string) =>
+    publishedQuery(supabase, columns)
+      .not("carousel_position", "is", null)
+      .order("carousel_position", { ascending: true })
+      .limit(3);
+
+  let { data, error } = await carouselQuery(CAROUSEL_SELECT);
+  if (error) {
+    // Migration 00000000000020 adds carousel_title / carousel_description. An
+    // un-migrated database still renders the slides from the listing text.
+    ({ data, error } = await carouselQuery(VIDEO_SELECT));
+  }
   // Before migration 00000000000010 the column does not exist: show no slides
   // (the hero falls back to its default artwork) instead of failing the page.
   if (error) return [];
   return (data || []).map((row: any) => ({
     ...mapVideo(row),
+    carousel_title: row.carousel_title ? String(row.carousel_title) : null,
+    carousel_description: row.carousel_description
+      ? String(row.carousel_description)
+      : null,
     carousel_position: Number(row.carousel_position),
   }));
 }

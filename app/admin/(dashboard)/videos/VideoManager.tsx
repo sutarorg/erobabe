@@ -32,6 +32,10 @@ export type AdminVideo = {
   category_label: string | null;
   /** Homepage carousel slot (1–3), or null when the video is not in the carousel. */
   carousel_position?: number | null;
+  /** AI-written homepage card headline — max 5 words. Set with the slot. */
+  carousel_title?: string | null;
+  /** AI-written homepage card teaser — max 10 words. Set with the slot. */
+  carousel_description?: string | null;
   provider_progress?: number | null;
   provider_error?: string | null;
 };
@@ -44,10 +48,38 @@ const CAROUSEL_SLOTS = [1, 2, 3];
 const DELETE_CHUNK = 200;
 const THUMBNAIL_CHUNK = 10;
 type RowState = {
-  busy?: "thumbnail" | "remove" | "delete" | "generate" | "carousel";
+  busy?: "thumbnail" | "remove" | "delete" | "generate" | "carousel" | "carouselCopy";
   error?: string;
   notice?: string;
 };
+
+/**
+ * What the API reports about the AI carousel copy it wrote for a slot.
+ * `source: "fallback"` means the listing text was shortened instead, and
+ * `warning` explains why (usually a missing or rejected OpenRouter key).
+ */
+type CarouselCopyReport = {
+  source: "ai" | "fallback";
+  model?: string;
+  trimmed?: boolean;
+  stored?: boolean;
+  warning?: string;
+};
+
+/** Homepage card limits the AI copy is generated within. */
+const CAROUSEL_TITLE_MAX_WORDS = 5;
+const CAROUSEL_DESCRIPTION_MAX_WORDS = 10;
+
+/** One line describing the copy the homepage card will print. */
+function carouselCopySummary(report: CarouselCopyReport | null): string {
+  if (!report) return "";
+  if (report.source === "ai") {
+    return report.trimmed
+      ? "AI carousel copy generated and trimmed to the card limits."
+      : "AI carousel copy generated.";
+  }
+  return "Carousel copy shortened from the listing text to fit the card.";
+}
 
 /**
  * Admin video table:
@@ -55,7 +87,9 @@ type RowState = {
  * - filter by category, title, slug, or category label
  * - select one, select all shown, then delete or generate thumbnails in bulk
  * - per video: change/add the thumbnail, generate a frame thumbnail, remove a
- *   thumbnail, delete the video, and place it in homepage carousel slot 1–3
+ *   thumbnail, delete the video, and place it in homepage carousel slot 1–3,
+ *   which also generates the card's short AI copy (5-word title, 10-word
+ *   description) and can be regenerated on demand
  */
 export default function VideoManager({
   initialVideos,
@@ -409,6 +443,13 @@ export default function VideoManager({
     }
   }
 
+  /**
+   * Places a video in a homepage carousel slot (or takes it out).
+   *
+   * The API writes the card's short copy at the same time — an AI headline of at
+   * most 5 words and a teaser of at most 10 words — and reports what happened, so
+   * the row shows the copy the homepage will print.
+   */
   async function setCarouselSlot(video: AdminVideo, slot: number | null) {
     patchRow(video.id, {
       busy: "carousel",
@@ -425,25 +466,92 @@ export default function VideoManager({
       if (!response.ok)
         throw new Error(payload?.error || "Unable to update the carousel");
 
+      const carouselTitle = payload?.video?.carousel_title ?? null;
+      const carouselDescription = payload?.video?.carousel_description ?? null;
+      const report = (payload?.carouselCopy || null) as CarouselCopyReport | null;
+
       // A slot holds one video: whichever video held it before is moved out.
       setVideos((current) =>
         current.map((item) => {
-          if (item.id === video.id) return { ...item, carousel_position: slot };
+          if (item.id === video.id)
+            return {
+              ...item,
+              carousel_position: slot,
+              carousel_title: carouselTitle,
+              carousel_description: carouselDescription,
+            };
           if (slot && item.carousel_position === slot)
-            return { ...item, carousel_position: null };
+            return {
+              ...item,
+              carousel_position: null,
+              carousel_title: null,
+              carousel_description: null,
+            };
           return item;
         }),
       );
+
+      const placed = slot
+        ? `Placed in homepage carousel slot ${slot}.`
+        : "Removed from the homepage carousel.";
       patchRow(video.id, {
         busy: undefined,
-        notice: slot
-          ? `Placed in homepage carousel slot ${slot}.`
-          : "Removed from the homepage carousel.",
+        notice: [placed, slot ? carouselCopySummary(report) : ""]
+          .filter(Boolean)
+          .join(" "),
+        error:
+          slot && report?.source === "fallback" && report.warning
+            ? `AI carousel copy unavailable: ${report.warning}`
+            : undefined,
       });
     } catch (error: any) {
       patchRow(video.id, {
         busy: undefined,
         error: error?.message || "Could not update the carousel",
+      });
+    }
+  }
+
+  /** Rewrites the short card copy for a video that is already in a slot. */
+  async function regenerateCarouselCopy(video: AdminVideo) {
+    patchRow(video.id, {
+      busy: "carouselCopy",
+      error: undefined,
+      notice: undefined,
+    });
+    try {
+      const response = await fetch("/api/admin/videos", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: video.id, action: "regenerate_carousel_copy" }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok)
+        throw new Error(payload?.error || "Unable to regenerate the carousel copy");
+
+      const carouselTitle = payload?.video?.carousel_title ?? null;
+      const carouselDescription = payload?.video?.carousel_description ?? null;
+      const report = (payload?.carouselCopy || null) as CarouselCopyReport | null;
+
+      setVideos((current) =>
+        current.map((item) =>
+          item.id === video.id
+            ? { ...item, carousel_title: carouselTitle, carousel_description: carouselDescription }
+            : item,
+        ),
+      );
+      patchRow(video.id, {
+        busy: undefined,
+        notice: carouselCopySummary(report),
+        error:
+          report?.source === "fallback" && report.warning
+            ? `AI carousel copy unavailable: ${report.warning}`
+            : undefined,
+      });
+    } catch (error: any) {
+      patchRow(video.id, {
+        busy: undefined,
+        error: error?.message || "Could not regenerate the carousel copy",
       });
     }
   }
@@ -551,7 +659,10 @@ export default function VideoManager({
               Homepage carousel
             </h2>
             <p className="mt-0.5 text-[11px] text-ink-3">
-              Pick up to three videos for the top card on the homepage.{" "}
+              Pick up to three videos for the top card on the homepage. Each
+              slot gets its own short AI copy when it is assigned — a headline of
+              at most {CAROUSEL_TITLE_MAX_WORDS} words and a description of at
+              most {CAROUSEL_DESCRIPTION_MAX_WORDS} words.{" "}
               {carouselCount
                 ? `${carouselCount} of 3 slots filled.`
                 : "No slots filled — the default artwork is shown."}
@@ -588,14 +699,49 @@ export default function VideoManager({
                       <p className="truncate text-[12px] font-medium">
                         {holder.title}
                       </p>
-                      <button
-                        type="button"
-                        onClick={() => setCarouselSlot(holder, null)}
-                        disabled={rows[holder.id]?.busy === "carousel"}
-                        className="mt-0.5 text-[10.5px] text-ink-3 underline hover:text-ink disabled:opacity-50"
-                      >
-                        Clear slot
-                      </button>
+                      <p className="mt-1 rounded border border-line bg-panel px-1.5 py-1">
+                        <span className="block text-[9px] font-semibold uppercase tracking-wider text-ink-3">
+                          Card copy
+                        </span>
+                        <span className="mt-0.5 block text-[11px] font-medium text-ink">
+                          {holder.carousel_title || "—"}
+                        </span>
+                        <span className="mt-0.5 block text-[10.5px] leading-snug text-ink-2">
+                          {holder.carousel_description || "—"}
+                        </span>
+                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => regenerateCarouselCopy(holder)}
+                          disabled={
+                            rows[holder.id]?.busy === "carousel" ||
+                            rows[holder.id]?.busy === "carouselCopy"
+                          }
+                          className="inline-flex items-center gap-1 text-[10.5px] text-accent hover:underline disabled:opacity-50"
+                        >
+                          {rows[holder.id]?.busy === "carouselCopy" ? (
+                            <LoaderCircle
+                              aria-hidden="true"
+                              className="h-3 w-3 animate-spin"
+                            />
+                          ) : (
+                            <Sparkles aria-hidden="true" className="h-3 w-3" />
+                          )}
+                          Regenerate copy
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCarouselSlot(holder, null)}
+                          disabled={
+                            rows[holder.id]?.busy === "carousel" ||
+                            rows[holder.id]?.busy === "carouselCopy"
+                          }
+                          className="text-[10.5px] text-ink-3 underline hover:text-ink disabled:opacity-50"
+                        >
+                          Clear slot
+                        </button>
+                      </div>
                     </>
                   ) : (
                     <p className="text-[11px] text-ink-3">Empty</p>
@@ -887,7 +1033,36 @@ export default function VideoManager({
                         </select>
                       </label>
                       {state.busy === "carousel" && (
-                        <p className="mt-1 text-[10px] text-ink-3">Saving…</p>
+                        <p className="mt-1 text-[10px] text-ink-3">
+                          Saving slot and generating the card copy…
+                        </p>
+                      )}
+                      {state.busy === "carouselCopy" && (
+                        <p className="mt-1 text-[10px] text-ink-3">
+                          Generating the card copy…
+                        </p>
+                      )}
+                      {slot && !state.busy && (
+                        <div className="mt-1.5 max-w-[190px]">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-3">
+                            Card copy
+                          </p>
+                          <p className="text-[11px] font-medium text-ink">
+                            {video.carousel_title || "—"}
+                          </p>
+                          <p className="text-[10.5px] leading-snug text-ink-2">
+                            {video.carousel_description || "—"}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => regenerateCarouselCopy(video)}
+                            disabled={unavailable}
+                            className="mt-1 inline-flex items-center gap-1 text-[10.5px] text-accent hover:underline disabled:opacity-50"
+                          >
+                            <Sparkles aria-hidden="true" className="h-3 w-3" />
+                            Regenerate copy
+                          </button>
+                        </div>
                       )}
                     </td>
                     <td className="px-4 py-3 tabular-nums">

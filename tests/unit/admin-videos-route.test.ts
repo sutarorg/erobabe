@@ -43,8 +43,11 @@ function videoRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setup(overrides: Partial<FakeDb> = {}) {
-  const harness = createHarness({ videos: [videoRow()], ...overrides });
+function setup(
+  overrides: Partial<FakeDb> = {},
+  options: Parameters<typeof createHarness>[1] = {},
+) {
+  const harness = createHarness({ videos: [videoRow()], ...overrides }, options);
   harnessState.removed = [];
   const storage = harness.service.storage;
   harnessState.service = {
@@ -183,7 +186,11 @@ describe("PATCH /api/admin/videos — homepage carousel slots", () => {
   it("places a video in slot 2 and moves the previous holder out", async () => {
     const harness = setup({
       videos: [
-        videoRow({ carousel_position: 2 }),
+        videoRow({
+          carousel_position: 2,
+          carousel_title: "Old Hook",
+          carousel_description: "Old teaser",
+        }),
         videoRow({ id: OTHER_ID, slug: "solo-night", title: "Solo Night", carousel_position: null }),
       ],
     });
@@ -193,6 +200,10 @@ describe("PATCH /api/admin/videos — homepage carousel slots", () => {
     const byId = Object.fromEntries(harness.db.videos.map((row: any) => [row.id, row.carousel_position]));
     expect(byId[OTHER_ID]).toBe(2);
     expect(byId[VIDEO_ID]).toBeNull();
+    // The video that lost the slot keeps neither the slot nor its card copy.
+    const previousHolder = harness.db.videos.find((row: any) => row.id === VIDEO_ID)!;
+    expect(previousHolder.carousel_title).toBeNull();
+    expect(previousHolder.carousel_description).toBeNull();
     expect(harness.db.audit_logs.at(-1)?.action).toBe("video_carousel_assigned");
   });
 
@@ -210,6 +221,89 @@ describe("PATCH /api/admin/videos — homepage carousel slots", () => {
       const res = await PATCH(jsonRequest("/api/admin/videos", { id: VIDEO_ID, carousel_position: bad }, "PATCH"));
       expect(res.status).toBe(400);
     }
+  });
+
+  it("writes the short carousel copy with the slot, inside the card word budget", async () => {
+    // No OPENROUTER_API_KEY in the test environment, so the copy is derived from
+    // the listing itself — still capped at 5 and 10 words.
+    const harness = setup({
+      videos: [
+        videoRow({
+          title: "I Catch My Stepsister-in-law Touching My Cock in the Tent",
+          description:
+            "A slow late-night scene with a lot of explicit detail and camera work for the viewer at home",
+        }),
+      ],
+    });
+    const res = await PATCH(jsonRequest("/api/admin/videos", { id: VIDEO_ID, carousel_position: 1 }, "PATCH"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.video.carousel_position).toBe(1);
+    expect(body.video.carousel_title.split(" ").length).toBeLessThanOrEqual(5);
+    expect(body.video.carousel_description.split(" ").length).toBeLessThanOrEqual(10);
+    expect(body.carouselCopy).toMatchObject({ source: "fallback", stored: true });
+
+    const row = harness.db.videos[0];
+    expect(row.carousel_title).toBe(body.video.carousel_title);
+    expect(row.carousel_description).toBe(body.video.carousel_description);
+    expect(harness.db.audit_logs.at(-1)?.metadata).toMatchObject({
+      carousel_title: body.video.carousel_title,
+      carousel_copy_source: "fallback",
+    });
+  });
+
+  it("clears the carousel copy when the slot is cleared", async () => {
+    const harness = setup({
+      videos: [
+        videoRow({
+          carousel_position: 1,
+          carousel_title: "Velvet Nights",
+          carousel_description: "The two of us after hours",
+        }),
+      ],
+    });
+    const res = await PATCH(jsonRequest("/api/admin/videos", { id: VIDEO_ID, carousel_position: null }, "PATCH"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).video.carousel_title).toBeNull();
+    expect(harness.db.videos[0].carousel_position).toBeNull();
+    expect(harness.db.videos[0].carousel_title).toBeNull();
+    expect(harness.db.videos[0].carousel_description).toBeNull();
+  });
+
+  it("keeps the slot when the copy columns are not migrated yet", async () => {
+    const harness = setup(
+      { videos: [videoRow()] },
+      { missingColumns: { videos: ["carousel_title", "carousel_description"] } },
+    );
+    const res = await PATCH(jsonRequest("/api/admin/videos", { id: VIDEO_ID, carousel_position: 3 }, "PATCH"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(harness.db.videos[0].carousel_position).toBe(3);
+    expect(body.carouselCopy).toMatchObject({ stored: false });
+    expect(body.carouselCopy.warning).toMatch(/migration 00000000000020/);
+  });
+
+  it("regenerates the copy for a video that is already in a slot", async () => {
+    const harness = setup({
+      videos: [videoRow({ carousel_position: 2, carousel_title: "Old Hook", carousel_description: "Old teaser" })],
+    });
+    const res = await PATCH(
+      jsonRequest("/api/admin/videos", { id: VIDEO_ID, action: "regenerate_carousel_copy" }, "PATCH"),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.video.carousel_position).toBe(2);
+    expect(harness.db.videos[0].carousel_title).toBe(body.video.carousel_title);
+    expect(harness.db.videos[0].carousel_title).not.toBe("Old Hook");
+    expect(harness.db.audit_logs.at(-1)?.action).toBe("video_carousel_copy_regenerated");
+  });
+
+  it("refuses to regenerate copy for a video outside the carousel", async () => {
+    setup({ videos: [videoRow({ carousel_position: null })] });
+    const res = await PATCH(
+      jsonRequest("/api/admin/videos", { id: VIDEO_ID, action: "regenerate_carousel_copy" }, "PATCH"),
+    );
+    expect(res.status).toBe(400);
   });
 });
 

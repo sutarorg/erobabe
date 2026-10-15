@@ -1,4 +1,5 @@
 import { homeSections } from "@/lib/public/selection";
+import { heroSlidesFromCarousel } from "@/lib/public/hero-slides";
 import { SITE_URL } from "@/lib/site";
 import Link from "next/link";
 import Categories from "@/src/components/Categories";
@@ -12,7 +13,7 @@ import {
   getPublishedVideos,
   searchPublishedVideos,
 } from "@/lib/public/catalog";
-import { LOGO_URL, type HeroSlide } from "@/src/data/content";
+import { LOGO_URL } from "@/src/data/content";
 import type { Metadata } from "next";
 
 export const revalidate = 30;
@@ -35,15 +36,9 @@ export default async function HomePage({
     getPublicCategories(),
     getCarouselVideos(),
   ]);
-  const heroSlides: HeroSlide[] = carousel.map((video) => ({
-    id: video.slug,
-    eyebrow: video.category_label || "Featured",
-    headline: video.title,
-    sub: video.description || "Watch the full scene now.",
-    image: video.thumbnail_url || LOGO_URL,
-    alt: video.title,
-    href: `/video/${video.slug}`,
-  }));
+  // The carousel card prints the short AI copy stored when the admin placed the
+  // video in its slot (max 5 words / max 10 words), never the full listing title.
+  const heroSlides = heroSlidesFromCarousel(carousel, LOGO_URL);
   const query = q?.trim().slice(0, 160) || "";
   const mappedVideos = query ? await searchPublishedVideos(query) : videos;
 

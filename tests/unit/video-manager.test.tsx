@@ -380,6 +380,133 @@ describe("VideoManager — categories, select all, carousel, bulk actions", () =
     ).toHaveProperty("value", "1");
   });
 
+  it("shows the short AI card copy stored with a carousel slot", () => {
+    render(
+      <VideoManager
+        initialVideos={[
+          {
+            ...VIDEO,
+            carousel_position: 1,
+            carousel_title: "Seduced By The Neighbour",
+            carousel_description: "She never expected him to knock tonight",
+          },
+        ]}
+        categories={CATS}
+      />,
+    );
+    // Both the slot card and the table row print the copy the homepage shows.
+    expect(screen.getAllByText("Seduced By The Neighbour")).toHaveLength(2);
+    expect(
+      screen.getAllByText("She never expected him to knock tonight"),
+    ).toHaveLength(2);
+  });
+
+  it("reports the AI carousel copy that came back with the slot", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        video: {
+          id: VIDEO.id,
+          carousel_position: 3,
+          carousel_title: "Seduced By The Neighbour",
+          carousel_description: "She never expected him to knock tonight",
+        },
+        carouselCopy: { source: "ai", model: "deepseek/deepseek-v3.2", trimmed: false, stored: true },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<VideoManager initialVideos={[VIDEO]} categories={CATS} />);
+    fireEvent.change(
+      screen.getByLabelText(`Homepage carousel slot for ${VIDEO.title}`),
+      { target: { value: "3" } },
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/AI carousel copy generated\./)).toBeTruthy(),
+    );
+    expect(screen.getAllByText("Seduced By The Neighbour")).toHaveLength(2);
+  });
+
+  it("warns when the copy had to fall back to the listing text", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        video: {
+          id: VIDEO.id,
+          carousel_position: 1,
+          carousel_title: "Evening In Velvet",
+          carousel_description: "A hand picked premium scene",
+        },
+        carouselCopy: {
+          source: "fallback",
+          stored: true,
+          warning: "OpenRouter is not configured",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<VideoManager initialVideos={[VIDEO]} categories={CATS} />);
+    fireEvent.change(
+      screen.getByLabelText(`Homepage carousel slot for ${VIDEO.title}`),
+      { target: { value: "1" } },
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("AI carousel copy unavailable: OpenRouter is not configured"),
+      ).toBeTruthy(),
+    );
+    expect(
+      screen.getByText(
+        /Carousel copy shortened from the listing text to fit the card\./,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("regenerates the card copy for a video already in a slot", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        video: {
+          id: VIDEO.id,
+          carousel_position: 2,
+          carousel_title: "Fresh Hook",
+          carousel_description: "A brand new teaser",
+        },
+        carouselCopy: { source: "ai", trimmed: true, stored: true },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <VideoManager
+        initialVideos={[
+          {
+            ...VIDEO,
+            carousel_position: 2,
+            carousel_title: "Old Hook",
+            carousel_description: "Old teaser",
+          },
+        ]}
+        categories={CATS}
+      />,
+    );
+    const [slotButton] = screen.getAllByRole("button", { name: /Regenerate copy/i });
+    fireEvent.click(slotButton);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("AI carousel copy generated and trimmed to the card limits."),
+      ).toBeTruthy(),
+    );
+    const [, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      id: VIDEO.id,
+      action: "regenerate_carousel_copy",
+    });
+    expect(screen.queryByText("Old Hook")).toBeNull();
+    expect(screen.getAllByText("Fresh Hook")).toHaveLength(2);
+  });
+
   it("generates a frame thumbnail for a selected direct-link video without one", async () => {
     const bare = {
       ...VIDEO,
