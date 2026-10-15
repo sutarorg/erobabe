@@ -351,7 +351,7 @@ export const NON_NEGOTIABLE_COPY_PATTERNS: readonly RegExp[] = [
 export const GRAPHIC_SEXUAL_COPY =
   /\b(?:cock|pussy|pussies|cunt|dick|penis|shaft|prick|vagina|clitoris|clit|tits?|boobs?|nipples?|sluts?|whores?|bitches|cum(?:ming|shot)?|creampie|blowjobs?|handjobs?|titjobs?|deep[\s-]?throat|fuck(?:s|ed|ing)?|motherfuck\w*|orgasms?|squir(?:t|ted|ting)|ejaculat(?:e|es|ed|ion)|facesitting|analphil(?:ia)?|rim(?:job|ming)?|strapons?|ballbust|footjob)\b/iu;
 
-/** Name of the first breached compliance rule, or `null` when the copy is clean. */
+/** Compliance rules in the order they are checked, each with the patterns that breach it. */
 const COMPLIANCE_RULES: ReadonlyArray<readonly [label: string, patterns: readonly RegExp[]]> = [
   ["age-ambiguous wording", [AGE_AMBIGUOUS_COPY, AGE_AMBIGUOUS_STEMS]],
   ["family-role or incest wording", [FAMILY_ROLE_COPY]],

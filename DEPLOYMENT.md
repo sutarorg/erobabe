@@ -693,8 +693,8 @@ route: `/api/metadata/suggest`.
    If the provider rejects the JSON-mode or reasoning field, the client retries
    without that field.
 7. AI metadata is an enhancement, not a gate. Length slips in the model's reply
-   are repaired and published as AI copy, other unusable replies are retried up
-   to three times within the route's 60 s limit, and the upload page asks the
+   are repaired and published as AI copy, other unusable replies get up to
+   three attempts within the route's 60 s limit, and the upload page asks the
    route again after a network error, a 5xx, or a 429 (honouring `Retry-After`)
    before it drafts anything itself. If AI is not configured, keeps returning
    unusable output, refuses adults-only copy, or hits quota, the upload still
