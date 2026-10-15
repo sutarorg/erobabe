@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { MetadataError, suggestVideoMetadata } from "@/lib/metadata/openrouter";
+import { generateCategoryFallbackMetadata } from "@/lib/metadata/suggestion";
+import { normalizeTitleStyle, resolveTitleStyle } from "@/lib/metadata/title-style";
 import { z } from "zod";
 
 export const runtime = "nodejs";
@@ -8,8 +10,14 @@ export const maxDuration = 60;
 
 /**
  * Admin-only category-led AI metadata suggestions (OpenRouter, DeepSeek V3.2 by
- * default). The upload flow can auto-publish after encoding, so the admin should
- * preview/edit generated copy before starting an upload whenever possible.
+ * default). Titles are written in the voice the site publishes — `explicit`
+ * unless `VIDEO_TITLE_STYLE` says otherwise — and a model that is unreachable,
+ * out of credits, or unwilling to write adults-only copy is answered by the
+ * offline composer in the same voice, so the upload queue always gets a
+ * publishable title instead of a filename.
+ *
+ * The upload flow can auto-publish after encoding, so the admin should preview
+ * generated copy before starting an upload whenever possible.
  */
 
 const bodySchema = z.object({
@@ -18,6 +26,8 @@ const bodySchema = z.object({
   category: z.string().max(80).optional().default(""),
   tags: z.string().max(240).optional().default(""),
   existingTitles: z.array(z.string().max(160)).max(100).optional().default([]),
+  /** Optional per-request voice override; the server default wins when absent. */
+  style: z.enum(["explicit", "editorial"]).optional(),
 });
 
 /** Bounded request body — suggestions need a few hundred bytes, not megabytes. */
@@ -145,8 +155,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid request", details: parsed.error.flatten() }, { status: 400 });
     }
 
+    const style = normalizeTitleStyle(parsed.data.style) ?? resolveTitleStyle();
+
     try {
-      const suggestion = await serializeTitleGeneration(async () => {
+      const outcome = await serializeTitleGeneration(async () => {
         const catalogTitles = await loadCatalogTitles(supabase);
         const seenTitles = new Set<string>();
         const existingTitles = [
@@ -159,18 +171,35 @@ export async function POST(req: NextRequest) {
           seenTitles.add(key);
           return true;
         });
-        const draft = await suggestVideoMetadata({
+        try {
           // The admin-selected category alone informs the creative copy. Filename,
           // default title, and existing tags are intentionally not sent to AI.
-          category: parsed.data.category,
-          existingTitles,
-        });
-        reserveTitle(draft.title);
-        return draft;
+          const draft = await suggestVideoMetadata({
+            category: parsed.data.category,
+            existingTitles,
+            style,
+          });
+          reserveTitle(draft.title);
+          return { suggestion: draft, source: "ai" as const, warning: undefined as string | undefined };
+        } catch (error: unknown) {
+          if (!(error instanceof MetadataError)) throw error;
+          // A refused or unreachable model must not put a filename on a listing.
+          // The deterministic composer writes the same voice offline, and the
+          // admin is told why the model was not used.
+          const draft = generateCategoryFallbackMetadata("", parsed.data.category, existingTitles, style);
+          reserveTitle(draft.title);
+          return { suggestion: draft, source: "offline" as const, warning: error.message };
+        }
       });
       return NextResponse.json({
-        suggestion,
-        note: "Category-led AI draft checked against catalog titles; human review against the footage is recommended before starting an upload because completion auto-publishes. No search ranking is guaranteed.",
+        suggestion: outcome.suggestion,
+        source: outcome.source,
+        style,
+        ...(outcome.warning ? { warning: outcome.warning } : {}),
+        note:
+          outcome.source === "offline"
+            ? "Category-led offline draft in the site's title voice, checked against catalog titles; the model was not used. Human review against the footage is recommended before starting an upload because completion auto-publishes."
+            : "Category-led AI draft in the site's title voice, checked against catalog titles; human review against the footage is recommended before starting an upload because completion auto-publishes. No search ranking is guaranteed.",
       });
     } catch (error: unknown) {
       if (error instanceof MetadataError) {

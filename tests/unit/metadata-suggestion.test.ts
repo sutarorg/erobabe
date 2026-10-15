@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FIXED_CATEGORIES } from "@/lib/public/fixed-categories";
 import {
   buildPrompt,
@@ -25,7 +25,25 @@ import {
 /**
  * Provider-neutral metadata helpers: tolerant JSON parsing, payload validation,
  * the deterministic fallback, and redaction. No network and no provider mocks.
+ *
+ * The suites here cover the shared shape machinery and the restrained
+ * `editorial` voice, so they pin that voice: the fixtures ("Boudoir in Velvet
+ * After Dark") are deliberately euphemistic, and several of them assert that
+ * graphic wording is rejected. The voice the site publishes by default is
+ * `explicit`, and `tests/unit/explicit-titles.test.ts` covers it (including a
+ * test that the default really is explicit when nothing is configured).
  */
+
+const CONFIGURED_TITLE_STYLE = process.env.VIDEO_TITLE_STYLE;
+
+beforeEach(() => {
+  process.env.VIDEO_TITLE_STYLE = "editorial";
+});
+
+afterEach(() => {
+  if (CONFIGURED_TITLE_STYLE === undefined) delete process.env.VIDEO_TITLE_STYLE;
+  else process.env.VIDEO_TITLE_STYLE = CONFIGURED_TITLE_STYLE;
+});
 
 function modelOutput(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({

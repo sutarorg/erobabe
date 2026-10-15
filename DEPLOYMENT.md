@@ -677,17 +677,22 @@ route: `/api/metadata/suggest`.
    category and source, then publish. The server must generate title,
    description, and tags before it creates the video record. Alternatively POST
    to `/api/metadata/suggest` as an admin with `{ "fileName": "clip.mp4" }` and
-   expect a `{ suggestion, note }` response. To check a key from a terminal
+   expect a `{ suggestion, source, style, note }` response (`source: "offline"`
+   with a `warning` means the deterministic composer wrote the copy instead). To check a key from a terminal
    instead (no deploy needed), run `OPENROUTER_API_KEY=sk-or-… npm run test:live`
    — see `tests/live/README.md`. It needs outbound HTTPS to openrouter.ai.
-6. Optional tuning: `OPENROUTER_MAX_OUTPUT_TOKENS` (default `2048`) is the
+6. Optional tuning: `VIDEO_TITLE_STYLE` (default `explicit`) sets the voice —
+   blunt adult titles that name the act, or the restrained `editorial` voice.
+   `OPENROUTER_MAX_OUTPUT_TOKENS` (default `2048`) is the
    per-suggestion output budget. Reasoning is turned off for every request
    (`reasoning: { enabled: false }`), so the whole budget goes to the JSON.
    If the provider rejects the JSON-mode or reasoning field, the client retries
    without that field.
 7. AI metadata is an enhancement, not a gate. If it is not configured, returns
-   malformed output, or hits quota, the upload still completes: the video is
-   created with deterministic metadata built from the file name and category
+   malformed output, refuses adults-only copy, or hits quota, the upload still
+   completes: the video is created with deterministic metadata built from the
+   selected category in the same voice (the offline composer in
+   `lib/metadata/explicit-titles.ts`, never from the file name)
    (`/api/videos/upload*` answers with `metadataSource: "fallback"` and a
    `metadataWarning`, and the admin UI flags the item for review). The
    `/api/metadata/suggest` endpoint still answers 503/502/429 with an actionable
@@ -826,6 +831,7 @@ fly deploy
 | `OPENROUTER_API_KEY` | OpenRouter API key for AI metadata suggestions | No | https://openrouter.ai/keys → Create key | Hosting secrets | prod (optional) | Test via System Health → Test OpenRouter, or `/api/metadata/suggest` as admin | Yes |
 | `OPENROUTER_MODEL` | OpenRouter model slug | No | `deepseek/deepseek-v3.2` (default) | Hosting env | prod (optional) | Check https://openrouter.ai/models for the slug | No |
 | `OPENROUTER_MAX_OUTPUT_TOKENS` | Output-token budget for one metadata suggestion | No | `2048` (default) | Hosting env | prod (optional) | Raise it if suggestions are truncated | No |
+| `VIDEO_TITLE_STYLE` | Voice of generated listing titles | No | `explicit` (default); `editorial` for the older euphemistic voice | Hosting env | prod (optional) | Generated title names the act in the explicit voice and stays non-graphic in the editorial voice; both keep the same age/consent guardrails | No |
 | `RESEND_API_KEY` | Resend API key | No | https://resend.com → API Keys | Hosting secrets, Supabase SMTP password | prod | Test via contact form | Yes |
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |

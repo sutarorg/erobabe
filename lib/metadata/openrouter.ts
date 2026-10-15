@@ -17,11 +17,14 @@ import {
   MIN_DESCRIPTION_WORDS,
   parseLooseJson,
   redactKeyMaterial,
+  resolveTitleStyle,
   suggestionOutputTokens,
+  titleBands,
   titlesAreTooSimilar,
   validateSuggestionPayload,
   type SuggestMetadataParams,
   type SuggestedMetadata,
+  type TitleStyle,
 } from "./suggestion";
 import {
   buildCarouselPrompt,
@@ -208,18 +211,22 @@ async function chatCompletion(prompt: string, model: string, key: string, option
 }
 
 /**
- * Asks the model for title, description, tags, and category for one file.
+ * Asks the model for title, description, tags, and category for one file, in the
+ * voice the site publishes (`VIDEO_TITLE_STYLE`, explicit by default: blunt
+ * adult titles that name the act, not euphemistic programme notes).
  *
- * Retries once with corrective feedback when the reply is incomplete, outside
- * the word limits, empty, truncated, or too similar to a supplied title.
- * Both attempts must satisfy the limits; invalid output is not padded or salvaged.
+ * Retries once with corrective feedback when the reply is incomplete, off-voice,
+ * outside the word limits, empty, truncated, or too similar to a supplied title.
+ * Both attempts must satisfy the limits; invalid output is not padded or salvaged,
+ * and the caller falls back to the offline explicit composer instead.
  */
 export async function suggestVideoMetadata(params: SuggestMetadataParams): Promise<SuggestedMetadata> {
   const key = openRouterApiKey();
   if (!key) throw new MetadataError(OPENROUTER_NOT_CONFIGURED_MESSAGE, 503, "not_configured");
 
+  const style: TitleStyle = params.style ?? resolveTitleStyle();
   const model = openRouterModelName();
-  const prompt = buildPrompt(params);
+  const prompt = buildPrompt({ ...params, style });
   let correction = "";
   const baseTokens = suggestionOutputTokens();
   let lastError: MetadataError | null = null;
@@ -260,6 +267,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
     // Enforce the same contract on every attempt; never add invented filler.
     let validation = validateSuggestionPayload(result.text, params.category, {
       strictWordCount: true,
+      style,
     });
     if (validation.ok) {
       const suggestion = validation.suggestion;
@@ -270,7 +278,11 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
       validation = { ok: false, message: "title is a near-duplicate of an existing listing" };
     }
 
-    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object. Keep the admin-selected category as the only content signal, choose a distinctly different angle and word order, never add a fake story or extra keywords, use a factual non-graphic 4-9-word title, and write a category-led description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
+    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object. Keep the admin-selected category as the only content signal and choose a distinctly different angle and word order. ${
+      style === "explicit"
+        ? `Write a ${titleBands(style).words.min}-${titleBands(style).words.max}-word adult-tube title that names the sex plainly with words like fuck, cock, dick, pussy, ass or blowjob, says who is doing it and where, contains the category word once, and never uses euphemisms or review language. Do not add an age, a family relationship, or anything implying a partner who cannot consent.`
+        : `Use a factual non-graphic ${titleBands(style).words.min}-${titleBands(style).words.max}-word title.`
+    } Write a category-led description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
     const truncated = result.finishReason === "length" && !parseLooseJson(result.text);
     lastError = new MetadataError(
       truncated
@@ -466,5 +478,7 @@ export function openRouterDiagnostics() {
     defaultModel: DEFAULT_OPENROUTER_MODEL,
     reasoning: "disabled",
     maxOutputTokens: suggestionOutputTokens(),
+    titleStyle: resolveTitleStyle(),
+    titleWords: titleBands().words,
   };
 }
