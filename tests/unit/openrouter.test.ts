@@ -27,6 +27,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   DEFAULT_OPENROUTER_MODEL,
+  MIN_ATTEMPT_MS,
   MetadataError,
   normalizeOpenRouterKey,
   openRouterDiagnostics,
@@ -37,7 +38,7 @@ import {
   suggestVideoMetadata,
 } from "@/lib/metadata/openrouter";
 import { POST as suggest } from "@/app/api/metadata/suggest/route";
-import { titlesAreTooSimilar } from "@/lib/metadata/suggestion";
+import { isValidDescription, PROMPT_AVOID_LIMIT, titlesAreTooSimilar } from "@/lib/metadata/suggestion";
 
 const SUGGEST_URL = "https://erobabe.vercel.app/api/metadata/suggest";
 
@@ -82,6 +83,17 @@ function seedAuth(
     ...fake.client,
     auth: { getUser: async () => ({ data: { user: userId ? { id: userId } : null }, error: null }) },
   };
+}
+
+/** A PostgREST builder whose every query fails, as during a database outage. */
+function failingQuery() {
+  const result = { data: null, error: { message: "canceling statement due to statement timeout" } };
+  const builder: Record<string, unknown> = {
+    then: (resolve: (value: typeof result) => unknown, reject?: (reason: unknown) => unknown) =>
+      Promise.resolve(result).then(resolve, reject),
+  };
+  for (const method of ["select", "order", "range", "eq", "limit"]) builder[method] = () => builder;
+  return builder;
 }
 
 function suggestRequest(body: unknown) {
@@ -235,36 +247,116 @@ describe("suggestVideoMetadata", () => {
     expect(messages[0].content).toContain("description must contain 20-25 words");
   });
 
-  it("rejects repeatedly overlong descriptions without adding invented filler", async () => {
+  it("trims an overlong description into range on the first attempt instead of rejecting it", async () => {
+    // "description must contain 20-25 words" used to discard the whole reply.
+    const description = `Boudoir ${Array(33).fill("word").join(" ")}`;
+    fetchMock.mockImplementation(async () => chatReply(modelOutput({ description })));
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(suggestion.title).toBe("Boudoir in Velvet After Dark");
+    expect(isValidDescription(suggestion.description)).toBe(true);
+    expect(suggestion.description.startsWith("Boudoir word")).toBe(true);
+    expect(suggestion.reasoning).toMatch(/trimmed from 34 words/);
+  });
+
+  it("names the category at the start of a description only after retries cannot", async () => {
     fetchMock.mockImplementation(async () => chatReply(modelOutput({ description: Array(26).fill("word").join(" ") })));
-    await expect(suggestVideoMetadata({ fileName: "clip.mp4" })).rejects.toMatchObject({ code: "bad_output" });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
+    // Each attempt is asked to fix it first; the repair is the last resort.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(suggestion.title).toBe("Boudoir in Velvet After Dark");
+    expect(suggestion.description).toMatch(/^Adult boudoir video: word word/);
+    expect(isValidDescription(suggestion.description)).toBe(true);
+    expect(suggestion.reasoning).toMatch(/category added to the description/);
   });
 
-  it("does not salvage an invalid first response after a network failure", async () => {
-    fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ description: "Too short." })))
-      .mockRejectedValueOnce(new Error("socket hang up"));
-    await expect(suggestVideoMetadata({ fileName: "clip.mp4" })).rejects.toBeInstanceOf(MetadataError);
+  it("keeps the model's title from an earlier attempt when a later attempt fails", async () => {
+    fetchMock
+      .mockResolvedValueOnce(chatReply(modelOutput({ description: "Too short." })))
+      .mockRejectedValue(new Error("socket hang up"));
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
+    expect(suggestion.title).toBe("Boudoir in Velvet After Dark");
+    expect(isValidDescription(suggestion.description)).toBe(true);
+    expect(suggestion.reasoning).toMatch(/kept after attempt 1 failed validation/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("rejects near-duplicate titles after both attempts", async () => {
+  it("never publishes an exact repeat of an existing title", async () => {
     fetchMock.mockImplementation(async () => chatReply(modelOutput()));
     await expect(suggestVideoMetadata({ existingTitles: ["Boudoir in Velvet After Dark"] })).rejects.toMatchObject({ code: "bad_output" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("checks exact repeats against every title but near-duplicates only against the titles the model saw", async () => {
+    const title = "Boudoir Portrait With Silk Robes and Candle Light";
+    const closeVariant = "Boudoir Portrait With Silk Robes and Candle Glow";
+    expect(titlesAreTooSimilar(title, closeVariant)).toBe(true);
+    const shown = Array.from({ length: PROMPT_AVOID_LIMIT }, (_, index) => `Unrelated Listing Number ${index + 1} Of The Archive`);
+    fetchMock.mockImplementation(async () => chatReply(modelOutput({ title })));
+
+    // A close variant the model was never shown does not cost the reply.
+    const accepted = await suggestVideoMetadata({ category: "Boudoir", existingTitles: [...shown, closeVariant] });
+    expect(accepted.title).toBe(title);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Among the titles it was shown, it is asked again, and kept as a last resort.
+    fetchMock.mockClear();
+    const kept = await suggestVideoMetadata({ category: "Boudoir", existingTitles: [closeVariant, ...shown] });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(kept.title).toBe(title);
+    expect(kept.reasoning).toMatch(/close to a recent title/);
+
+    // An exact repeat anywhere in the catalogue is never published.
+    fetchMock.mockClear();
+    const error = await suggestVideoMetadata({ category: "Boudoir", existingTitles: [...shown, title.toUpperCase()] }).catch((e) => e);
+    expect(error).toBeInstanceOf(MetadataError);
+    expect(error.message).toMatch(/duplicates an existing listing/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not start an attempt the route could not finish", async () => {
+    const error = await suggestVideoMetadata({ category: "Boudoir", deadline: Date.now() + 1000 }).catch((e) => e);
+    expect(error).toBeInstanceOf(MetadataError);
+    expect(error.code).toBe("timeout");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the best earlier reply instead of retrying past the deadline", async () => {
+    fetchMock.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return chatReply(modelOutput({ description: "Too short." }));
+    });
+    const suggestion = await suggestVideoMetadata({ category: "Boudoir", deadline: Date.now() + MIN_ATTEMPT_MS + 500 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(suggestion.title).toBe("Boudoir in Velvet After Dark");
+    expect(isValidDescription(suggestion.description)).toBe(true);
+  });
+
+  it("asks for a real description first, then keeps the title with a composed one", async () => {
+    fetchMock.mockImplementation(async () => chatReply(modelOutput({ description: "Too thin." })));
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const retry = (sentBody(1).messages as Array<{ content: string }>)[0].content;
+    expect(retry).toContain("description must contain 20-25 words");
+    expect(suggestion.title).toBe("Boudoir in Velvet After Dark");
+    expect(isValidDescription(suggestion.description)).toBe(true);
+    expect(suggestion.description).not.toContain("Too thin");
+    expect(suggestion.reasoning).toMatch(/description composed in the same voice/);
   });
 
   it("still fails when the model returns nothing a repair can rescue", async () => {
+    // Off-voice for the site default every time: there is no model title to keep.
+    process.env.VIDEO_TITLE_STYLE = "explicit";
     fetchMock.mockImplementation(async () => chatReply(modelOutput({ description: "Too thin." })));
-    const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
+    const error = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Boudoir" }).catch((e) => e);
     expect(error).toBeInstanceOf(MetadataError);
     expect(error.code).toBe("bad_output");
-    expect(error.message).toContain("20-25 words");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(error.message).toMatch(/unusable/);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("reports a truncated reply as truncated, not as malformed JSON", async () => {
-    fetchMock
-      .mockResolvedValueOnce(chatReply("Here is the start of a sugg", "length"))
-      .mockResolvedValueOnce(chatReply("Here is the start of a sugg", "length"));
+    fetchMock.mockImplementation(async () => chatReply("Here is the start of a sugg", "length"));
     const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
     expect(error).toBeInstanceOf(MetadataError);
     expect(error.code).toBe("bad_output");
@@ -395,6 +487,56 @@ describe("explicit title voice (the installed default)", () => {
     expect(json.suggestion.title).not.toMatch(/cinema|velvet|editorial|mood/i);
     expect(json.suggestion.description.split(/\s+/).length).toBeGreaterThanOrEqual(20);
     expect(json.suggestion.description.split(/\s+/).length).toBeLessThanOrEqual(25);
+  });
+
+  it("publishes the model's own draft when it overshoots both budgets (the reported failures)", async () => {
+    process.env.VIDEO_TITLE_STYLE = "explicit";
+    seedAuth("admin-overshoot");
+    const title =
+      "My Amateur Wife Grinds On My Cock In The Hammock Until I Cum Inside Her Twice After Midnight Tonight";
+    const description =
+      "Amateur hammock fuck filmed at home: she grinds on my cock, switches to reverse cowgirl, takes it deep and hard, then finishes with a creampie on camera while moaning. 18+ adults only.";
+    expect(title.split(/\s+/).length).toBeGreaterThan(16);
+    expect(description.split(/\s+/).length).toBeGreaterThan(25);
+    fetchMock.mockImplementation(async () =>
+      chatReply(JSON.stringify({ title, description, tags: ["amateur"], category: "Amateur" })),
+    );
+
+    const response = await suggest(suggestRequest({ category: "Amateur" }));
+    const json = await response.json();
+    expect(response.status).toBe(200);
+    expect(json.source).toBe("ai");
+    expect(json).not.toHaveProperty("warning");
+    expect(json.suggestion.title).toBe(
+      "My Amateur Wife Grinds On My Cock In The Hammock Until I Cum Inside Her Twice",
+    );
+    expect(isValidDescription(json.suggestion.description)).toBe(true);
+    expect(json.suggestion.description.startsWith("Amateur hammock fuck filmed at home")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("extends a short description in the explicit voice instead of falling back", async () => {
+    process.env.VIDEO_TITLE_STYLE = "explicit";
+    seedAuth("admin-short-description");
+    fetchMock.mockImplementation(async () =>
+      chatReply(
+        JSON.stringify({
+          title: "My Amateur Neighbour Rides My Cock Raw In The Garden Shed",
+          description: "Amateur garden shed fuck: she rides my cock raw until I cum inside her.",
+          tags: ["amateur"],
+          category: "Amateur",
+        }),
+      ),
+    );
+
+    const response = await suggest(suggestRequest({ category: "Amateur" }));
+    const json = await response.json();
+    expect(json.source).toBe("ai");
+    expect(json).not.toHaveProperty("warning");
+    expect(isValidDescription(json.suggestion.description)).toBe(true);
+    expect(json.suggestion.description).toContain("Watch the full scene from start to finish.");
+    expect(json.suggestion.description).not.toMatch(/Review the|listing details/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps refusing to publish an age-ambiguous or coercive title even when explicit", async () => {
@@ -534,6 +676,9 @@ describe("POST /api/metadata/suggest", () => {
     const json = await response.json();
     expect(json.suggestion).toMatchObject({ title: "Boudoir in Velvet After Dark", category: "Boudoir" });
     expect(json.note).toMatch(/human review/);
+    expect(json.source).toBe("ai");
+    expect(json).not.toHaveProperty("warning");
+    expect(json).not.toHaveProperty("warningCode");
   });
 
   it("loads catalog titles for dedupe but never feeds video defaults into AI copy", async () => {
@@ -605,15 +750,64 @@ describe("POST /api/metadata/suggest", () => {
     expect(response.status).toBe(413);
   });
 
-  it("rate-limits repeated requests", async () => {
+  it("rate-limits repeated requests and says when to try again", async () => {
     seedAuth("admin-5");
     fetchMock.mockImplementation(async () => chatReply(modelOutput()));
-    let lastStatus = 200;
+    let last: Response | null = null;
     for (let i = 0; i < 25; i += 1) {
-      const response = await suggest(suggestRequest({ fileName: `clip-${i}.mp4` }));
-      lastStatus = response.status;
+      last = await suggest(suggestRequest({ fileName: `clip-${i}.mp4` }));
     }
-    expect(lastStatus).toBe(429);
+    expect(last?.status).toBe(429);
+    const retryAfter = Number(last?.headers.get("Retry-After"));
+    expect(retryAfter).toBeGreaterThanOrEqual(1);
+    expect(retryAfter).toBeLessThanOrEqual(60);
+    expect((await last!.json()).retryAfter).toBe(retryAfter);
+  });
+
+  it("lets a client that waited out Retry-After straight back in", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      seedAuth("admin-retry-after");
+      fetchMock.mockImplementation(async () => chatReply(modelOutput({ title: "Boudoir Lace and Linen at Noon" })));
+      for (let i = 0; i < 20; i += 1) {
+        expect((await suggest(suggestRequest({ category: "Boudoir" }))).status).toBe(200);
+      }
+      const refused = await suggest(suggestRequest({ category: "Boudoir" }));
+      expect(refused.status).toBe(429);
+      // Refused requests are not counted, so waiting the advertised time is enough.
+      vi.setSystemTime(Date.now() + Number(refused.headers.get("Retry-After")) * 1000);
+      expect((await suggest(suggestRequest({ category: "Boudoir" }))).status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still asks the model when catalog titles cannot be loaded", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Past the brief catalog cache, so the route really queries the database.
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      seedAuth("admin-catalog-down");
+      const client = authState.client as { from: (table: string) => unknown };
+      authState.client = {
+        ...client,
+        from: (table: string) => (table === "videos" ? failingQuery() : client.from(table)),
+      };
+      fetchMock.mockResolvedValueOnce(chatReply(modelOutput({ title: "Boudoir Lace and Window Light" })));
+
+      const response = await suggest(suggestRequest({ category: "Boudoir" }));
+      const json = await response.json();
+      expect(response.status).toBe(200);
+      expect(json.source).toBe("ai");
+      expect(json.suggestion.title).toBe("Boudoir Lace and Window Light");
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/Catalog titles unavailable/),
+        expect.stringMatching(/statement timeout/),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("still answers from the offline composer when OpenRouter is not configured", async () => {
@@ -626,6 +820,7 @@ describe("POST /api/metadata/suggest", () => {
     expect(json.source).toBe("offline");
     expect(json.suggestion.title).toBeTruthy();
     expect(json.warning).toMatch(/OPENROUTER_API_KEY/);
+    expect(json.warningCode).toBe("not_configured");
   });
 
   it("answers with an offline draft on quota and provider failures without leaking", async () => {

@@ -23,6 +23,7 @@ import {
   type TitleStyle,
 } from "./title-style";
 import {
+  articleFor,
   EXPLICIT_DESCRIPTION_SCENES,
   EXPLICIT_DESCRIPTION_TAILS,
   EXPLICIT_FALLBACK_KEYWORDS,
@@ -67,6 +68,14 @@ export function titleBands(style: TitleStyle = resolveTitleStyle()) {
  */
 export const MIN_REPAIRABLE_DESCRIPTION_WORDS = 8;
 
+/**
+ * How many existing titles the model is shown as its do-not-repeat list. Near
+ * duplicates are judged against the same window: the model cannot avoid titles
+ * it was never shown, so holding it to the whole catalogue only produced
+ * rejections. Exact repeats are still checked against every known title.
+ */
+export const PROMPT_AVOID_LIMIT = 100;
+
 /** Whitespace-separated words; hyphenated words count as one. */
 export function descriptionWordCount(description: string): number {
   const text = description.trim();
@@ -96,8 +105,19 @@ export interface SuggestMetadataParams {
   style?: TitleStyle;
   /** The admin-selected category is the only content signal for generated copy. */
   category?: string;
-  /** Titles used only as a do-not-repeat list; never as source material. */
+  /**
+   * Titles used only as a do-not-repeat list; never as source material. Most
+   * relevant first: the first `PROMPT_AVOID_LIMIT` are shown to the model and
+   * are the window near-duplicates are judged against, while every entry is
+   * checked for an exact repeat.
+   */
   existingTitles?: string[];
+  /**
+   * Epoch milliseconds by which the suggestion must be settled. The route sets
+   * it so retries never outlive the serverless function; omitted means
+   * `SUGGESTION_BUDGET_MS` from the first attempt.
+   */
+  deadline?: number;
   /** Legacy upload fields retained but deliberately ignored by AI generation. */
   title?: string;
   fileName?: string;
@@ -447,6 +467,13 @@ export const CATEGORY_STORIES: Record<KnownCategory, CategoryStory> = {
 
 const DESCRIPTION_CLOSERS = ["For adult viewers.", "Review the listing details.", "Browse related listings in this collection."];
 
+/**
+ * Claim-free sentences that finish a short explicit-voice description. The
+ * editorial closers above would read as catalogue filler on a tube listing.
+ */
+const EXPLICIT_DESCRIPTION_CONTINUATIONS = ["Watch the full scene from start to finish."];
+const EXPLICIT_DESCRIPTION_CLOSERS = ["18+ adults only.", "All performers are 18+.", "Stream the whole video now."];
+
 export function isKnownCategory(value: unknown): value is KnownCategory {
   const wanted = String(value ?? "").trim().toLowerCase();
   return Boolean(wanted) && KNOWN_CATEGORIES.some((entry) => entry.toLowerCase() === wanted);
@@ -508,8 +535,13 @@ function finishSentence(words: string[]): string {
  * inside the 20-25 word window. The window is eleven words wide, so a single
  * closer covers most gaps and a pair covers the rest.
  */
-function pickClosers(needMin: number, needMax: number, used: Set<string>): string[] | null {
-  const free = DESCRIPTION_CLOSERS.filter((closer) => !used.has(closer.toLowerCase()));
+function pickClosers(
+  needMin: number,
+  needMax: number,
+  used: Set<string>,
+  pool: readonly string[] = DESCRIPTION_CLOSERS,
+): string[] | null {
+  const free = pool.filter((closer) => !used.has(closer.toLowerCase()));
   const single = free.find((closer) => {
     const length = descriptionWordCount(closer);
     return length >= needMin && length <= needMax;
@@ -525,11 +557,22 @@ function pickClosers(needMin: number, needMax: number, used: Set<string>): strin
   return null;
 }
 
+/** A plain cut at the word ceiling, for when a sentence-aware trim lands short. */
+function hardCutDescription(words: string[]): string {
+  const text = words.slice(0, MAX_DESCRIPTION_WORDS).join(" ").replace(/[,;:\u2014-]+$/u, "").trim();
+  return /[.!?…]$/.test(text) ? text : `${text}.`;
+}
+
 /**
  * Brings a description into the published 20-25 word range without throwing the
- * model's writing away.
+ * model's writing away. `style` picks the voice of any sentence added to a
+ * short description.
  */
-export function normalizeDescription(raw: string, category?: string): NormalizedDescription | null {
+export function normalizeDescription(
+  raw: string,
+  category?: string,
+  style: TitleStyle = "editorial",
+): NormalizedDescription | null {
   const collapsed = String(raw ?? "").replace(/\s+/g, " ").trim();
   if (!collapsed) return null;
 
@@ -552,8 +595,11 @@ export function normalizeDescription(raw: string, category?: string): Normalized
       break;
     }
 
-    const description = finishSentence(kept);
-    if (descriptionWordCount(description) < MIN_DESCRIPTION_WORDS) return null;
+    let description = finishSentence(kept);
+    // A standalone dash or similar token at the cut can drop the count below the
+    // floor once it is stripped; a plain cut at the ceiling always fits.
+    if (descriptionWordCount(description) < MIN_DESCRIPTION_WORDS) description = hardCutDescription(words);
+    if (!isValidDescription(description)) return null;
     return {
       description,
       adjusted: `trimmed from ${words.length} words to ${descriptionWordCount(description)}`,
@@ -562,7 +608,9 @@ export function normalizeDescription(raw: string, category?: string): Normalized
 
   if (words.length < MIN_REPAIRABLE_DESCRIPTION_WORDS) return null;
 
-  const story = categoryStory(category);
+  const explicit = style === "explicit";
+  const continuations = explicit ? EXPLICIT_DESCRIPTION_CONTINUATIONS : categoryStory(category).continuations;
+  const closerPool = explicit ? EXPLICIT_DESCRIPTION_CLOSERS : DESCRIPTION_CLOSERS;
   const extended: string[] = [...words];
   const used = new Set<string>();
   let count = extended.length;
@@ -571,7 +619,7 @@ export function normalizeDescription(raw: string, category?: string): Normalized
     extended[extended.length - 1] = `${extended[extended.length - 1]}.`;
   }
 
-  for (const sentence of story.continuations) {
+  for (const sentence of continuations) {
     if (count >= MIN_DESCRIPTION_WORDS) break;
     const length = descriptionWordCount(sentence);
     if (count + length > MAX_DESCRIPTION_WORDS) continue;
@@ -581,7 +629,7 @@ export function normalizeDescription(raw: string, category?: string): Normalized
   }
 
   while (count < MIN_DESCRIPTION_WORDS) {
-    const closers = pickClosers(MIN_DESCRIPTION_WORDS - count, MAX_DESCRIPTION_WORDS - count, used);
+    const closers = pickClosers(MIN_DESCRIPTION_WORDS - count, MAX_DESCRIPTION_WORDS - count, used, closerPool);
     if (!closers) return null;
     for (const closer of closers) {
       extended.push(closer);
@@ -594,19 +642,58 @@ export function normalizeDescription(raw: string, category?: string): Normalized
   return { description, adjusted: `extended from ${words.length} words to ${descriptionWordCount(description)}` };
 }
 
+const MAX_DESCRIPTION_CHARACTERS = 1000;
+
+const titleField = z
+  .string()
+  .transform((value) => sanitizeTitle(value))
+  .pipe(z.string().min(1, "title is required").max(MAX_TITLE_LENGTH, "title is too long"));
+const categoryField = z.string().trim().min(1, "category is required").max(80);
+
+/** Strict validation: every field must arrive publishable as-is. */
 const suggestionSchema = z.object({
-  title: z
-    .string()
-    .transform((value) => sanitizeTitle(value))
-    .pipe(z.string().min(1, "title is required").max(MAX_TITLE_LENGTH, "title is too long")),
+  title: titleField,
   description: z
     .string()
     .trim()
     .min(1, "description is required")
-    .max(1000, "description is too long")
+    .max(MAX_DESCRIPTION_CHARACTERS, "description is too long")
     .transform((value) => value.replace(/\s+/g, " ")),
   tags: z.array(z.string().trim().min(1).max(50)).min(1, "at least one tag is required").max(8),
-  category: z.string().trim().min(1, "category is required").max(80),
+  category: categoryField,
+});
+
+/**
+ * Collapses whitespace and cuts a runaway description on a word boundary; the
+ * word-count repair then trims it to the published range.
+ */
+function boundDescriptionText(value: string): string {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= MAX_DESCRIPTION_CHARACTERS) return collapsed;
+  const cut = collapsed.slice(0, MAX_DESCRIPTION_CHARACTERS + 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut.slice(0, MAX_DESCRIPTION_CHARACTERS)).trim();
+}
+
+/**
+ * Tags never block a suggestion: the upload publishes the title and
+ * description, and an empty list falls back to the category's tags.
+ */
+const looseTagsField = z
+  .array(z.string())
+  .transform((tags) => tags.map((tag) => tag.trim()).filter((tag) => tag && tag.length <= 50).slice(0, 8));
+
+/** Default validation: length and formatting problems are repaired rather than rejected. */
+const repairingSuggestionSchema = z.object({
+  title: titleField,
+  description: z.string().transform(boundDescriptionText).pipe(z.string().min(1, "description is required")),
+  tags: looseTagsField,
+  category: categoryField,
+});
+
+/** Last-resort validation: a missing description is composed in the same voice. */
+const lenientSuggestionSchema = repairingSuggestionSchema.extend({
+  description: z.string().optional().transform((value) => boundDescriptionText(value ?? "")),
 });
 
 /* ------------------------------------------------------------------------- */
@@ -1165,6 +1252,9 @@ export function hasSelectedCategorySignal(value: string, category: string): bool
 
 const TITLE_COMPARISON_STOPWORDS = new Set([
   "a", "an", "the", "and", "or", "but", "to", "of", "in", "on", "at", "by", "for", "from", "with", "as", "into", "after", "before", "its", "this", "that", "your", "my", "his", "her", "their", "our", "it", "is", "are", "was", "were", "be", "has", "have", "had", "one", "two", "three", "video", "videos", "adult", "adults", "only", "18", "plus", "4k", "hd",
+  // Pronouns and connectives say nothing about which scene a title describes;
+  // counting them made "...Until I Cum" collide with every other "...Until I Cum".
+  "i", "me", "you", "he", "she", "we", "they", "him", "them", "us", "then", "until", "till", "while", "when", "where", "so", "than", "all", "over", "up", "out", "off", "each", "other", "every", "both",
 ]);
 const CATEGORY_COMPARISON_WORDS = new Set([
   "amateur", "lesbian", "milf", "japanese", "hentai", "ebony", "pov", "big", "ass", "threesome", "hardcore", "massage", "mature", "kinky", "couples", "couple", "boudoir", "romantic", "solo", "roleplay", "role", "play",
@@ -1199,6 +1289,11 @@ function longestCommonSubsequenceLength(left: string[], right: string[]): number
 /**
  * Detect exact, reordered, or close title variants while ignoring the shared
  * taxonomy/SEO words that are expected to recur across a category.
+ *
+ * A single shared two-word phrase only counts when most of the shorter title's
+ * distinctive words are shared as well: explicit titles reuse stock phrases
+ * ("doggy style", "rides my cock") constantly, and treating each reuse as a
+ * near-duplicate rejected almost every model title once the catalogue grew.
  */
 export function titlesAreTooSimilar(candidate: string, existing: string): boolean {
   const normalize = (value: string) => sanitizeTitle(value)
@@ -1230,7 +1325,7 @@ export function titlesAreTooSimilar(candidate: string, existing: string): boolea
     (jaccard >= 0.6 && shared >= 3) ||
     (containment >= 0.8 && shared >= 3) ||
     (shared >= 2 && minimumLength >= 3 && jaccard >= 0.5 && containment >= 0.66) ||
-    (sharedBigrams >= 1 && shared >= 2 && minimumLength >= 3) ||
+    (sharedBigrams >= 1 && shared >= 2 && minimumLength >= 3 && containment >= 0.6) ||
     (ordered >= 0.85 && minimumLength >= 4)
   );
 }
@@ -1333,7 +1428,7 @@ export function buildPrompt(params: SuggestMetadataParams, angle?: string): stri
   const story = categoryStory(category);
   const avoidList = Array.from(
     new Set((params.existingTitles || []).map((title) => String(title || "").trim()).filter(Boolean)),
-  ).slice(0, 100);
+  ).slice(0, PROMPT_AVOID_LIMIT);
   const source = JSON.stringify({
     adminSelectedCategory: category,
     seoTopicPhrase: story.primaryKeyword,
@@ -1419,7 +1514,8 @@ const EXPLICIT_SIMILARITY_WINDOW = 24;
 const EXPLICIT_COMPOSITION_ATTEMPTS = 48;
 
 /** Case- and punctuation-insensitive identity, for exact duplicate detection. */
-function titleSearchKey(title: string): string {
+/** The identity two titles share when they are exact duplicates (case, punctuation and spacing ignored). */
+export function titleSearchKey(title: string): string {
   return String(title || "")
     .toLocaleLowerCase("en")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
@@ -1516,12 +1612,13 @@ export function composeExplicitDescription(category: string): string {
   // of writing a second padding rule keeps offline and AI copy on the same
   // contract, and keeps a category with long vocabulary from being published
   // outside the band.
-  const repaired = normalizeDescription(text, label)?.description;
+  const repaired = normalizeDescription(text, label, "explicit")?.description;
   if (repaired && isValidDescription(repaired) && !copyPolicyViolation("", repaired, "explicit"))
     return repaired;
   return normalizeDescription(
     `${vocabulary.categoryPhrase} ${scene}: ${joinClauses(beats.slice(0, 2))}. ${tail}`,
     label,
+    "explicit",
   )?.description || text;
 }
 
@@ -1696,14 +1793,312 @@ export function humanizeFileName(sourceName: string): string {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Title repair                                                               */
+/* ------------------------------------------------------------------------- */
+
+interface TitleBudget {
+  minWords: number;
+  maxWords: number;
+  minChars: number;
+  maxChars: number;
+}
+
+function titleBudgetFor(style: TitleStyle): TitleBudget {
+  const bands = titleBands(style);
+  return {
+    minWords: bands.words.min,
+    maxWords: bands.words.max,
+    minChars: bands.characters.min,
+    maxChars: bands.characters.max,
+  };
+}
+
+function fitsTitleBudget(title: string, budget: TitleBudget): boolean {
+  const words = titleWordCount(title);
+  const characters = title.trim().length;
+  return (
+    words >= budget.minWords &&
+    words <= budget.maxWords &&
+    characters >= budget.minChars &&
+    characters <= budget.maxChars
+  );
+}
+
+function isOverTitleBudget(title: string, budget: TitleBudget): boolean {
+  return titleWordCount(title) > budget.maxWords || title.trim().length > budget.maxChars;
+}
+
+/**
+ * Words a new clause starts with. A model that overshoots the word budget
+ * almost always does it by bolting one more clause onto a complete title
+ * ("... On The Couch Until I Cum Inside Her"), so cutting before one of these
+ * keeps a readable title instead of a mid-phrase truncation.
+ */
+const TITLE_CLAUSE_STARTERS = new Set([
+  "and", "then", "while", "as", "until", "till", "after", "before", "during", "when", "where", "because",
+  "but", "so", "or", "in", "on", "at", "with", "for", "by", "from", "into", "onto", "under", "near",
+  "against", "through", "without", "featuring", "plus", "ending", "finishing",
+]);
+
+/** Words that read as broken off when they end a cut title. */
+const TITLE_TRAILING_FILLER = new Set([
+  "a", "an", "the", "and", "but", "or", "so", "of", "to", "in", "on", "at", "by", "for", "from", "as",
+  "if", "when", "than", "then", "that", "which", "where", "while", "because", "although", "though",
+  "until", "till", "before", "after", "into", "onto", "with", "without", "during", "through", "against",
+  "near", "under", "is", "are", "was", "were", "be", "being", "its", "his", "my", "our", "your", "their",
+  "this", "these", "those", "some", "very", "just", "still", "featuring", "plus", "ending", "finishing",
+  "&", "+", "/",
+]);
+
+function bareWord(word: string): string {
+  return word.toLocaleLowerCase("en").replace(/^[^\p{L}\p{N}&+/]+|[^\p{L}\p{N}&+/]+$/gu, "");
+}
+
+/** Joins kept words and drops any dangling connector or punctuation at the end. */
+function finishTitle(words: readonly string[]): string {
+  let end = words.length;
+  while (end > 0 && TITLE_TRAILING_FILLER.has(bareWord(words[end - 1]))) end -= 1;
+  return sanitizeTitle(words.slice(0, end).join(" "));
+}
+
+/**
+ * The longest readable cut of an over-budget title that still passes `keep`:
+ * first the longest complete opening that ends before a clause, then the
+ * opening with later clauses dropped (the act or the category can sit in a
+ * later clause), then a plain word cut. `null` when no cut fits.
+ */
+function trimTitleToBudget(
+  title: string,
+  budget: TitleBudget,
+  keep: (candidate: string) => boolean,
+): string | null {
+  const words = title.split(/\s+/u).filter(Boolean);
+  const fits = (candidate: string) => Boolean(candidate) && fitsTitleBudget(candidate, budget) && keep(candidate);
+
+  const boundaries: number[] = [];
+  for (let index = 1; index < words.length; index += 1) {
+    if (TITLE_CLAUSE_STARTERS.has(bareWord(words[index])) || /[,;:]$/u.test(words[index - 1])) {
+      boundaries.push(index);
+    }
+  }
+
+  for (let index = boundaries.length - 1; index >= 0; index -= 1) {
+    const candidate = finishTitle(words.slice(0, boundaries[index]));
+    if (fits(candidate)) return candidate;
+  }
+
+  const segments: string[][] = [];
+  let start = 0;
+  for (const boundary of boundaries) {
+    segments.push(words.slice(start, boundary));
+    start = boundary;
+  }
+  segments.push(words.slice(start));
+  if (segments.length >= 3 && segments.length <= 9) {
+    const later = segments.length - 1;
+    let best: string | null = null;
+    for (let mask = 1; mask < (1 << later) - 1; mask += 1) {
+      const kept = [...segments[0]];
+      for (let bit = 0; bit < later; bit += 1) {
+        if (mask & (1 << bit)) kept.push(...segments[bit + 1]);
+      }
+      const candidate = finishTitle(kept);
+      if (fits(candidate) && (!best || titleWordCount(candidate) > titleWordCount(best))) best = candidate;
+    }
+    if (best) return best;
+  }
+
+  for (let count = Math.min(words.length - 1, budget.maxWords); count >= 1; count -= 1) {
+    const candidate = finishTitle(words.slice(0, count));
+    if (fits(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Last-resort cut for a title whose act or category only appears after a long
+ * opening: keeps the longest run of later clauses that fits, without the
+ * opening, and drops the connector it would otherwise start with.
+ */
+function trimTitleDroppingOpening(
+  title: string,
+  budget: TitleBudget,
+  keep: (candidate: string) => boolean,
+): string | null {
+  const words = title.split(/\s+/u).filter(Boolean);
+  const segments: string[][] = [];
+  let start = 0;
+  for (let index = 1; index < words.length; index += 1) {
+    if (TITLE_CLAUSE_STARTERS.has(bareWord(words[index])) || /[,;:]$/u.test(words[index - 1])) {
+      segments.push(words.slice(start, index));
+      start = index;
+    }
+  }
+  segments.push(words.slice(start));
+  if (segments.length < 2 || segments.length > 9) return null;
+
+  const later = segments.length - 1;
+  let best: string | null = null;
+  for (let mask = 1; mask < 1 << later; mask += 1) {
+    const kept: string[] = [];
+    for (let bit = 0; bit < later; bit += 1) {
+      if (mask & (1 << bit)) kept.push(...segments[bit + 1]);
+    }
+    while (kept.length && TITLE_CLAUSE_STARTERS.has(bareWord(kept[0]))) kept.shift();
+    if (!kept.length) continue;
+    kept[0] = `${kept[0].charAt(0).toLocaleUpperCase("en")}${kept[0].slice(1)}`;
+    const candidate = finishTitle(kept);
+    if (
+      candidate &&
+      fitsTitleBudget(candidate, budget) &&
+      keep(candidate) &&
+      (!best || titleWordCount(candidate) > titleWordCount(best))
+    ) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/** Category words that read as a setting rather than an adjective close the title instead. */
+const CATEGORY_TITLE_SUFFIXES: Partial<Record<KnownCategory, string>> = {
+  Threesome: "In A Threesome",
+  Massage: "During A Massage",
+  Couples: "As A Couple",
+  Roleplay: "In A Roleplay Scene",
+};
+
+function categoryTitleWord(category: KnownCategory): string {
+  if (category === "Teen (18+)") return "18+";
+  if (category === "Mature 18+") return "Mature";
+  return category;
+}
+
+/**
+ * Works the selected category into a title that forgot it: as a closing phrase
+ * for setting-like categories, after a leading determiner ("My Amateur
+ * Girlfriend ..."), or as a prefix. `null` when no placement fits the budget.
+ */
+function addCategoryToTitle(
+  title: string,
+  category: KnownCategory,
+  budget: TitleBudget,
+  keep: (candidate: string) => boolean,
+): string | null {
+  const signal = (candidate: string) => keep(candidate) && hasSelectedCategorySignal(candidate, category);
+  const words = title.split(/\s+/u).filter(Boolean);
+  const candidates: string[] = [];
+
+  const suffix = CATEGORY_TITLE_SUFFIXES[category];
+  if (suffix) {
+    // Make room first so a later trim never cuts the phrase back off.
+    const room: TitleBudget = {
+      minWords: 1,
+      minChars: 1,
+      maxWords: budget.maxWords - titleWordCount(suffix),
+      maxChars: budget.maxChars - suffix.length - 1,
+    };
+    const base = isOverTitleBudget(title, room) ? trimTitleToBudget(title, room, keep) : title;
+    if (base) candidates.push(`${base} ${suffix}`);
+  }
+
+  const word = categoryTitleWord(category);
+  const lead = bareWord(words[0] || "");
+  if (words.length > 1 && /^(?:my|the|this|her|his|our|your|their)$/u.test(lead)) {
+    candidates.push([words[0], word, ...words.slice(1)].join(" "));
+  } else if (words.length > 1 && /^(?:a|an)$/u.test(lead)) {
+    candidates.push([articleFor(word), word, ...words.slice(1)].join(" "));
+  }
+  candidates.push(`${word} ${title}`);
+
+  for (const raw of candidates) {
+    const candidate = sanitizeTitle(raw);
+    if (!isOverTitleBudget(candidate, budget)) {
+      if (signal(candidate)) return candidate;
+      continue;
+    }
+    const trimmed = trimTitleToBudget(candidate, budget, signal);
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+/** A setting the model's own description names, so an added place cannot contradict it. */
+const DESCRIBED_PLACE =
+  /\b(?:at home|in bed|by the pool|(?:in|on) (?:the|our|her|his|my|their) (?:shower|kitchen counter|kitchen|bedroom|bathroom|living room couch|living room|hotel room|hotel bed|car|back seat|office desk|office|garage|pool|bed|couch|sofa|floor|balcony|desk|bathtub))\b/iu;
+
+function describedPlace(description: string): string | null {
+  const match = String(description || "").match(DESCRIBED_PLACE);
+  return match ? match[0].replace(/\b\p{L}/gu, (letter) => letter.toLocaleUpperCase("en")) : null;
+}
+
+/**
+ * Completes a title that is below the word or character floor with a neutral
+ * phrase in the same voice. Explicit titles get the setting the description
+ * names, then "On Camera", and only then a stock place; editorial titles get a
+ * framing phrase.
+ */
+function extendShortTitle(
+  title: string,
+  style: TitleStyle,
+  budget: TitleBudget,
+  keep: (candidate: string) => boolean,
+  description = "",
+): string | null {
+  // Phrases that are true of any listing come first; stock places only after.
+  let truthful: string[];
+  let stock: string[] = [];
+  if (style === "explicit") {
+    const lowerTitle = title.toLocaleLowerCase("en");
+    const described = describedPlace(description);
+    const own = described && !lowerTitle.includes(described.toLocaleLowerCase("en")) ? [described] : [];
+    const camera = /\bcam(?:era)?\b/iu.test(title) ? [] : ["On Camera"];
+    truthful = [...own, ...camera];
+    if (!own.length) {
+      stock = shuffle([...EXPLICIT_PLACES]).filter(
+        (place) => !lowerTitle.includes(place.toLocaleLowerCase("en")) && (camera.length > 0 || !/\bcam\b/iu.test(place)),
+      );
+    }
+  } else {
+    truthful = ["in Focus", "Feature", "in Soft Focus"];
+  }
+
+  const pairs = (left: string[], right: string[]) =>
+    left.flatMap((first) => right.filter((second) => second !== first).map((second) => [first, second]));
+  const plans: string[][] = [
+    ...truthful.map((addition) => [addition]),
+    ...pairs(truthful, truthful),
+    ...stock.map((addition) => [addition]),
+    ...pairs(stock, truthful),
+  ];
+  for (const plan of plans) {
+    const candidate = sanitizeTitle(`${title} ${plan.join(" ")}`);
+    if (fitsTitleBudget(candidate, budget) && keep(candidate)) return candidate;
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------------- */
 /* Payload validation                                                         */
 /* ------------------------------------------------------------------------- */
 
 export type PayloadValidation =
-  | { ok: true; suggestion: SuggestedMetadata }
+  | {
+      ok: true;
+      suggestion: SuggestedMetadata;
+      /** What had to change to make the reply publishable, for the audit note. */
+      repairs: string[];
+      /** How many last-resort repairs (`lenient` only) the reply needed. */
+      repairCost: number;
+    }
   | { ok: false; message: string };
 
 export interface ValidateOptions {
+  /**
+   * Reject any title or description outside its budget instead of repairing
+   * it. Production never sets this: a near-miss on length is the most common
+   * model slip and is always repairable.
+   */
   strictWordCount?: boolean;
   /**
    * Voice to enforce. Omitted means the site default, so every production path
@@ -1711,10 +2106,53 @@ export interface ValidateOptions {
    * (for example the carousel copy trimmer) pass the voice they target.
    */
   style?: TitleStyle;
+  /**
+   * Last-resort repairs for a reply that is otherwise usable, each counted in
+   * `repairCost` so the caller can decide how much repair it accepts: the
+   * selected category is worked into a title or description lead that forgot
+   * it, an overlong title whose act only comes late may lose its opening
+   * clause, a title below the floor is completed with a neutral phrase, and a
+   * missing, fragmentary or unpublishable description is replaced with one
+   * composed in the same voice — but only for a title that needed no repair
+   * of its own. The title's own compliance and voice are never repaired.
+   */
+  lenient?: boolean;
 }
 
 const DESCRIPTION_COUNT_MESSAGE = `description must contain ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words`;
+const CATEGORY_SIGNAL_MESSAGE = "title and opening description must use the selected category naturally";
 
+function descriptionLead(description: string): string {
+  return description.split(/\s+/u).slice(0, 12).join(" ");
+}
+
+/** A description in the same voice for a reply whose own one could not be used. */
+function composeCategoryDescription(category: KnownCategory, style: TitleStyle): string {
+  return style === "explicit"
+    ? composeExplicitDescription(category)
+    : randomItem(categoryStory(category).blurbPool);
+}
+
+/** An opening that names the category, for a description that forgot it. */
+function descriptionCategoryLead(category: KnownCategory, style: TitleStyle): string {
+  if (style === "explicit") {
+    return `${EXPLICIT_TITLE_VOCABULARY[category]?.categoryPhrase || category} scene:`;
+  }
+  const keyword = categoryStory(category).primaryKeyword;
+  return `${keyword.charAt(0).toLocaleUpperCase("en")}${keyword.slice(1)}:`;
+}
+
+/**
+ * Validates a model reply and makes it publishable.
+ *
+ * By default, length problems are repaired: an overlong title is cut at a
+ * clause boundary that keeps the act and the category, and a description is
+ * trimmed or extended into the 20-25 word range. What cannot be repaired
+ * (unparseable JSON, an unreadable or unpublishable title, the wrong voice, a
+ * description fragment, a missing category) is rejected with a message the
+ * caller can feed back to the model. See `ValidateOptions` for the strict and
+ * lenient variants.
+ */
 export function validateSuggestionPayload(
   text: string,
   requestedCategory?: string,
@@ -1723,10 +2161,11 @@ export function validateSuggestionPayload(
   const parsed = parseLooseJson(text);
   if (!parsed) return { ok: false, message: "the model's reply could not be parsed as JSON" };
 
+  const strict = options.strictWordCount === true;
+  const lenient = !strict && options.lenient === true;
   const category = resolveCategory(requestedCategory, "");
-  const validated = suggestionSchema.safeParse(
-    coerceSuggestionInput(unwrapSuggestion(parsed.value), category)
-  );
+  const schema = strict ? suggestionSchema : lenient ? lenientSuggestionSchema : repairingSuggestionSchema;
+  const validated = schema.safeParse(coerceSuggestionInput(unwrapSuggestion(parsed.value), category));
   if (!validated.success) {
     const first = validated.error.issues[0];
     return {
@@ -1736,17 +2175,60 @@ export function validateSuggestionPayload(
   }
 
   const finalCategory = resolveCategory(requestedCategory, validated.data.category);
+  // resolveCategory always lands on a known label.
+  const known = normalizeCategory(finalCategory, "Mature") as KnownCategory;
   const style = options.style ?? resolveTitleStyle();
-  const title = sanitizeGeneratedTitle(validated.data.title, finalCategory);
+  const repairs: string[] = [];
+  let repairCost = 0;
+  let title = sanitizeGeneratedTitle(validated.data.title, finalCategory);
+  let description = validated.data.description;
+  let replaceDescription = false;
 
   if (!isValidTitle(title)) {
     return { ok: false, message: "the suggestion needs a specific, readable title" };
   }
 
   // Compliance floor first: it applies to every voice and is never negotiable.
-  const violation = copyPolicyViolation(title, validated.data.description, style);
+  // A last-resort pass may still keep a clean title and replace the description.
+  const violation = copyPolicyViolation(title, description, style);
   if (violation) {
-    return { ok: false, message: `the suggestion is not publishable (${violation})` };
+    if (!lenient || copyPolicyViolation(title, "", style)) {
+      return { ok: false, message: `the suggestion is not publishable (${violation})` };
+    }
+    replaceDescription = true;
+  }
+
+  const budget = titleBudgetFor(style);
+  // Every repaired title must stay readable, publishable and in voice.
+  const keep = (candidate: string) =>
+    isValidTitle(candidate) &&
+    !titleKeywordViolation(candidate, style) &&
+    !copyPolicyViolation(candidate, "", style);
+
+  // An overlong title is cut back to its longest readable opening before the
+  // voice is judged, so a stray clause cannot cost an otherwise usable reply.
+  // (Compliance was checked on the full reply above: banned words are never
+  // trimmed away silently.)
+  if (!strict && isOverTitleBudget(title, budget)) {
+    const hadCategory = hasSelectedCategorySignal(title, finalCategory);
+    const preserve = (candidate: string) =>
+      keep(candidate) && (!hadCategory || hasSelectedCategorySignal(candidate, finalCategory));
+    let trimmed = trimTitleToBudget(title, budget, preserve);
+    if (!trimmed && lenient) {
+      trimmed = trimTitleDroppingOpening(title, budget, preserve);
+      if (trimmed) repairCost += 1;
+    }
+    if (!trimmed) {
+      return {
+        ok: false,
+        message:
+          titleKeywordViolation(title, style) ||
+          titleLengthViolation(title, style, titleWordCount(title)) ||
+          "title is too long",
+      };
+    }
+    repairs.push(`title trimmed from ${titleWordCount(title)} words to ${titleWordCount(trimmed)}`);
+    title = trimmed;
   }
 
   // Then the voice. An editorial title that names the act, or an explicit title
@@ -1756,35 +2238,91 @@ export function validateSuggestionPayload(
     return { ok: false, message: voice };
   }
 
-  if (options.strictWordCount) {
+  if (strict) {
     const shape = titleLengthViolation(title, style, titleWordCount(title));
     if (shape) return { ok: false, message: shape };
+    if (!isValidDescription(description)) {
+      return { ok: false, message: `the suggestion was incomplete (description: ${DESCRIPTION_COUNT_MESSAGE})` };
+    }
+  } else {
+    if (lenient && !hasSelectedCategorySignal(title, finalCategory)) {
+      const withCategory = addCategoryToTitle(title, known, budget, keep);
+      if (withCategory) {
+        title = withCategory;
+        repairs.push("category added to the title");
+        repairCost += 1;
+      }
+    }
+
+    const shape = titleLengthViolation(title, style, titleWordCount(title));
+    if (shape) {
+      const extended = lenient ? extendShortTitle(title, style, budget, keep, description) : null;
+      if (!extended) return { ok: false, message: shape };
+      repairs.push(`title extended from ${titleWordCount(title)} words to ${titleWordCount(extended)}`);
+      title = extended;
+      repairCost += 1;
+    }
   }
 
-  if (options.strictWordCount && !isValidDescription(validated.data.description)) {
+  if (!hasSelectedCategorySignal(title, finalCategory)) {
+    return { ok: false, message: CATEGORY_SIGNAL_MESSAGE };
+  }
+
+  const titleRepaired = repairCost > 0;
+  const normalized = replaceDescription || !description
+    ? null
+    : normalizeDescription(description, finalCategory, style);
+  if (normalized) {
+    description = normalized.description;
+    if (normalized.adjusted) repairs.push(`description ${normalized.adjusted}`);
+  } else if (lenient && !titleRepaired) {
+    // Only a complete title earns a composed description: a reply missing both
+    // is too far off to publish as the model's work.
+    description = composeCategoryDescription(known, style);
+    repairs.push(replaceDescription ? "unpublishable description replaced" : "description composed in the same voice");
+    repairCost += 1;
+  } else {
     return { ok: false, message: `the suggestion was incomplete (description: ${DESCRIPTION_COUNT_MESSAGE})` };
   }
 
-  const normalized = normalizeDescription(validated.data.description, finalCategory);
-  if (!normalized) {
-    return { ok: false, message: `the suggestion was incomplete (description: ${DESCRIPTION_COUNT_MESSAGE})` };
+  if (!hasSelectedCategorySignal(descriptionLead(description), finalCategory)) {
+    if (!lenient) return { ok: false, message: CATEGORY_SIGNAL_MESSAGE };
+    const prefixed = normalizeDescription(
+      `${descriptionCategoryLead(known, style)} ${description}`,
+      finalCategory,
+      style,
+    );
+    if (!prefixed || !hasSelectedCategorySignal(descriptionLead(prefixed.description), finalCategory)) {
+      return { ok: false, message: CATEGORY_SIGNAL_MESSAGE };
+    }
+    description = prefixed.description;
+    repairs.push("category added to the description");
+    repairCost += 1;
   }
 
-  const descriptionLead = normalized.description.split(/\s+/u).slice(0, 12).join(" ");
-  if (!hasSelectedCategorySignal(title, finalCategory) || !hasSelectedCategorySignal(descriptionLead, finalCategory)) {
-    return { ok: false, message: "title and opening description must use the selected category naturally" };
+  // Whatever was repaired, the published pair must still clear every rule.
+  const finalViolation = copyPolicyViolation(title, description, style);
+  if (finalViolation) {
+    return { ok: false, message: `the suggestion is not publishable (${finalViolation})` };
+  }
+  const finalShape = titleLengthViolation(title, style, titleWordCount(title));
+  if (finalShape) return { ok: false, message: finalShape };
+  if (!isValidDescription(description)) {
+    return { ok: false, message: `the suggestion was incomplete (description: ${DESCRIPTION_COUNT_MESSAGE})` };
   }
 
   return {
     ok: true,
     suggestion: {
       title,
-      description: normalized.description,
+      description,
       tags: normalizeTagsWithFallback(validated.data.tags, finalCategory),
       category: finalCategory,
-      reasoning: normalized.adjusted
-        ? `AI-generated suggestion (description ${normalized.adjusted}), requires human review`
+      reasoning: repairs.length
+        ? `AI-generated suggestion (${repairs.join("; ")}), requires human review`
         : "AI-generated suggestion, requires human review",
     },
+    repairs,
+    repairCost,
   };
 }

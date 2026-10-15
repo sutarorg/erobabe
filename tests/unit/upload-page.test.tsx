@@ -456,7 +456,7 @@ describe("device-only upload queue", () => {
     expect(suggestions).toBe(1);
   });
 
-  it("surfaces why an offline draft replaced the model, so the admin can re-check it", async () => {
+  it("explains a genuine AI outage without calling the draft offline", async () => {
     fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
       if (!options?.body)
         return Response.json({
@@ -475,6 +475,7 @@ describe("device-only upload queue", () => {
           source: "offline",
           warning:
             "The model declined to produce a suggestion for this file.",
+          warningCode: "bad_output",
         });
       return Response.json({
         uploadUrl: "https://storage.example.com/signed",
@@ -486,12 +487,94 @@ describe("device-only upload queue", () => {
 
     await select();
     await waitFor(() =>
-      expect(screen.getByText(/Written offline, not by the model/)).toBeInTheDocument(),
+      expect(screen.getByText(/AI copy unavailable/)).toBeInTheDocument(),
     );
     expect(screen.getByText(/declined to produce a suggestion/)).toBeInTheDocument();
+    expect(screen.getByText(/press Generate explicit title to try the AI again/)).toBeInTheDocument();
+    expect(screen.queryByText(/Written offline|offline/i)).toBeNull();
     expect(
       screen.getByDisplayValue(/My Amateur Girlfriend Grabs My Cock For A Raw Fuck On Cam/),
     ).toBeInTheDocument();
+  });
+
+  describe("asking the metadata route again before drafting in the browser", () => {
+    const aiDraft = {
+      suggestion: {
+        title: "My Amateur Girlfriend Rides My Cock Raw On The Couch",
+        description:
+          "Amateur couch fuck filmed at home: she rides my cock raw, switches to doggy style and finishes me on camera. 18+ adults only.",
+        tags: ["amateur"],
+        category: "Category one",
+      },
+      source: "ai",
+      style: "explicit",
+    };
+
+    function routeAnswering(...replies: Array<() => Response | Promise<Response>>) {
+      const calls: number[] = [];
+      fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+        if (!options?.body)
+          return Response.json({
+            policy: { mimeTypes: ["video/mp4"], concurrency: 4, headers: {} },
+            sessions: [],
+          });
+        if (url.endsWith("/api/metadata/suggest")) {
+          calls.push(Date.now());
+          const reply = replies[Math.min(calls.length - 1, replies.length - 1)];
+          return reply();
+        }
+        return Response.json({
+          uploadUrl: "https://storage.example.com/signed",
+          headers: {},
+          videoId: "provider",
+          storagePath: "admin/frame.jpg",
+        });
+      });
+      return calls;
+    }
+
+    it("shows no notice at all when the model's draft is used", async () => {
+      const calls = routeAnswering(() => Response.json(aiDraft));
+      await select();
+      await waitFor(() =>
+        expect(screen.getByDisplayValue(aiDraft.suggestion.title)).toBeInTheDocument(),
+      );
+      expect(calls).toHaveLength(1);
+      expect(screen.queryByText(/AI copy unavailable|offline/i)).toBeNull();
+    });
+
+    it("waits out a rate limit, then uses the model's draft", async () => {
+      const calls = routeAnswering(
+        () =>
+          Response.json(
+            { error: "Too many suggestion requests — try again shortly", retryAfter: 1 },
+            { status: 429, headers: { "Retry-After": "1" } },
+          ),
+        () => Response.json(aiDraft),
+      );
+      await select();
+      await waitFor(
+        () => expect(screen.getByDisplayValue(aiDraft.suggestion.title)).toBeInTheDocument(),
+        { timeout: 4000 },
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls[1] - calls[0]).toBeGreaterThanOrEqual(900);
+      expect(screen.queryByText(/AI copy unavailable|offline/i)).toBeNull();
+    });
+
+    it("retries an unreachable route before composing a draft in the browser", async () => {
+      const calls = routeAnswering(
+        () => Promise.reject(new TypeError("Failed to fetch")),
+        () => Response.json(aiDraft),
+      );
+      await select();
+      await waitFor(
+        () => expect(screen.getByDisplayValue(aiDraft.suggestion.title)).toBeInTheDocument(),
+        { timeout: 4000 },
+      );
+      expect(calls).toHaveLength(2);
+      expect(screen.queryByText(/AI copy unavailable|offline/i)).toBeNull();
+    });
   });
 });
 

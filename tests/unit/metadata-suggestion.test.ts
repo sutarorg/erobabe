@@ -107,6 +107,44 @@ describe("validateSuggestionPayload", () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.suggestion.tags).toEqual(expect.arrayContaining(["mature", "boudoir"]));
   });
+
+  it("never rejects a reply over its tags outside strict validation", () => {
+    // The upload publishes the title and description; tags fall back to the category.
+    for (const tags of [[], Array(12).fill("boudoir"), ["x".repeat(80)]]) {
+      const result = validateSuggestionPayload(modelOutput({ tags }), "Boudoir");
+      expect(result.ok, JSON.stringify(tags)).toBe(true);
+      if (result.ok) expect(result.suggestion.tags.length).toBeGreaterThan(0);
+    }
+    expect(validateSuggestionPayload(modelOutput({ tags: [] }), "Boudoir", { strictWordCount: true }).ok).toBe(false);
+  });
+
+  it("cuts a runaway description instead of rejecting it as too long", () => {
+    const runaway = `A boudoir portrait ${"in soft window light ".repeat(80)}`;
+    expect(runaway.length).toBeGreaterThan(1000);
+    const result = validateSuggestionPayload(modelOutput({ description: runaway }), "Boudoir");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(isValidDescription(result.suggestion.description)).toBe(true);
+  });
+
+  it("cuts an overlong editorial title back to a complete opening", () => {
+    const result = validateSuggestionPayload(
+      modelOutput({ title: "Boudoir Portrait With Silk Robes and Candle Light Through Tall Windows on a Winter Evening" }),
+      "Boudoir",
+    );
+    expect(result).toMatchObject({ ok: true, repairCost: 0 });
+    if (result.ok) {
+      expect(titleWordCount(result.suggestion.title)).toBeLessThanOrEqual(9);
+      expect(result.suggestion.title).toBe("Boudoir Portrait With Silk Robes and Candle Light");
+    }
+    // Strict validation still reports the miss instead of repairing it.
+    const strict = validateSuggestionPayload(
+      modelOutput({ title: "Boudoir Portrait With Silk Robes and Candle Light Through Tall Windows on a Winter Evening" }),
+      "Boudoir",
+      { strictWordCount: true },
+    );
+    expect(strict.ok).toBe(false);
+    if (!strict.ok) expect(strict.message).toMatch(/at most 9 words/);
+  });
 });
 
 describe("description word limits and title prompt", () => {

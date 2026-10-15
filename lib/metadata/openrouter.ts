@@ -14,12 +14,15 @@
 import {
   buildPrompt,
   MAX_DESCRIPTION_WORDS,
+  MAX_MAX_OUTPUT_TOKENS,
   MIN_DESCRIPTION_WORDS,
   parseLooseJson,
+  PROMPT_AVOID_LIMIT,
   redactKeyMaterial,
   resolveTitleStyle,
   suggestionOutputTokens,
   titleBands,
+  titleSearchKey,
   titlesAreTooSimilar,
   validateSuggestionPayload,
   type SuggestMetadataParams,
@@ -37,7 +40,20 @@ import {
 export const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 export const DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v3.2";
 export const REQUEST_TIMEOUT_MS = 45_000;
-export const SUGGESTION_ATTEMPTS = 2;
+export const SUGGESTION_ATTEMPTS = 3;
+/**
+ * Time one suggestion may spend across all attempts when the caller sets no
+ * deadline. It leaves the 60 s metadata route room to answer either way.
+ */
+export const SUGGESTION_BUDGET_MS = 50_000;
+/** An attempt with less time than this left is not started. */
+export const MIN_ATTEMPT_MS = 6_000;
+/**
+ * The most last-resort repairs (see `ValidateOptions.lenient`) a reply may
+ * need and still be published when no attempt passes outright. Beyond this,
+ * little of the model's writing would survive, so the offline composer is used.
+ */
+export const MAX_SALVAGE_REPAIRS = 2;
 
 /** Shown to the admin whenever the server cannot see a key. */
 export const OPENROUTER_NOT_CONFIGURED_MESSAGE =
@@ -210,15 +226,47 @@ async function chatCompletion(prompt: string, model: string, key: string, option
   throw new MetadataError("OpenRouter rejected the request options. Check OPENROUTER_MODEL.", 502, "provider_error");
 }
 
+/** Unique titles in the order given (most relevant first), blanks dropped. */
+function uniqueTitles(titles: readonly string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const raw of titles || []) {
+    const title = String(raw || "").trim();
+    const key = titleSearchKey(title);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(title);
+  }
+  return unique;
+}
+
+function correctionPrompt(failure: string, style: TitleStyle): string {
+  const { words } = titleBands(style);
+  return `\nThe previous suggestion failed validation: ${failure}. Return a corrected JSON object. Keep the admin-selected category as the only content signal and choose a distinctly different angle and word order. ${
+    style === "explicit"
+      ? `Write a ${words.min}-${words.max}-word adult-tube title that names the sex plainly with words like fuck, cock, dick, pussy, ass or blowjob, says who is doing it and where, contains the category word once, and never uses euphemisms or review language. Do not add an age, a family relationship, or anything implying a partner who cannot consent.`
+      : `Use a factual non-graphic ${words.min}-${words.max}-word title.`
+  } Write a category-led description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
+}
+
 /**
  * Asks the model for title, description, tags, and category for one file, in the
  * voice the site publishes (`VIDEO_TITLE_STYLE`, explicit by default: blunt
  * adult titles that name the act, not euphemistic programme notes).
  *
- * Retries once with corrective feedback when the reply is incomplete, off-voice,
- * outside the word limits, empty, truncated, or too similar to a supplied title.
- * Both attempts must satisfy the limits; invalid output is not padded or salvaged,
- * and the caller falls back to the offline explicit composer instead.
+ * Length near-misses are repaired, never rejected: an overlong title is cut at
+ * a clause boundary that keeps the act and the category, and the description
+ * is trimmed or extended into the 20-25 word range. A reply that is still
+ * unusable (unparseable, off-voice, unpublishable, a description fragment, a
+ * repeated title) is retried with corrective feedback, up to
+ * `SUGGESTION_ATTEMPTS` times within the deadline.
+ *
+ * When no attempt passes outright, the best reply that needs at most
+ * `MAX_SALVAGE_REPAIRS` last-resort repairs is published rather than discarded;
+ * only when there is none does the caller fall back to the offline composer.
+ *
+ * Exact repeats are checked against every supplied title; near-duplicates only
+ * against the `PROMPT_AVOID_LIMIT` titles the model was shown.
  */
 export async function suggestVideoMetadata(params: SuggestMetadataParams): Promise<SuggestedMetadata> {
   const key = openRouterApiKey();
@@ -226,29 +274,41 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
 
   const style: TitleStyle = params.style ?? resolveTitleStyle();
   const model = openRouterModelName();
-  const prompt = buildPrompt({ ...params, style });
-  let correction = "";
+  const existing = uniqueTitles(params.existingTitles);
+  const takenKeys = new Set(existing.map(titleSearchKey));
+  const shownToModel = existing.slice(0, PROMPT_AVOID_LIMIT);
+  const prompt = buildPrompt({ ...params, existingTitles: existing, style });
+  const deadline = params.deadline ?? Date.now() + SUGGESTION_BUDGET_MS;
   const baseTokens = suggestionOutputTokens();
+  let correction = "";
   let lastError: MetadataError | null = null;
+  let salvage: { suggestion: SuggestedMetadata; cost: number } | null = null;
 
   for (let attempt = 0; attempt < SUGGESTION_ATTEMPTS; attempt += 1) {
-    const maxTokens = attempt === 0 ? baseTokens : Math.min(baseTokens * 2, 16_384);
+    const remaining = deadline - Date.now();
+    if (remaining < MIN_ATTEMPT_MS) {
+      lastError ??= new MetadataError("OpenRouter did not answer in time. Try again.", 504, "timeout");
+      break;
+    }
+
+    const maxTokens = attempt === 0 ? baseTokens : Math.min(baseTokens * 2, MAX_MAX_OUTPUT_TOKENS);
     let result: ChatResult;
     try {
       result = await chatCompletion(prompt + correction, model, key, {
         maxTokens,
         temperature: attempt === 0 ? 0.9 : 0.75,
+        timeoutMs: Math.min(REQUEST_TIMEOUT_MS, remaining),
       });
     } catch (error: unknown) {
       const mapped =
         error instanceof MetadataError
           ? error
           : new MetadataError("AI metadata failed unexpectedly.", 502, "provider_error");
+      lastError = mapped;
       // Quota, auth, and model errors will not fix themselves on retry.
       if (mapped.code === "quota_exceeded" || mapped.code === "not_configured" || mapped.code === "model_unavailable") {
-        throw mapped;
+        break;
       }
-      lastError = mapped;
       continue;
     }
 
@@ -263,36 +323,53 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
       continue;
     }
 
-
-    // Enforce the same contract on every attempt; never add invented filler.
-    let validation = validateSuggestionPayload(result.text, params.category, {
-      strictWordCount: true,
-      style,
-    });
+    let failure: string;
+    const validation = validateSuggestionPayload(result.text, params.category, { style });
     if (validation.ok) {
-      const suggestion = validation.suggestion;
-      const duplicate = (params.existingTitles || []).some((title) =>
-        titlesAreTooSimilar(suggestion.title, title),
-      );
-      if (!duplicate) return suggestion;
-      validation = { ok: false, message: "title is a near-duplicate of an existing listing" };
+      const title = validation.suggestion.title;
+      if (takenKeys.has(titleSearchKey(title))) {
+        failure = "title duplicates an existing listing";
+      } else if (shownToModel.some((existingTitle) => titlesAreTooSimilar(title, existingTitle))) {
+        failure = "title is a near-duplicate of an existing listing";
+      } else {
+        return validation.suggestion;
+      }
+    } else {
+      failure = validation.message;
     }
 
-    correction = `\nThe previous suggestion failed validation: ${validation.message}. Return a corrected JSON object. Keep the admin-selected category as the only content signal and choose a distinctly different angle and word order. ${
-      style === "explicit"
-        ? `Write a ${titleBands(style).words.min}-${titleBands(style).words.max}-word adult-tube title that names the sex plainly with words like fuck, cock, dick, pussy, ass or blowjob, says who is doing it and where, contains the category word once, and never uses euphemisms or review language. Do not add an age, a family relationship, or anything implying a partner who cannot consent.`
-        : `Use a factual non-graphic ${titleBands(style).words.min}-${titleBands(style).words.max}-word title.`
-    } Write a category-led description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
+    // Keep the best reply a last-resort repair can publish, in case no later
+    // attempt passes outright. An exact repeat is never kept.
+    const repaired = validateSuggestionPayload(result.text, params.category, { style, lenient: true });
+    if (repaired.ok && !takenKeys.has(titleSearchKey(repaired.suggestion.title))) {
+      const nearDuplicate = shownToModel.some((existingTitle) =>
+        titlesAreTooSimilar(repaired.suggestion.title, existingTitle),
+      );
+      const cost = repaired.repairCost + (nearDuplicate ? 1 : 0);
+      if (cost <= MAX_SALVAGE_REPAIRS && (!salvage || cost < salvage.cost)) {
+        const notes = [...repaired.repairs, ...(nearDuplicate ? ["close to a recent title"] : [])];
+        salvage = {
+          cost,
+          suggestion: {
+            ...repaired.suggestion,
+            reasoning: `AI-generated suggestion, kept after attempt ${attempt + 1} failed validation (${failure}; ${notes.join("; ")}), requires human review`,
+          },
+        };
+      }
+    }
+
+    correction = correctionPrompt(failure, style);
     const truncated = result.finishReason === "length" && !parseLooseJson(result.text);
     lastError = new MetadataError(
       truncated
         ? "The suggestion was cut off before it finished."
-        : `The model's suggestion was unusable: ${validation.message}.`,
+        : `The model's suggestion was unusable: ${failure}.`,
       502,
       "bad_output"
     );
   }
 
+  if (salvage) return salvage.suggestion;
   throw lastError ?? new MetadataError("AI metadata failed unexpectedly.", 502, "provider_error");
 }
 

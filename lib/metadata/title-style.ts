@@ -351,14 +351,27 @@ export const NON_NEGOTIABLE_COPY_PATTERNS: readonly RegExp[] = [
 export const GRAPHIC_SEXUAL_COPY =
   /\b(?:cock|pussy|pussies|cunt|dick|penis|shaft|prick|vagina|clitoris|clit|tits?|boobs?|nipples?|sluts?|whores?|bitches|cum(?:ming|shot)?|creampie|blowjobs?|handjobs?|titjobs?|deep[\s-]?throat|fuck(?:s|ed|ing)?|motherfuck\w*|orgasms?|squir(?:t|ted|ting)|ejaculat(?:e|es|ed|ion)|facesitting|analphil(?:ia)?|rim(?:job|ming)?|strapons?|ballbust|footjob)\b/iu;
 
-/** Name of the first breached compliance rule, or `null` when the copy is clean. */
+/** Compliance rules in the order they are checked, each with the patterns that breach it. */
+const COMPLIANCE_RULES: ReadonlyArray<readonly [label: string, patterns: readonly RegExp[]]> = [
+  ["age-ambiguous wording", [AGE_AMBIGUOUS_COPY, AGE_AMBIGUOUS_STEMS]],
+  ["family-role or incest wording", [FAMILY_ROLE_COPY]],
+  ["non-consensual or covert-filming wording", [NON_CONSENT_COPY]],
+  ["an age claim", [AGE_NUMBER_COPY]],
+  ["unlawful content wording", [ILLEGAL_CONTENT_COPY]],
+];
+
+/**
+ * The first compliance rule the text breaks, naming the offending words so a
+ * retry prompt can tell the model exactly what to drop. `null` when clean.
+ */
 export function copyComplianceViolation(text: string): string | null {
   const value = String(text ?? "");
-  if (AGE_AMBIGUOUS_COPY.test(value) || AGE_AMBIGUOUS_STEMS.test(value)) return "age-ambiguous wording";
-  if (FAMILY_ROLE_COPY.test(value)) return "family-role or incest wording";
-  if (NON_CONSENT_COPY.test(value)) return "non-consensual or covert-filming wording";
-  if (AGE_NUMBER_COPY.test(value)) return "an age claim";
-  if (ILLEGAL_CONTENT_COPY.test(value)) return "unlawful content wording";
+  for (const [label, patterns] of COMPLIANCE_RULES) {
+    for (const pattern of patterns) {
+      const match = value.match(pattern);
+      if (match) return `${label} ("${match[0].trim()}")`;
+    }
+  }
   return null;
 }
 

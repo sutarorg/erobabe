@@ -11,10 +11,11 @@ export const maxDuration = 60;
 /**
  * Admin-only category-led AI metadata suggestions (OpenRouter, DeepSeek V3.2 by
  * default). Titles are written in the voice the site publishes — `explicit`
- * unless `VIDEO_TITLE_STYLE` says otherwise — and a model that is unreachable,
- * out of credits, or unwilling to write adults-only copy is answered by the
- * offline composer in the same voice, so the upload queue always gets a
- * publishable title instead of a filename.
+ * unless `VIDEO_TITLE_STYLE` says otherwise. Length near-misses in the model's
+ * reply are repaired rather than rejected (see `suggestVideoMetadata`); only a
+ * model that is unreachable, out of credits, or unwilling to write adults-only
+ * copy is answered by the offline composer in the same voice, so the upload
+ * queue always gets a publishable title instead of a filename.
  *
  * The upload flow can auto-publish after encoding, so the admin should preview
  * generated copy before starting an upload whenever possible.
@@ -38,13 +39,28 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 20;
 const requestLog = new Map<string, number[]>();
 
-function isRateLimited(userId: string): boolean {
+/**
+ * Seconds until this user may ask again, or 0 when the request is allowed (and
+ * counted). Refused requests are not counted, so a client that waits the
+ * advertised `Retry-After` is let through instead of being refused again.
+ */
+function rateLimitRetryAfter(userId: string): number {
   const now = Date.now();
   const entries = (requestLog.get(userId) || []).filter((timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS);
+  if (entries.length >= RATE_LIMIT_MAX) {
+    requestLog.set(userId, entries);
+    return Math.max(1, Math.ceil((entries[0] + RATE_LIMIT_WINDOW_MS - now) / 1000));
+  }
   entries.push(now);
   requestLog.set(userId, entries);
-  return entries.length > RATE_LIMIT_MAX;
+  return 0;
 }
+
+/**
+ * Model attempts must be settled this long after the request arrives, which
+ * leaves the offline composer and the response well inside `maxDuration`.
+ */
+const GENERATION_DEADLINE_MS = 52_000;
 
 const VIDEO_TITLE_PAGE_SIZE = 1000;
 // The video sitemap's current safety ceiling is 45,000 entries; retain a small
@@ -123,6 +139,7 @@ function serializeTitleGeneration<T>(generate: () => Promise<T>): Promise<T> {
 }
 
 export async function POST(req: NextRequest) {
+  const receivedAt = Date.now();
   try {
     const supabase = await createClient();
     const {
@@ -135,8 +152,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    if (isRateLimited(user.id)) {
-      return NextResponse.json({ error: "Too many suggestion requests — try again shortly" }, { status: 429 });
+    const retryAfter = rateLimitRetryAfter(user.id);
+    if (retryAfter > 0) {
+      return NextResponse.json(
+        { error: "Too many suggestion requests — try again shortly", retryAfter },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } },
+      );
     }
 
     const rawBody = await req.text().catch(() => "");
@@ -159,10 +180,21 @@ export async function POST(req: NextRequest) {
 
     try {
       const outcome = await serializeTitleGeneration(async () => {
-        const catalogTitles = await loadCatalogTitles(supabase);
+        // The catalog only feeds the duplicate checks, so a database hiccup must
+        // not cost the upload its AI copy.
+        const catalogTitles = await loadCatalogTitles(supabase).catch((error: unknown) => {
+          console.warn(
+            "[metadata/suggest] Catalog titles unavailable; checking the upload batch and recent titles only:",
+            String((error as { message?: unknown } | null)?.message ?? error).slice(0, 200),
+          );
+          return [] as string[];
+        });
+        // Most relevant first: this upload batch (the client sends it oldest
+        // first), then titles reserved on this instance, then the catalog, newest
+        // first. The model sees the head of this list as its avoid list.
         const seenTitles = new Set<string>();
         const existingTitles = [
-          ...parsed.data.existingTitles,
+          ...[...parsed.data.existingTitles].reverse(),
           ...recentReservedTitles(),
           ...catalogTitles,
         ].filter((title) => {
@@ -178,24 +210,41 @@ export async function POST(req: NextRequest) {
             category: parsed.data.category,
             existingTitles,
             style,
+            deadline: receivedAt + GENERATION_DEADLINE_MS,
           });
           reserveTitle(draft.title);
-          return { suggestion: draft, source: "ai" as const, warning: undefined as string | undefined };
+          return {
+            suggestion: draft,
+            source: "ai" as const,
+            warning: undefined as string | undefined,
+            warningCode: undefined as string | undefined,
+          };
         } catch (error: unknown) {
           if (!(error instanceof MetadataError)) throw error;
           // A refused or unreachable model must not put a filename on a listing.
           // The deterministic composer writes the same voice offline, and the
           // admin is told why the model was not used.
-          const draft = generateCategoryFallbackMetadata("", parsed.data.category, existingTitles, style);
+          // The composer reads recency from the end of its list.
+          const draft = generateCategoryFallbackMetadata(
+            "",
+            parsed.data.category,
+            [...existingTitles].reverse(),
+            style,
+          );
           reserveTitle(draft.title);
-          return { suggestion: draft, source: "offline" as const, warning: error.message };
+          return {
+            suggestion: draft,
+            source: "offline" as const,
+            warning: error.message,
+            warningCode: error.code,
+          };
         }
       });
       return NextResponse.json({
         suggestion: outcome.suggestion,
         source: outcome.source,
         style,
-        ...(outcome.warning ? { warning: outcome.warning } : {}),
+        ...(outcome.warning ? { warning: outcome.warning, warningCode: outcome.warningCode } : {}),
         note:
           outcome.source === "offline"
             ? "Category-led offline draft in the site's title voice, checked against catalog titles; the model was not used. Human review against the footage is recommended before starting an upload because completion auto-publishes."
