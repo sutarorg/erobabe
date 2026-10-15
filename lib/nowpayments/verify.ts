@@ -2,7 +2,6 @@ import { createServiceClient } from "@/lib/supabase/server";
 import {
   compareCryptoAmounts,
   getNowpaymentsPayment,
-  isSuccessfulNowpaymentsStatus,
   isTerminalNowpaymentsStatus,
   mapNowpaymentsStatus,
   normalizeNowpaymentsPayload,
@@ -405,9 +404,12 @@ export async function verifyAndProcessNowpaymentsIpn(
     providerPayment.payAddress !== payment.payment_address ||
     providerPayment.priceCurrency?.toLowerCase() !== "usd" ||
     !providerPayment.priceAmount ||
-    !Number.isFinite(Number(providerPayment.priceAmount)) ||
-    Math.round(Number(providerPayment.priceAmount) * 100) !==
-      Number(payment.amount_cents)
+    providerPayment.priceAmount.length > 100 ||
+    compareCryptoAmounts(
+      providerPayment.priceAmount,
+      (Number(payment.amount_cents) / 100).toFixed(2),
+      0,
+    ) !== "match"
   ) {
     return {
       ok: false,
@@ -419,52 +421,9 @@ export async function verifyAndProcessNowpaymentsIpn(
     providerPayment.providerStatus || "",
   ).toLowerCase();
 
-  // NOWPayments' record — not the IPN body — decides the outcome. A `finished`
-  // claim the API does not confirm is recorded, never fulfilled.
-  if (
-    providerStatus === "finished" &&
-    !isSuccessfulNowpaymentsStatus(providerReportedStatus)
-  ) {
-    await recordPaymentEvent(
-      supabase,
-      payment.id,
-      "ipn_unconfirmed_by_provider",
-      {
-        claimed_status: providerStatus,
-        provider_status: providerReportedStatus,
-        ipn: safeIpn,
-      },
-    );
-    const mapped =
-      mapNowpaymentsStatus(providerReportedStatus) || currentStatus;
-    const { error: updateError } = await supabase
-      .from("payments")
-      .update({
-        provider_status: providerReportedStatus,
-        provider_response: {
-          ipn: safeIpn,
-          provider_status: providerReportedStatus,
-          corroborated: true,
-        },
-        ...(!isTerminalInternalStatus(currentStatus) ? { status: mapped } : {}),
-      })
-      .eq("id", payment.id)
-      .in("status", [
-        "pending",
-        "awaiting_confirmation",
-        "partially_confirmed",
-      ]);
-    if (updateError) throw updateError;
-    return {
-      ok: true,
-      payment,
-      status: mapped,
-      providerStatus: providerReportedStatus,
-      verified: false,
-      providerPayment,
-    };
-  }
-
+  // Never apply a terminal state from a second, disagreeing snapshot with
+  // a standalone payment UPDATE: that could strand its invoice/campaign.
+  // Ask for a fresh reconciliation; only the settlement RPC writes outcomes.
   if (providerReportedStatus !== providerStatus) {
     return {
       ok: false,
@@ -489,11 +448,12 @@ export async function verifyAndProcessNowpaymentsIpn(
   }
 
   // `finished` + corroborated: verify the actually paid crypto amount with
-  // integer math before fulfillment. Prefer `actually_paid`, fall back to the
-  // required `pay_amount` when the provider omits it.
+  // integer math before fulfillment. Missing actually_paid never falls back
+  // to the quote. Automatic fulfillment uses zero tolerance, not the utility's
+  // legacy default tolerance: any shortfall/excess stays in reconciliation.
   const received = providerPayment.actuallyPaid;
   const expected = payment.expected_amount as string | null;
-  const verdict = compareCryptoAmounts(received, expected);
+  const verdict = compareCryptoAmounts(received, expected, 0);
 
   if (verdict === "unknown") {
     await recordPaymentEvent(supabase, payment.id, "amount_unverified", {

@@ -357,8 +357,8 @@ describe("POST /api/nowpayments/ipn — correlation and verification", () => {
 
     const response = await POST(signedRequest(baseIpn()));
 
-    expect(response.status).toBe(200);
-    expect(fake.db.payments[0].status).not.toBe("confirmed");
+    expect(response.status).toBe(503);
+    expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
     expect(fake.db.invoices[0].status).toBe("pending");
     expect(
       fake.db.payment_events.some((event) => event.event_type === "confirmed"),
@@ -579,6 +579,42 @@ describe("strict provider evidence", () => {
       const response = await POST(signedRequest(baseIpn()));
       expect(response.status).toBe(400);
       expect(fake.db.payments[0].status).not.toBe("confirmed");
+      expect(fake.db.invoices[0].status).toBe("pending");
+      expect(fake.db.campaigns[0].status).toBe("pending_payment");
+    },
+  );
+});
+
+describe("terminal snapshots never bypass transactional settlement", () => {
+  it.each(["failed", "expired", "refunded"])(
+    "does not strand invoices when a finished IPN disagrees with provider %s",
+    async (status) => {
+      const fake = seedPayment();
+      stubProvider(jsonResponse(providerRecord({ payment_status: status })));
+      const response = await POST(signedRequest(baseIpn()));
+      expect(response.status).toBe(503);
+      expect(fake.db.payments[0].status).toBe("awaiting_confirmation");
+      expect(fake.db.invoices[0].status).toBe("pending");
+      expect(fake.db.campaigns[0].status).toBe("pending_payment");
+      expect(
+        (await POST(signedRequest(baseIpn({ payment_status: status })))).status,
+      ).toBe(200);
+      expect(fake.db.payments[0].status).toBe(status);
+      expect(fake.db.invoices[0].status).toBe(status);
+    },
+  );
+  it.each([
+    ["98.9", "underpaid"],
+    ["100.1", "overpaid"],
+  ])(
+    "does not silently forgive a near-miss %s amount",
+    async (amount, status) => {
+      const fake = seedPayment();
+      stubProvider(jsonResponse(providerRecord({ actually_paid: amount })));
+      expect(
+        (await POST(signedRequest(baseIpn({ actually_paid: amount })))).status,
+      ).toBe(200);
+      expect(fake.db.payments[0].status).toBe(status);
       expect(fake.db.invoices[0].status).toBe("pending");
       expect(fake.db.campaigns[0].status).toBe("pending_payment");
     },
