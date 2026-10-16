@@ -42,9 +42,12 @@ Open http://localhost:3000
 Next.js, Vercel functions or Supabase Storage. The optional `BUNNY_UPLOAD_MAX_BYTES` sets an operator upload budget; without it there is no application-level video
 size cap, and four files upload in parallel with per-file progress. Bunny encoding
 runs asynchronously: each accepted upload appears immediately in `/admin/videos`
-with status **Encoding**, while upload workers continue to the next files. The
-library page reconciles encoding in the background and moves completed media to private
-review. An active administrator must record rights/consent/moderation evidence and explicitly publish. Cancellation pauses transfer; reselecting the same source
+with status **Encoding**, while upload workers continue to the next files. Closing
+the tab does not stop it — a scheduled sweep (`/api/cron/bunny-publish`, armed by
+`CRON_SECRET` plus the `Publish finished uploads` GitHub Actions workflow) reads
+Bunny's status server-side and publishes
+each video as soon as encoding finishes, with no browser involved. Cancellation
+pauses transfer; reselecting the same source
 recovers its server session and resumable upload identity.
 
 Ten actual frames throughout each clip are scored for detail, contrast, colour,
@@ -58,6 +61,11 @@ thumbnail, atomic session/video/job completion, and explicit rights/moderation a
 stored library ID/GUID at `iframe.mediadelivery.net`. Existing direct-media playback
 and administrative tools remain; retired hosted records are unpublished and marked
 **requiring re-upload**, with metadata preserved. No media migration is claimed.
+
+AI titles and descriptions come from OpenRouter only — never composed offline.
+One request drafts several titles at a time and all waiting queue entries share
+one retry loop, so a batch upload neither exhausts the request budget nor stalls
+on rate limits; a provider outage simply keeps retrying until the model answers.
 
 Apply the forward migrations `00000000000012_bunny_stream_uploads.sql` and
 `00000000000013_bunny_background_encoding.sql` after existing migrations; do not

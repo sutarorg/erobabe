@@ -48,9 +48,19 @@ const PARALLEL_UPLOADS = 4;
 const MAX_METADATA_RETRY_WAIT_MS = 30_000;
 /** Shortest wait before the first retry; backs off from here up to the cap above. */
 const MIN_METADATA_RETRY_WAIT_MS = 1500;
+/**
+ * Drafts asked for per request. A batch upload needs one title per file, and
+ * each file used to cost a whole request — which is how a long queue ran into
+ * the route's per-administrator rate limit and sat there reporting "too many
+ * metadata requests" while nothing was wrong with the model.
+ */
+const DRAFTS_PER_REQUEST = 4;
+
+type Draft = { title: string; description: string };
 
 type MetadataResponse = {
   suggestion?: { title?: unknown; description?: unknown };
+  suggestions?: Array<{ title?: unknown; description?: unknown }>;
   source?: unknown;
   warning?: unknown;
   error?: unknown;
@@ -76,12 +86,31 @@ function metadataRetryDelay(response: Response | null, attempt: number): number 
 
 function describeMetadataFailure(response: Response | null, data: MetadataResponse | null): string {
   if (!response) return "the metadata service could not be reached.";
-  if (response.status === 429) return "too many metadata requests in a row.";
   if (response.status === 401 || response.status === 403)
     return "the admin session was not accepted. Sign in again, then this will retry automatically.";
-  if (response.ok) return "the metadata service returned no draft.";
+  // The route's own message is the useful one here: "too many requests in a
+  // row" hides whether the limit was ours or OpenRouter's own quota.
   const message = typeof data?.error === "string" ? data.error.trim().slice(0, 160) : "";
-  return `the metadata service failed (${message || `HTTP ${response.status}`}).`;
+  if (message) return `${message.charAt(0).toLowerCase()}${message.slice(1)}`;
+  if (response.status === 429) return "too many metadata requests in a row.";
+  if (response.ok) return "the metadata service returned no draft.";
+  return `the metadata service failed (HTTP ${response.status}).`;
+}
+
+/** Every draft the route returned, in either response shape. */
+function readDrafts(data: MetadataResponse | null): Draft[] {
+  const raw =
+    (Array.isArray(data?.suggestions) && data.suggestions.length
+      ? data.suggestions
+      : data?.suggestion
+        ? [data.suggestion]
+        : []) as Array<{ title?: unknown; description?: unknown }>;
+  return raw
+    .map((entry) => ({
+      title: String(entry?.title ?? "").trim(),
+      description: String(entry?.description ?? "").trim(),
+    }))
+    .filter((draft) => draft.title);
 }
 
 /** Shown on the queue entry while AI title generation is being retried. */
@@ -127,11 +156,6 @@ export default function UploadPage() {
     [],
   );
   const [categoryId, setCategoryId] = useState("");
-  // Read inside a retry loop that may still be running after the admin picks a
-  // different category, so a stale AI draft for the old category is never
-  // applied once a newer request for the same entry is already in flight.
-  const latestCategoryId = useRef(categoryId);
-  latestCategoryId.current = categoryId;
   const [items, setItems] = useState<Item[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -144,13 +168,22 @@ export default function UploadPage() {
   const controllers = useRef(new Map<string, AbortController>());
   const encodingWatchers = useRef(new Map<string, AbortController>());
   const usedTitles = useRef(new Set<string>());
-  // AI copy runs one-at-a-time so concurrent upload workers share the latest
-  // generated title in their near-duplicate exclusion list.
-  const metadataQueue = useRef<Promise<void>>(Promise.resolve());
+  /**
+   * Drafts the model has already written, per category. One request fills
+   * several, and every queue entry draws from the same pool, so a batch of
+   * files costs a handful of requests instead of one each.
+   */
+  const draftPool = useRef(new Map<string, Draft[]>());
+  /**
+   * The single in-flight refill per category. Retry storms are the reason
+   * uploads used to stall on "too many metadata requests": four upload workers,
+   * each retrying its own title, turned one provider outage into a rate-limit
+   * lockout. Now one loop retries once for everybody waiting.
+   */
+  const draftFill = useRef(new Map<string, Promise<void>>());
   const alive = useRef(true);
   const busy = useRef(false);
   const decodeQueue = useRef<Promise<unknown>>(Promise.resolve());
-  const generatingIds = useRef(new Set<string>());
 
   function prepareThumbnail(file: File) {
     const result = decodeQueue.current.then(() =>
@@ -228,39 +261,14 @@ export default function UploadPage() {
    * Draft listing copy for every queue entry the moment its category is known,
    * so an admin who picks files first and a category second never sees a
    * filename in a title field. Entries whose title was edited by hand are left
-   * alone, and `generatingIds` keeps one in-flight request per entry.
+   * alone.
    */
   useEffect(() => {
     if (!categoryId) return;
-    for (const item of current.current) {
-      if (
-        item.categoryId ||
-        item.userEditedTitle ||
-        item.aiGeneratedForCategory === categoryId ||
-        ["Completed", "Encoding"].includes(item.phase) ||
-        generatingIds.current.has(item.id)
-      )
-        continue;
-      generatingIds.current.add(item.id);
-      void generateAiMetadataForCategory(categoryId, item.id)
-        .then((meta) => {
-          if (
-            !alive.current ||
-            !current.current.some((i) => i.id === item.id) ||
-            latestCategoryId.current !== categoryId
-          )
-            return;
-          patch(item.id, {
-            title: meta.title,
-            description: meta.description,
-            aiGeneratedForCategory: categoryId,
-            warning: undefined,
-          });
-        })
-        .finally(() => generatingIds.current.delete(item.id));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the queue is read
-    // from `current.current`; re-running on every item patch would restart work.
+    void prefetchDrafts(categoryId);
+    // The queue is read from `current.current`, so re-running on every item
+    // patch would restart the draft refill; the category alone is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categoryId]);
 
   useEffect(() => {
@@ -273,75 +281,195 @@ export default function UploadPage() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [running]);
 
-  /**
-   * One OpenRouter request for a category draft. Upload workers run in
-   * parallel, but the actual network attempts are serialized through
-   * `metadataQueue` so concurrent entries see each other's latest title in
-   * their near-duplicate exclusion list; the wait between retries happens
-   * outside that lock so one entry's outage never stalls every other entry.
-   */
-  function requestMetadataOnce(
-    categoryLabel: string,
-    existingList: string[],
-  ): Promise<{ response: Response | null; data: MetadataResponse | null }> {
-    const run = async () => {
-      let response: Response | null = null;
-      let data: MetadataResponse | null = null;
-      try {
-        response = await fetch("/api/metadata/suggest", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          // Deliberately omit filename, default title, and tags. Category drives
-          // generation; the title list is used only to prevent repetition.
-          body: JSON.stringify({ category: categoryLabel, existingTitles: existingList }),
-          cache: "no-store",
-        });
-        data = await response.json().catch(() => null);
-      } catch {
-        // An unreachable route is retried by the caller.
-      }
-      return { response, data };
-    };
-    const queued = metadataQueue.current.then(run, run);
-    metadataQueue.current = queued.then(() => undefined, () => undefined);
-    return queued;
+  /** Pooled drafts for a category, created on first use. */
+  function poolFor(targetCategoryId: string): Draft[] {
+    let pool = draftPool.current.get(targetCategoryId);
+    if (!pool) draftPool.current.set(targetCategoryId, (pool = []));
+    return pool;
+  }
+
+  /** Queue entries still waiting for a draft written for this category. */
+  function awaitingDraft(targetCategoryId: string): Item[] {
+    return current.current.filter(
+      (item) =>
+        !item.userEditedTitle &&
+        !item.categoryId &&
+        item.aiGeneratedForCategory !== targetCategoryId &&
+        !["Completed", "Encoding"].includes(item.phase),
+    );
   }
 
   /**
-   * One draft in the site's publishing voice (blunt adult copy by default),
-   * written only by OpenRouter — never composed offline in the browser. A
-   * request that is unreachable, rate limited, or otherwise fails is retried
-   * with backoff indefinitely (while this tab stays open) instead of falling
-   * back to a locally drafted title, so every published title is the model's
-   * own work. `itemId`, when given, keeps that queue entry's warning current
-   * while a retry is pending.
+   * Hands pooled drafts to the queue entries that are waiting for them, so the
+   * admin sees the real listing copy before pressing "Start uploads".
    */
-  async function generateAiMetadataForCategory(
+  function applyPooledDrafts(targetCategoryId: string) {
+    const pool = poolFor(targetCategoryId);
+    for (const item of awaitingDraft(targetCategoryId)) {
+      const draft = pool.shift();
+      if (!draft) return;
+      usedTitles.current.add(draft.title);
+      patch(item.id, {
+        title: draft.title,
+        description: draft.description,
+        aiGeneratedForCategory: targetCategoryId,
+        warning: undefined,
+      });
+    }
+  }
+
+  /**
+   * One OpenRouter request, asking for several drafts at once. The wait between
+   * retries happens in the caller, and only one request per category is ever in
+   * flight, so concurrent entries also see each other's titles in their
+   * near-duplicate exclusion list.
+   */
+  async function requestMetadataOnce(
+    categoryLabel: string,
+    existingList: string[],
+    count: number,
+  ): Promise<{ response: Response | null; data: MetadataResponse | null }> {
+    let response: Response | null = null;
+    let data: MetadataResponse | null = null;
+    try {
+      response = await fetch("/api/metadata/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Deliberately omit filename, default title, and tags. Category drives
+        // generation; the title list is used only to prevent repetition.
+        body: JSON.stringify({
+          category: categoryLabel,
+          existingTitles: existingList,
+          count,
+        }),
+        cache: "no-store",
+      });
+      data = await response.json().catch(() => null);
+    } catch {
+      // An unreachable route is retried by the caller.
+    }
+    return { response, data };
+  }
+
+  /** Every entry that needs copy has one, and the pool covers `demand` more. */
+  function draftsReady(targetCategoryId: string, demand: number): boolean {
+    return (
+      awaitingDraft(targetCategoryId).length === 0 &&
+      poolFor(targetCategoryId).length >= demand
+    );
+  }
+
+  /**
+   * The single refill loop for a category: ask for up to `DRAFTS_PER_REQUEST`
+   * titles, hand them to the entries waiting for them, and on failure back off
+   * and ask again — indefinitely, while this tab stays open, rather than
+   * falling back to a locally drafted title. Every published title is the
+   * model's own work.
+   */
+  async function runDraftFill(
+    targetCategoryId: string,
+    demand: number,
+  ): Promise<void> {
+    const categoryLabel =
+      categories.find((c) => c.id === targetCategoryId)?.label || "Amateur";
+    try {
+      for (let attempt = 0; alive.current; attempt += 1) {
+        if (draftsReady(targetCategoryId, demand)) return;
+        const wanted = Math.min(
+          DRAFTS_PER_REQUEST,
+          Math.max(
+            awaitingDraft(targetCategoryId).length +
+              demand -
+              poolFor(targetCategoryId).length,
+            1,
+          ),
+        );
+        const { response, data } = await requestMetadataOnce(
+          categoryLabel,
+          Array.from(usedTitles.current).slice(-100),
+          wanted,
+        );
+        const drafts = response?.ok ? readDrafts(data) : [];
+        if (drafts.length) {
+          poolFor(targetCategoryId).push(...drafts);
+          drafts.forEach((draft) => usedTitles.current.add(draft.title));
+          applyPooledDrafts(targetCategoryId);
+          continue;
+        }
+        const reason = describeMetadataFailure(response, data);
+        for (const item of awaitingDraft(targetCategoryId))
+          patch(item.id, { warning: aiRetryingNotice(reason) });
+        await new Promise((resolve) =>
+          setTimeout(resolve, metadataRetryDelay(response, attempt)),
+        );
+      }
+      // The component unmounted mid-retry; the caller never sees this resolve.
+      if (!alive.current) await new Promise<void>(() => undefined);
+    } finally {
+      draftFill.current.delete(targetCategoryId);
+    }
+  }
+
+  /**
+   * Makes sure every queue entry waiting on this category has a draft, plus
+   * `extra` pooled drafts for a caller that wants one of its own.
+   *
+   * Everyone waiting on this category shares one loop: a rate limit or a
+   * provider outage costs a single request per round instead of one per queue
+   * entry, which is what used to walk a batch of files straight into the
+   * route's request budget and stall it on "too many metadata requests".
+   */
+  async function ensureDrafts(
+    targetCategoryId: string,
+    extra = 0,
+  ): Promise<void> {
+    for (;;) {
+      if (draftsReady(targetCategoryId, extra)) return;
+      const running = draftFill.current.get(targetCategoryId);
+      if (running) {
+        await running;
+        // The refill finished with its own demand; re-check before starting
+        // another one, so a caller is never left waiting on someone else's.
+        continue;
+      }
+      await runDraftFill(targetCategoryId, extra);
+    }
+  }
+
+  /** Warms copy for every entry still waiting on this category, in the background. */
+  function prefetchDrafts(targetCategoryId: string) {
+    void ensureDrafts(targetCategoryId);
+  }
+
+  /**
+   * One title and description for a single entry, written by OpenRouter for the
+   * selected category. The shared refill normally hands the draft straight to
+   * that entry; the pool covers entries the refill cannot assign (a hand-edited
+   * title being replaced, or one that left the queue while it waited).
+   */
+  async function takeDraft(
     targetCategoryId: string,
     itemId?: string,
     signal?: AbortSignal,
-  ): Promise<{ title: string; description: string }> {
-    const categoryLabel =
-      categories.find((c) => c.id === targetCategoryId)?.label || "Amateur";
-    const existingList = Array.from(usedTitles.current).slice(-100);
-    for (let attempt = 0; alive.current; attempt += 1) {
-      if (signal?.aborted) throw new UploadAbortedError();
-      const { response, data } = await requestMetadataOnce(categoryLabel, existingList);
-      if (response?.ok && data?.suggestion?.title) {
-        const nextTitle = String(data.suggestion.title).trim();
-        const nextDescription = String(data.suggestion.description || "").trim();
-        usedTitles.current.add(nextTitle);
-        if (itemId) patch(itemId, { warning: undefined });
-        return { title: nextTitle, description: nextDescription };
-      }
-      const failure = describeMetadataFailure(response, data);
-      if (itemId && alive.current && current.current.some((i) => i.id === itemId)) {
-        patch(itemId, { warning: aiRetryingNotice(failure) });
-      }
-      await new Promise((resolve) => setTimeout(resolve, metadataRetryDelay(response, attempt)));
-    }
-    // The component unmounted mid-retry; the caller never sees this resolve.
-    return new Promise<{ title: string; description: string }>(() => undefined);
+  ): Promise<Draft> {
+    if (signal?.aborted) throw new UploadAbortedError();
+    await ensureDrafts(targetCategoryId, 1);
+    if (signal?.aborted) throw new UploadAbortedError();
+    const assigned = itemId
+      ? current.current.find((item) => item.id === itemId)
+      : undefined;
+    const draft =
+      assigned &&
+      !assigned.userEditedTitle &&
+      assigned.aiGeneratedForCategory === targetCategoryId
+        ? { title: assigned.title, description: assigned.description || "" }
+        : poolFor(targetCategoryId).shift();
+    if (!draft)
+      throw new Error(
+        "OpenRouter has not written a title for this category yet. Retry once it answers.",
+      );
+    if (itemId) patch(itemId, { warning: undefined });
+    return draft;
   }
 
   async function add(files: File[]) {
@@ -397,30 +525,12 @@ export default function UploadPage() {
             : "Thumbnail generation failed. Retry with the same browser-decodable source file.",
       });
       // Draft the listing copy while the admin is still picking files, so the
-      // queue shows a publishable title instead of `IMG_2041_final_v2`. Upload
-      // start regenerates only when the category changed in the meantime. This
-      // runs in the background (not awaited) so one entry retrying against a
-      // slow or failing model never delays thumbnails for files queued after it.
-      if (categoryId && !item.userEditedTitle) {
-        const requestedFor = categoryId;
-        generatingIds.current.add(item.id);
-        void generateAiMetadataForCategory(requestedFor, item.id)
-          .then((meta) => {
-            if (
-              !alive.current ||
-              !current.current.some((i) => i.id === item.id) ||
-              latestCategoryId.current !== requestedFor
-            )
-              return;
-            patch(item.id, {
-              title: meta.title,
-              description: meta.description,
-              aiGeneratedForCategory: requestedFor,
-              warning: undefined,
-            });
-          })
-          .finally(() => generatingIds.current.delete(item.id));
-      }
+      // queue shows a publishable title instead of `IMG_2041_final_v2`. The
+      // pool is shared, so files queued behind this one wait for the same
+      // request instead of each starting their own. This runs in the background
+      // (not awaited) so a slow or failing model never delays thumbnails for
+      // files queued after it.
+      if (categoryId && !item.userEditedTitle) prefetchDrafts(categoryId);
     }
   }
 
@@ -527,7 +637,9 @@ export default function UploadPage() {
           !latest.userEditedTitle &&
           latest.aiGeneratedForCategory !== targetCategoryId
         ) {
-          const aiMeta = await generateAiMetadataForCategory(
+          // Nothing pooled for this file yet: take one now (waiting on the
+          // shared retry loop rather than starting a second one).
+          const aiMeta = await takeDraft(
             targetCategoryId,
             sessionId,
             controller.signal,
@@ -722,7 +834,8 @@ export default function UploadPage() {
             Local files → Bunny Stream. AI title and description drafts use the
             selected category only, not the filename or default title. Generate
             and review the copy before starting when possible; videos publish
-            automatically after encoding, and no search ranking is guaranteed.
+            automatically after encoding — including while this tab is closed —
+            and no search ranking is guaranteed.
           </p>
         </div>
         <Link href="/admin/videos" className="text-sm text-accent">
@@ -843,7 +956,9 @@ export default function UploadPage() {
           {completed} published ·{" "}
           {items.filter((i) => i.phase === "Encoding").length} encoding ·{" "}
           {failed} failed. Uploads continue while Bunny encodes in the
-          background and publishes automatically.
+          background and publish automatically. Closing this tab is safe once
+          the bytes are transferred: the publish sweep finishes the job without
+          a browser, and this page picks the result up when you come back.
         </p>
         {!items.length && (
           <p className="rounded-xl border border-line p-6 text-center text-sm text-ink-3">
@@ -896,7 +1011,7 @@ export default function UploadPage() {
                       <button
                         type="button"
                         onClick={async () => {
-                          const meta = await generateAiMetadataForCategory(categoryId, item.id);
+                          const meta = await takeDraft(categoryId, item.id);
                           patch(item.id, {
                             title: meta.title,
                             description: meta.description,

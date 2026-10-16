@@ -42,6 +42,13 @@ import { isValidDescription, PROMPT_AVOID_LIMIT, titlesAreTooSimilar } from "@/l
 
 const SUGGEST_URL = "https://erobabe.vercel.app/api/metadata/suggest";
 
+/**
+ * How many requests a rate-limit test may make before giving up on seeing a
+ * refusal. The budget itself is an operator decision, so the tests exercise the
+ * behaviour rather than restate the number.
+ */
+const BUDGET_PROBE = 120;
+
 const fetchMock = vi.fn();
 
 function modelOutput(overrides: Record<string, unknown> = {}) {
@@ -753,11 +760,22 @@ describe("POST /api/metadata/suggest", () => {
 
   it("rate-limits repeated requests and says when to try again", async () => {
     seedAuth("admin-5");
-    fetchMock.mockImplementation(async () => chatReply(modelOutput()));
+    // A distinct title per call: with no offline composer to diversify a stuck
+    // reply, the model has to be the one supplying fresh titles.
+    let counter = 0;
+    fetchMock.mockImplementation(async () => {
+      counter += 1;
+      return chatReply(modelOutput({ title: `Amateur Lace and Linen Number ${counter}` }));
+    });
+    let allowed = 0;
     let last: Response | null = null;
-    for (let i = 0; i < 25; i += 1) {
+    // Ask until the route refuses: the exact budget is an operator decision,
+    // but it must cover a batch upload drafting several titles per call.
+    for (let i = 0; i < BUDGET_PROBE && last?.status !== 429; i += 1) {
       last = await suggest(suggestRequest({ fileName: `clip-${i}.mp4` }));
+      if (last.status === 200) allowed += 1;
     }
+    expect(allowed).toBeGreaterThanOrEqual(20);
     expect(last?.status).toBe(429);
     const retryAfter = Number(last?.headers.get("Retry-After"));
     expect(retryAfter).toBeGreaterThanOrEqual(1);
@@ -769,24 +787,77 @@ describe("POST /api/metadata/suggest", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       seedAuth("admin-retry-after");
-      // A distinct title per call: with no offline composer to diversify a
-      // stuck reply, the AI model has to be the one supplying fresh titles.
       let counter = 0;
       fetchMock.mockImplementation(async () => {
         counter += 1;
         return chatReply(modelOutput({ title: `Amateur Lace and Linen Number ${counter}` }));
       });
-      for (let i = 0; i < 20; i += 1) {
-        expect((await suggest(suggestRequest({ category: "Amateur" }))).status).toBe(200);
+      let refused: Response | null = null;
+      for (let i = 0; i < BUDGET_PROBE && !refused; i += 1) {
+        const response = await suggest(suggestRequest({ category: "Amateur" }));
+        if (response.status === 429) {
+          refused = response;
+          break;
+        }
+        expect(response.status).toBe(200);
       }
-      const refused = await suggest(suggestRequest({ category: "Amateur" }));
-      expect(refused.status).toBe(429);
+      expect(refused).not.toBeNull();
       // Refused requests are not counted, so waiting the advertised time is enough.
-      vi.setSystemTime(Date.now() + Number(refused.headers.get("Retry-After")) * 1000);
+      vi.setSystemTime(Date.now() + Number(refused!.headers.get("Retry-After")) * 1000);
       expect((await suggest(suggestRequest({ category: "Amateur" }))).status).toBe(200);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("writes a whole batch of drafts in one request", async () => {
+    seedAuth("admin-batch");
+    let counter = 0;
+    // A title family nothing else in this file uses: titles reserved by the
+    // tests above are still in the avoid list, and a near-duplicate there would
+    // make the model answer something else entirely.
+    fetchMock.mockImplementation(async () => {
+      counter += 1;
+      return chatReply(modelOutput({ title: `Slow Motion Studio Portraits Number ${counter}` }));
+    });
+
+    const response = await suggest(suggestRequest({ category: "Amateur", count: 3 }));
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    // Three different titles from one request, instead of three requests.
+    expect(json.suggestions).toHaveLength(3);
+    expect(json.suggestion.title).toBe(json.suggestions[0].title);
+    expect(new Set(json.suggestions.map((s: { title: string }) => s.title)).size).toBe(3);
+    // One route request for the whole batch: the model may be asked more than
+    // once to step off a near-duplicate, but the admin spends one request.
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(fetchMock.mock.calls.length).toBeLessThan(9);
+  });
+
+  it("refuses a batch larger than one request can answer", async () => {
+    seedAuth("admin-batch-limit");
+    const response = await suggest(suggestRequest({ category: "Amateur", count: 25 }));
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not spend the request budget on attempts that failed", async () => {
+    seedAuth("admin-outage");
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(500, { error: { message: "upstream down" } }),
+    );
+    // A provider outage must not turn the client's automatic retries into a
+    // rate-limit lockout: these attempts produced nothing, so they cost nothing.
+    for (let i = 0; i < BUDGET_PROBE; i += 1) {
+      expect((await suggest(suggestRequest({ category: "Amateur" }))).status).toBe(502);
+    }
+    // The moment the model answers, the very next request is served.
+    let counter = 0;
+    fetchMock.mockImplementation(async () => {
+      counter += 1;
+      return chatReply(modelOutput({ title: `Amateur Light Returns Number ${counter}` }));
+    });
+    expect((await suggest(suggestRequest({ category: "Amateur" }))).status).toBe(200);
   });
 
   it("still asks the model when catalog titles cannot be loaded", async () => {

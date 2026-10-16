@@ -532,6 +532,113 @@ describe("device-only upload queue", () => {
     expect(suggestCalls).toBe(2);
   });
 
+  describe("drafting a whole batch without exhausting the route's request budget", () => {
+    const draft = (title: string) => ({
+      title,
+      description:
+        "Amateur home video with one verified 18+ couple, filmed on a phone in a single continuous take and finished on camera.",
+      category: "Category one",
+    });
+
+    /** Answers the metadata route with `count` distinct drafts per request. */
+    function batching(count = 4) {
+      let issued = 0;
+      const calls: Array<{ at: number; count: unknown }> = [];
+      fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+        if (!options?.body)
+          return Response.json({
+            policy: { mimeTypes: ["video/mp4"], concurrency: 4, headers: {} },
+            sessions: [],
+          });
+        if (url.endsWith("/api/metadata/suggest")) {
+          const body = JSON.parse(String(options.body));
+          calls.push({ at: Date.now(), count: body.count });
+          const wanted = Math.max(1, Math.min(count, Number(body.count) || 1));
+          const suggestions = Array.from({ length: wanted }, () => {
+            issued += 1;
+            return draft(`Girlfriend Takes My Cock Raw On Camera Take ${issued}`);
+          });
+          return Response.json({ suggestion: suggestions[0], suggestions, source: "ai" });
+        }
+        if (url.endsWith("confirm")) return Response.json({ slug: "saved-video" });
+        return Response.json({
+          uploadUrl: "https://storage.example.com/signed",
+          headers: {},
+          videoId: "provider",
+          storagePath: "admin/frame.jpg",
+        });
+      });
+      return calls;
+    }
+
+    it("asks the route for several titles at once instead of one per file", async () => {
+      const calls = batching();
+      await select(
+        ["one", "two", "three", "four", "five"].map(
+          (name) => new File([name], `${name}.mp4`, { type: "video/mp4" }),
+        ),
+      );
+      await waitFor(() =>
+        expect(screen.getAllByDisplayValue(/Take \d/)).toHaveLength(5),
+      );
+      // Five files, two requests: a batch upload must not spend one request
+      // per file and walk into the route's per-administrator rate limit.
+      expect(calls).toHaveLength(2);
+      expect(calls.map((call) => call.count)).toEqual([4, 1]);
+      const titles = screen
+        .getAllByDisplayValue(/Take \d/)
+        .map((input) => (input as HTMLInputElement).value);
+      expect(new Set(titles).size).toBe(5);
+    });
+
+    it("keeps one shared retry loop when the route is rate limited", async () => {
+      let attempts = 0;
+      const calls: number[] = [];
+      fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
+        if (!options?.body)
+          return Response.json({
+            policy: { mimeTypes: ["video/mp4"], concurrency: 4, headers: {} },
+            sessions: [],
+          });
+        if (url.endsWith("/api/metadata/suggest")) {
+          attempts += 1;
+          calls.push(Date.now());
+          if (attempts <= 2)
+            return Response.json(
+              { error: "Too many suggestion requests — try again shortly" },
+              { status: 429, headers: { "Retry-After": "1" } },
+            );
+          const suggestions = Array.from({ length: 3 }, (_, index) =>
+            draft(`Girlfriend Rides My Cock Raw On Camera Number ${attempts}${index}`),
+          );
+          return Response.json({ suggestion: suggestions[0], suggestions, source: "ai" });
+        }
+        if (url.endsWith("confirm")) return Response.json({ slug: "saved-video" });
+        return Response.json({
+          uploadUrl: "https://storage.example.com/signed",
+          headers: {},
+          videoId: "provider",
+          storagePath: "admin/frame.jpg",
+        });
+      });
+
+      await select(
+        ["one", "two", "three"].map(
+          (name) => new File([name], `${name}.mp4`, { type: "video/mp4" }),
+        ),
+      );
+      await waitFor(() =>
+        expect(screen.getAllByDisplayValue(/Number \d/)).toHaveLength(3),
+        { timeout: 5000 },
+      );
+      // Three queue entries, one retry loop: the refused rounds cost one
+      // request each, not one per waiting file.
+      expect(calls).toHaveLength(3);
+      expect(calls[1] - calls[0]).toBeGreaterThanOrEqual(900);
+      expect(screen.queryByText(/Waiting for AI title/)).toBeNull();
+    });
+  });
+
   describe("asking the metadata route again before drafting in the browser", () => {
     const aiDraft = {
       suggestion: {
