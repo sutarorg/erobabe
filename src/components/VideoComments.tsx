@@ -176,10 +176,10 @@ export default function VideoComments({ videoId }: { videoId: string }) {
       <h2 className="text-[15px] font-semibold">Comments</h2>
       <p className="mt-1 text-xs text-ink-3">Newest first</p>
 
-      {/* Keep long comment threads scrollable without a visible scrollbar. */}
+      {/* Comments flow with the page; loading more extends the page instead of a nested scroll area. */}
       <div
         aria-label="Comment list"
-        className="center-scroll no-scrollbar mt-4 max-h-[300px] overflow-y-auto space-y-4 pr-1"
+        className="no-scrollbar mt-4 space-y-4"
       >
         {comments.map((comment) => {
           const isOwner = Boolean(

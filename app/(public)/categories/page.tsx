@@ -48,7 +48,7 @@ export default async function CategoriesPage() {
 
             {/* Dark back gradient overlay to ensure category name is clearly visible */}
             <div
-              className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"
+              className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent"
               aria-hidden="true"
             />
 

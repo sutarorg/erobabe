@@ -38,7 +38,7 @@ export default async function AdvertiserLayout({
   }
 
   return (
-    <div className="flex h-screen bg-void text-ink">
+    <div className="flex h-screen overflow-hidden bg-void text-ink">
       <PortalSidebar portal="Advertiser" email={user.email || "Account"}>
         <AdvertiserNav />
       </PortalSidebar>

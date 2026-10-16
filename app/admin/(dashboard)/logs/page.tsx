@@ -12,7 +12,7 @@ export default async function LogsAdmin() {
       {(logs || []).length === 0 ? (
         <div className="mt-6 rounded-lg border border-dashed border-line bg-pcard p-12 text-center"><p className="text-[13px]">No audit history yet</p></div>
       ) : (
-        <div className="mt-6 overflow-x-auto rounded-lg border border-line">
+        <div className="mt-6 center-scroll overflow-x-auto rounded-lg border border-line">
           <table className="w-full text-left text-[12px]">
             <thead className="border-b border-line bg-pcard text-[11px] uppercase text-ink-3"><tr><th className="px-4 py-3">Time</th><th className="px-4 py-3">Action</th><th className="px-4 py-3">Target</th><th className="px-4 py-3">Level</th></tr></thead>
             <tbody>

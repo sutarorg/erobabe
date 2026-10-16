@@ -879,7 +879,7 @@ export default function VideoManager({
           </p>
         </div>
       ) : (
-        <div className="mt-4 overflow-x-auto rounded-lg border border-line">
+        <div className="mt-4 center-scroll overflow-x-auto rounded-lg border border-line">
           <table className="w-full text-left text-[12.5px]">
             <thead className="border-b border-line bg-pcard text-[11px] uppercase tracking-wider text-ink-3">
               <tr>

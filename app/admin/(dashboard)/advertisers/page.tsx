@@ -14,7 +14,7 @@ export default async function AdvertisersAdmin() {
           <p className="text-[14px]">No advertisers yet</p>
         </div>
       ) : (
-        <div className="mt-6 overflow-x-auto rounded-lg border border-line">
+        <div className="mt-6 center-scroll overflow-x-auto rounded-lg border border-line">
           <table className="w-full text-left text-[12px]">
             <thead className="border-b border-line bg-pcard text-[11px] uppercase text-ink-3">
               <tr><th className="px-4 py-3">Company</th><th className="px-4 py-3">Contact</th><th className="px-4 py-3">Status</th><th className="px-4 py-3">Registered</th></tr>
