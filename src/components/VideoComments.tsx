@@ -116,13 +116,13 @@ export default function VideoComments({ videoId }: { videoId: string }) {
       {/* The comment composer deliberately follows the list, at its bottom. */}
       <form
         onSubmit={postComment}
-        className="mt-5 rounded-xl border border-line bg-card p-3.5 sm:p-4"
+        className="mt-5 rounded-xl border border-line p-3.5 sm:p-4"
         aria-label="Post a comment"
       >
         <p className="mb-3 text-xs text-ink-3">
           {name
             ? `Comment anonymously as ${name}`
-            : "Your one-of-a-kind funny username is created by AI with your first comment."}
+            : ""}
         </p>
         <div className="flex flex-col gap-2 sm:flex-row">
           <textarea
