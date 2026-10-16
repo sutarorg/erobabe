@@ -1,5 +1,8 @@
 import { publicPageMetadata } from "@/lib/metadata/page";
 import { homeSections } from "@/lib/public/selection";
+import { getRecommendationFeed } from "@/lib/recommendations/service";
+import RecommendationShelf from "@/src/components/RecommendationShelf";
+import RecommendationSettings from "@/src/components/RecommendationSettings";
 import { heroSlidesFromCarousel } from "@/lib/public/hero-slides";
 import { SITE_URL } from "@/lib/site";
 import Link from "next/link";
@@ -43,8 +46,7 @@ export default async function HomePage({
   const query = q?.trim().slice(0, 160) || "";
   const mappedVideos = query ? await searchPublishedVideos(query) : videos;
 
-  const { featured: featuredVideos, latest: latestVideos } =
-    homeSections(mappedVideos);
+  const { latest: latestVideos } = homeSections(mappedVideos);
   const categoryCards = categories.map((category) => ({
     id: category.id,
     label: category.label,
@@ -95,6 +97,14 @@ export default async function HomePage({
     );
   }
 
+  const [featuredFeed, recommendedFeed] = await Promise.all([
+    getRecommendationFeed({ surface: "featured", limit: 12 }),
+    getRecommendationFeed({ surface: "recommended", limit: 12 }),
+  ]);
+  const excludedSlugs = new Set([...latestVideos.map((video) => video.slug), ...carousel.map((video) => video.slug)]);
+  const featuredVideos = featuredFeed.videos.filter((video) => !excludedSlugs.has(video.slug));
+  const recommendedVideos = recommendedFeed.videos.filter((video) => !excludedSlugs.has(video.slug) && !featuredVideos.some((item) => item.slug === video.slug));
+
   if (mappedVideos.length === 0) {
     return (
       <div className="pt-4">
@@ -120,16 +130,8 @@ export default async function HomePage({
         <Categories activeCategory={null} categories={categoryCards} />
       </section>
 
-      <section className="mt-8">
-        <VideoSection title="Featured Videos">
-          <FourRowVideoGrid className="video-grid mt-3.5">
-            {featuredVideos.map((video) => (
-              <PublicVideoCard key={video.slug} video={video} />
-            ))}
-          </FourRowVideoGrid>
-        </VideoSection>
-      </section>
-
+      <div className="mt-8"><RecommendationSettings /></div>
+      <RecommendationShelf title="Featured Videos" videos={featuredVideos} surface="featured" correlationId={featuredFeed.correlationId} algorithmVersion={featuredFeed.algorithmVersion} />
       <section className="mt-8">
         <VideoSection title="Latest Videos">
           <FourRowVideoGrid className="video-grid mt-3.5">
@@ -139,6 +141,13 @@ export default async function HomePage({
           </FourRowVideoGrid>
         </VideoSection>
       </section>
+      <RecommendationShelf
+        title={recommendedFeed.personalized ? "Recommended for you" : "Discover videos"}
+        videos={recommendedVideos}
+        surface="recommended"
+        correlationId={recommendedFeed.correlationId}
+        algorithmVersion={recommendedFeed.algorithmVersion}
+      />
     </div>
   );
 }

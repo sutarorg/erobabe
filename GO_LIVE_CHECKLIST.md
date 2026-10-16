@@ -38,3 +38,14 @@
 4. Re-run checks and independent review. Only then approve merge/release and production deployment. Never restore permissive RLS as a rollback shortcut.
 
 Detailed recovery and provider setup: `DEPLOYMENT.md` (especially the October 14 audit and October 15 recovery addenda). No live charge, production migration, account-policy approval or remote deletion was performed in this session.
+
+## Recommendation data and privacy gate (new; migration 24)
+
+- [ ] Review and apply `00000000000024_recommendations.sql` only after inspecting applied migration history and backing up staging data. Confirm tables, indexes, grants, RLS, eligibility RPCs and idempotency in real Supabase (PGlite tests are not production acceptance).
+- [ ] Deploy matching app/API and no-store settings. Verify public eligibility on every surface and confirm admin-selected hero carousel is unchanged.
+- [ ] Configure server-only random `ANALYTICS_HASH_SECRET`; configure `SITE_URL` and `CRON_SECRET` as repository Actions secrets. Run the daily `Prune recommendation data` workflow manually and verify 30-day event / 180-day profile-feedback cleanup.
+- [ ] Verify opt-in is off by default; no profiling or recommendation events without consent; reset removes history; pause deletes profile rows and cookie; comments/likes are not linked to the profile; advertiser screens/logs do not expose viewing data.
+- [ ] Test rejected-video/category suppression, “show less” demotion, empty profile cold start, disabled personalization, event errors, idempotency, rate limits, feed keysets and latest tie ordering against staging.
+- [ ] Test Bunny Player.js and direct native playback events on authorized real media; Bunny autoplay stays off unless explicitly enabled. No completion or duration claim based on page visibility.
+- [ ] Record baseline latency/coverage/empty rates before experiment. No uplift claim until sample size, randomization, guardrails and evaluation criteria are pre-registered and a valid experiment has run.
+- [ ] Obtain privacy/legal review of 18+ age assurance, sensitive adult viewing retention, provider approval and actual rights/moderation obligations. The UI age prompt alone is not age verification.

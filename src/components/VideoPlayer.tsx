@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Play, RotateCcw } from "lucide-react";
+import Script from "next/script";
 import { selectPlaybackSource } from "@/lib/video/playback";
+import { ALGORITHM_VERSION } from "@/lib/recommendations/ranking";
 
 type Props = {
   id: string;
@@ -15,6 +17,33 @@ type Props = {
   videoId?: string | null;
 };
 
+type PlaybackEvent = "playback_start" | "progress_25" | "progress_50" | "progress_75" | "playback_complete" | "playback_error";
+type BunnyPlayerApi = { on: (event: string, callback: (data?: any) => void) => void };
+declare global { interface Window { playerjs?: { Player: new (frame: HTMLIFrameElement) => BunnyPlayerApi } } }
+
+function eventUuid() {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const random = Math.random() * 16 | 0;
+    return (char === "x" ? random : (random & 0x3 | 0x8)).toString(16);
+  });
+}
+
+function usePlaybackEvents(videoId: string) {
+  const sent = useRef(new Set<string>());
+  const correlationId = useRef(eventUuid());
+  useEffect(() => {
+    sent.current.clear();
+    correlationId.current = eventUuid();
+  }, [videoId]);
+  return useCallback((type: PlaybackEvent) => {
+    if (sent.current.has(type)) return;
+    sent.current.add(type);
+    const idempotencyKey = eventUuid();
+    void fetch("/api/recommendations/events", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ events: [{ videoId, type, surface: "watch", algorithmVersion: ALGORITHM_VERSION, correlationId: correlationId.current, idempotencyKey }] }) }).catch(() => {});
+  }, [videoId]);
+}
+
 /** Give a visitor a beat with the poster before buffering starts on its own. */
 const BUFFER_AHEAD_DELAY_MS = 1_200;
 
@@ -22,10 +51,12 @@ function NativePlayer({
   url,
   title,
   poster,
+  onTrack,
 }: {
   url: string;
   title: string;
   poster?: string | null;
+  onTrack: (type: PlaybackEvent) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ahead = useRef(false);
@@ -99,6 +130,16 @@ function NativePlayer({
         poster={poster || undefined}
         playsInline
         className="h-full w-full bg-black"
+        onPlay={() => onTrack("playback_start")}
+        onTimeUpdate={(event) => {
+          const media = event.currentTarget;
+          if (!media.duration || !Number.isFinite(media.duration)) return;
+          const progress = media.currentTime / media.duration;
+          if (progress >= 0.25) onTrack("progress_25");
+          if (progress >= 0.5) onTrack("progress_50");
+          if (progress >= 0.75) onTrack("progress_75");
+        }}
+        onEnded={() => onTrack("playback_complete")}
         onPlaying={() => setWaiting(false)}
         onCanPlay={() => setWaiting(false)}
         onWaiting={() => {
@@ -107,6 +148,7 @@ function NativePlayer({
         onError={() => {
           setWaiting(false);
           setFailed(true);
+          onTrack("playback_error");
         }}
       >
         Your browser does not support the video tag.
@@ -175,15 +217,36 @@ const BUNNY_LOAD_TIMEOUT_MS = 20_000;
 /**
  * Bunny Stream player.
  *
- * The embed mounts straight away and autoplays: opening a video shows the Bunny
- * player itself — no erobabe poster with a play button in front of it, and no
- * loading message over it. The only thing this component adds is a retry path
- * for the rare case where the embed never loads at all.
+ * The Bunny iframe is user-controlled: autoplay is off by default and can be
+ * enabled with the accessible setting beneath the player. Playback events are
+ * observed only through Bunny's documented Player.js postMessage API.
  */
-function BunnyPlayer({ url, title }: { url: string; title: string }) {
+function BunnyPlayer({ url, title, onTrack, autoplay }: { url: string; title: string; onTrack: (type: PlaybackEvent) => void; autoplay: boolean }) {
+  const frame = useRef<HTMLIFrameElement | null>(null);
+  const [scriptReady, setScriptReady] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!scriptReady || !frame.current || !window.playerjs?.Player) return;
+    let player: BunnyPlayerApi;
+    try { player = new window.playerjs.Player(frame.current); } catch { return; }
+    player.on("ready", () => {
+      player.on("play", () => onTrack("playback_start"));
+      player.on("timeupdate", (data) => {
+        const seconds = Number(data?.seconds);
+        const duration = Number(data?.duration);
+        if (!Number.isFinite(seconds) || !Number.isFinite(duration) || duration <= 0) return;
+        const progress = seconds / duration;
+        if (progress >= 0.25) onTrack("progress_25");
+        if (progress >= 0.5) onTrack("progress_50");
+        if (progress >= 0.75) onTrack("progress_75");
+      });
+      player.on("ended", () => onTrack("playback_complete"));
+      player.on("error", () => onTrack("playback_error"));
+    });
+  }, [scriptReady, attempt, onTrack]);
 
   useEffect(() => {
     if (loaded || failed) return;
@@ -214,21 +277,30 @@ function BunnyPlayer({ url, title }: { url: string; title: string }) {
   }
 
   return (
-    <iframe
-      key={attempt}
-      src={`${url}?autoplay=true&responsive=true`}
-      title={title}
-      allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-      allowFullScreen
-      referrerPolicy="strict-origin-when-cross-origin"
-      className="h-full w-full border-0"
-      onLoad={() => setLoaded(true)}
-      onError={() => setFailed(true)}
-    />
+    <>
+      <Script src="https://assets.mediadelivery.net/playerjs/playerjs-latest.min.js" strategy="afterInteractive" onReady={() => setScriptReady(true)} />
+      <iframe
+        key={attempt}
+        ref={frame}
+        src={`${url}?autoplay=${autoplay ? "true" : "false"}&responsive=true`}
+        title={title}
+        allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+        allowFullScreen
+        referrerPolicy="strict-origin-when-cross-origin"
+        className="h-full w-full border-0"
+        onLoad={() => setLoaded(true)}
+        onError={() => { setFailed(true); onTrack("playback_error"); }}
+      />
+    </>
   );
 }
 
 export default function VideoPlayer(props: Props) {
+  const onTrack = usePlaybackEvents(props.id);
+  const [bunnyAutoplay, setBunnyAutoplay] = useState(false);
+  useEffect(() => {
+    try { setBunnyAutoplay(Boolean(localStorage.getItem("erobabe-age-verified") && localStorage.getItem("erobabe-bunny-autoplay") === "true")); } catch { setBunnyAutoplay(false); }
+  }, []);
   const source = selectPlaybackSource(
     props.playableUrl,
     props.embedUrl,
@@ -239,46 +311,29 @@ export default function VideoPlayer(props: Props) {
   const key = "url" in source ? `${props.id}:${source.url}` : props.id;
 
   return (
-    <div className="relative mt-3 aspect-video overflow-hidden rounded-xl border border-line bg-black">
-      {source.kind === "direct" ? (
-        <NativePlayer
-          key={key}
-          url={source.url}
-          title={props.title}
-          poster={props.poster}
-        />
-      ) : source.kind === "embed" && props.provider === "bunny" ? (
-        <BunnyPlayer key={key} url={source.url} title={props.title} />
-      ) : source.kind === "embed" ? (
-        <iframe
-          key={key}
-          src={source.url}
-          title={props.title}
-          className="h-full w-full"
-          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
-          allowFullScreen
-          loading="lazy"
-          referrerPolicy="strict-origin-when-cross-origin"
-        />
-      ) : (
-        <>
-          {props.poster && (
-            <img
-              src={props.poster}
-              alt=""
-              className="h-full w-full object-cover opacity-55"
-            />
-          )}
-          <div className="absolute inset-0 flex items-center justify-center">
-            <p className="rounded-lg bg-black/70 px-4 py-2 text-[13px] text-white">
-              {source.kind === "unsupported"
-                ? "This legacy video provider is no longer supported."
-                : "Video processing — check back soon"}
-            </p>
-          </div>
-        </>
-      )}
-    </div>
+    <>
+      <div className="relative mt-3 aspect-video overflow-hidden rounded-xl border border-line bg-black">
+        {source.kind === "direct" ? (
+          <NativePlayer key={key} url={source.url} title={props.title} poster={props.poster} onTrack={onTrack} />
+        ) : source.kind === "embed" && props.provider === "bunny" ? (
+          <BunnyPlayer key={`${key}:${bunnyAutoplay}`} url={source.url} title={props.title} onTrack={onTrack} autoplay={bunnyAutoplay} />
+        ) : source.kind === "embed" ? (
+          <iframe key={key} src={source.url} title={props.title} className="h-full w-full" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" sandbox="allow-scripts allow-same-origin allow-forms allow-presentation" allowFullScreen loading="lazy" referrerPolicy="strict-origin-when-cross-origin" />
+        ) : (
+          <>
+            {props.poster && <img src={props.poster} alt="" className="h-full w-full object-cover opacity-55" />}
+            <div className="absolute inset-0 flex items-center justify-center"><p className="rounded-lg bg-black/70 px-4 py-2 text-[13px] text-white">{source.kind === "unsupported" ? "This legacy video provider is no longer supported." : "Video processing — check back soon"}</p></div>
+          </>
+        )}
+      </div>
+      {source.kind === "embed" && props.provider === "bunny" && <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-[11px] text-ink-3">
+        <input type="checkbox" checked={bunnyAutoplay} onChange={(event) => {
+          const value = event.currentTarget.checked;
+          setBunnyAutoplay(value);
+          try { localStorage.setItem("erobabe-bunny-autoplay", String(value)); } catch { /* browser preference storage may be disabled */ }
+        }} className="accent-accent" />
+        Start Bunny playback automatically when opening a video
+      </label>}
+    </>
   );
 }

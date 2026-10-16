@@ -31,6 +31,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -57,7 +58,7 @@ describe("video player", () => {
     const frame = container.querySelector("iframe")!;
     expect(frame).toHaveAttribute(
       "src",
-      `${url}?autoplay=true&responsive=true`,
+      `${url}?autoplay=false&responsive=true`,
     );
     expect(frame).toHaveAttribute("allowfullscreen");
     fireEvent.load(frame);
@@ -67,6 +68,18 @@ describe("video player", () => {
     expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
     expect(screen.queryByText(/Loading Bunny player/i)).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("keeps autoplay off by default and provides a reversible control", () => {
+    const guid = "44444444-4444-4444-8444-444444444444";
+    const url = `https://iframe.mediadelivery.net/embed/123/${guid}`;
+    const { container } = render(<VideoPlayer {...props} provider="bunny" libraryId="123" videoId={guid} embedUrl={url} />);
+    const frame = container.querySelector("iframe")!;
+    expect(frame.getAttribute("src")).toContain("autoplay=false");
+    const setting = screen.getByRole("checkbox", { name: /Start Bunny playback automatically/i });
+    fireEvent.click(setting);
+    expect(container.querySelector("iframe")?.getAttribute("src")).toContain("autoplay=true");
+    expect(localStorage.getItem("erobabe-bunny-autoplay")).toBe("true");
   });
 
   it("offers a retry only when the Bunny embed never loads", () => {
@@ -93,7 +106,7 @@ describe("video player", () => {
       fireEvent.click(screen.getByRole("button", { name: /Retry playback/i }));
       expect(container.querySelector("iframe")).toHaveAttribute(
         "src",
-        `${url}?autoplay=true&responsive=true`,
+        `${url}?autoplay=false&responsive=true`,
       );
       expect(screen.queryByRole("alert")).toBeNull();
     } finally {

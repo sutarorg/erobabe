@@ -1124,3 +1124,18 @@ curl -i https://your-domain/api/cron/bunny-publish   # expect 401
 
 - Apply **00000000000019_auto_publish_and_ai_metadata.sql** (Supabase → SQL Editor, or `supabase db push`). It adds `bunny_uploads.description` and the auto-publish versions of `stage_bunny_upload`/`finish_bunny_upload`. Until it is applied, uploads still succeed, but AI descriptions are not saved, finished videos wait in the video library for manual publishing, and the upload page shows a notice naming the migration. Running it also **publishes every Bunny video currently in `pending_review`** (the auto-publish behaviour), so check that queue first. It is safe to re-run: one transaction, `add column if not exists`, `create or replace function`.
 - Re-selecting a file that was attempted before (failed, cancelled, interrupted or reloaded) no longer fails with "Session already reserved or database unavailable": the server resumes that file's existing session. Database failures while reserving a session now report their actual cause and PostgreSQL/PostgREST code (also logged as `[bunny] Could not …`).
+
+
+## 16 October recommendation system deployment addendum
+
+Migration **00000000000024_recommendations.sql** is a new forward migration and is not part of the earlier 00–23 migration list above. Review the actual applied migration ledger, take a restorable backup, apply migration 24 in staging first, and verify the PGlite RLS tests plus real Supabase grants/indexes before production. Do not edit or replay already-applied migrations.
+
+1. Deploy the matching application and migration together. Personalized feeds are no-store; do not add CDN/shared caching to `/api/videos/feed`, `/api/recommendations/*`, or cookie-varying home/watch responses.
+2. Configure dedicated server-only `ANALYTICS_HASH_SECRET` and existing `SUPABASE_SECRET_KEY` (never a `NEXT_PUBLIC_*` secret). Set the same `CRON_SECRET` and canonical `SITE_URL` in the GitHub Actions secrets for both Bunny publish and recommendation retention jobs.
+3. Confirm `.github/workflows/recommendation-retention.yml` is enabled, run it manually, verify `/api/cron/recommendation-retention` returns 2xx only with the secret, and verify expired rows are removed. It runs daily; cleanup failure is a privacy incident. The retention RPC removes event rows older than 30 days and feedback/profile rows after their 180-day lifetime.
+4. Stage the opt-in flow, profile cookie attributes, disable/reset deletion, feedback suppression, no-consent browsing, API origin/rate validation, and no-store cache headers. Confirm recommendation tables are inaccessible to `anon` and `authenticated` and only trusted server RPCs can write.
+5. Run `EXPLAIN (ANALYZE, BUFFERS)` against a representative staging catalog for latest, category, like, popularity and tag candidate queries. No production query plan or p95 value is available from this session. Do not report the documented 250 ms/150 ms targets as measured.
+6. Verify Bunny Player.js `ready/play/timeupdate/ended/error` events and direct `<video>` milestones against a real approved staging Bunny video and direct-file clip. Confirm external player script/privacy policy; no actual account credentials or live media acceptance were available here.
+7. Confirm user-facing privacy copy, 18+ controls, legal age assurance, rights/moderation review and adult-content provider approval with the responsible privacy/legal/operator owners. The current localStorage age declaration is not remote age verification.
+
+See `docs/RECOMMENDATION_PRIVACY.md` and `docs/RECOMMENDATION_ALGORITHM.md` for retention boundaries, signals, configuration, evaluation targets and known pagination limitations.
