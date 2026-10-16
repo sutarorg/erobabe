@@ -106,15 +106,12 @@ afterEach(() => {
 beforeEach(() => {
   state.reset();
   vi.stubEnv("SUPABASE_SECRET_KEY", "test-supabase-secret");
-  vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test-key");
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => ({ choices: [{ message: { content: "Professor Picklewhiskers" } }] }),
-  }));
+  vi.stubEnv("OPENROUTER_API_KEY", "");
+  vi.stubGlobal("fetch", vi.fn(() => { throw new Error("Network unavailable"); }));
 });
 
 describe("community comments API", () => {
-  it("creates a unique AI username once per visitor and returns it for local storage", async () => {
+  it("creates a unique local username without AI credentials once per visitor and returns it for local storage", async () => {
     const firstResponse = await POST(request({
       videoId: VIDEO_ID,
       visitorId: VISITOR_ID,
@@ -125,27 +122,27 @@ describe("community comments API", () => {
     const first = await firstResponse.json();
 
     expect(firstResponse.status).toBe(200);
-    expect(first.name).toMatch(/^Professor Picklewhiskers [0-9A-F]{12}$/);
+    expect(first.name).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+ [0-9A-F]{12}$/);
     expect(state.tables.anonymous_comment_profiles).toHaveLength(1);
     expect(state.tables.anonymous_comment_profiles[0].visitor_hash).not.toBe(VISITOR_ID);
     expect(state.tables.video_comments[0].profile_name).toBe(first.name);
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
 
     const repeatResponse = await POST(request({ videoId: VIDEO_ID, visitorId: VISITOR_ID, body: "Another comment" }, "192.0.2.2"));
     const repeat = await repeatResponse.json();
     expect(repeatResponse.status).toBe(200);
     expect(repeat.name).toBe(first.name);
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
 
     const otherResponse = await POST(request({ videoId: VIDEO_ID, visitorId: OTHER_VISITOR_ID, body: "A different visitor" }, "192.0.2.3"));
     const other = await otherResponse.json();
     expect(otherResponse.status).toBe(200);
     expect(other.name).not.toBe(first.name);
     expect(state.tables.anonymous_comment_profiles).toHaveLength(2);
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("does not invoke AI for anonymous likes", async () => {
+  it("does not assign a username for anonymous likes", async () => {
     const response = await POST(request({ videoId: VIDEO_ID, visitorId: VISITOR_ID, liked: true }));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
