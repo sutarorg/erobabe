@@ -44,7 +44,8 @@ size cap, and four files upload in parallel with per-file progress. Bunny encodi
 runs asynchronously: each accepted upload appears immediately in `/admin/videos`
 with status **Encoding**, while upload workers continue to the next files. Closing
 the tab does not stop it — a scheduled sweep (`/api/cron/bunny-publish`, armed by
-`CRON_SECRET` and `vercel.json`) reads Bunny's status server-side and publishes
+`CRON_SECRET` plus the `Publish finished uploads` GitHub Actions workflow) reads
+Bunny's status server-side and publishes
 each video as soon as encoding finishes, with no browser involved. Cancellation
 pauses transfer; reselecting the same source
 recovers its server session and resumable upload identity.

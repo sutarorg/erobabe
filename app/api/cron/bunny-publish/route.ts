@@ -25,8 +25,9 @@ export const dynamic = "force-dynamic";
  * The upload page polls this same transition while it is open, but encoding
  * routinely outlives the tab: an administrator who closes the laptop must not
  * leave finished files stranded in `processing`. This route is the server-side
- * half of auto-publish — a scheduler calls it (Vercel Cron via `vercel.json`,
- * or any external cron/GitHub Action on other hosts) and every video whose
+ * half of auto-publish — a scheduler calls it (the "Publish finished uploads"
+ * GitHub workflow in this repository, or any external cron, uptime pinger or —
+ * on a Vercel plan that permits it — a cron entry) and every video whose
  * encoding has completed becomes public whether or not anybody is watching.
  *
  * It is deliberately idempotent: only sessions that have not reached a terminal

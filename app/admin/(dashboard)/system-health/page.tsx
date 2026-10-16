@@ -68,6 +68,8 @@ export default async function SystemHealthAdmin() {
 
   let videoLifecycle =
     "Unknown — apply the Bunny migration before checking sessions";
+  /** Sessions a background publish sweep could still act on. */
+  let sweepPending = 0;
   try {
     const { data, error } = await supabase
       .from("bunny_uploads")
@@ -85,6 +87,8 @@ export default async function SystemHealthAdmin() {
       const thumbnails = rows.filter((r) =>
         /thumbnail/i.test(r.last_error || ""),
       ).length;
+      sweepPending =
+        count(["uploading", "creating"]) + count(["processing"]) + count(["ready"]);
       videoLifecycle = `${count(["uploading", "creating"])} awaiting/uploading · ${count(["processing"])} processing · ${count(["ready"])} ready awaiting save · ${count(["completed"])} completed · ${count(["failed"])} failed · ${count(["cancelled"])} paused · ${thumbnails} thumbnail failures (latest 100 sessions)`;
     }
   } catch {
@@ -121,6 +125,16 @@ export default async function SystemHealthAdmin() {
       status: "Session diagnostics",
       latency: "—",
       desc: videoLifecycle,
+    },
+    {
+      name: "Background auto-publish",
+      status: process.env.CRON_SECRET
+        ? "Scheduler can authenticate"
+        : "No scheduler secret",
+      latency: "—",
+      desc: process.env.CRON_SECRET
+        ? `CRON_SECRET is set, so a scheduler may call /api/cron/bunny-publish and publish finished uploads with no browser open. ${sweepPending} session(s) currently waiting for it. Run the "Publish finished uploads" GitHub workflow, or curl the endpoint with Authorization: Bearer <secret>, to prove it.`
+        : `CRON_SECRET is not set, so /api/cron/bunny-publish answers an active admin session only: an encode that finishes after the upload tab is closed stays unpublished until an administrator confirms the session. ${sweepPending} session(s) are waiting. Set CRON_SECRET on the host and run the "Publish finished uploads" GitHub workflow.`,
     },
     {
       name: "Resend",
