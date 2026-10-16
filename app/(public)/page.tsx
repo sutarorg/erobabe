@@ -101,9 +101,27 @@ export default async function HomePage({
     getRecommendationFeed({ surface: "featured", limit: 12 }),
     getRecommendationFeed({ surface: "recommended", limit: 12 }),
   ]);
-  const excludedSlugs = new Set([...latestVideos.map((video) => video.slug), ...carousel.map((video) => video.slug)]);
+  const carouselSlugs = new Set(carousel.map((video) => video.slug));
+  const excludedSlugs = new Set([...latestVideos.map((video) => video.slug), ...carouselSlugs]);
   const featuredVideos = featuredFeed.videos.filter((video) => !excludedSlugs.has(video.slug));
-  const recommendedVideos = recommendedFeed.videos.filter((video) => !excludedSlugs.has(video.slug) && !featuredVideos.some((item) => item.slug === video.slug));
+  const rankedRecommended = recommendedFeed.videos.filter((video) => !excludedSlugs.has(video.slug) && !featuredVideos.some((item) => item.slug === video.slug));
+  // If the recommendation service has no candidates yet (for example, on a
+  // newly seeded site), still populate the first shelf with real, public videos.
+  // Avoid repeats where possible; if every catalog video is already featured,
+  // reuse the catalog rather than showing an empty Recommended for you section.
+  const catalogFallback = mappedVideos.filter((video) => !carouselSlugs.has(video.slug));
+  const distinctFallback = catalogFallback.filter((video) =>
+    !latestVideos.some((latest) => latest.slug === video.slug) &&
+    !featuredVideos.some((featured) => featured.slug === video.slug),
+  );
+  const fallbackVideos = distinctFallback.length
+    ? distinctFallback
+    : catalogFallback.length
+      ? catalogFallback
+      : mappedVideos;
+  const recommendedVideos = rankedRecommended.length
+    ? rankedRecommended
+    : fallbackVideos.slice(0, 12);
 
   if (mappedVideos.length === 0) {
     return (
@@ -130,6 +148,14 @@ export default async function HomePage({
         <Categories activeCategory={null} categories={categoryCards} />
       </section>
 
+      <RecommendationShelf
+        title="Recommended for you"
+        videos={recommendedVideos}
+        surface="recommended"
+        correlationId={recommendedFeed.correlationId}
+        algorithmVersion={recommendedFeed.algorithmVersion}
+        trackEvents={rankedRecommended.length > 0}
+      />
       <RecommendationShelf title="Featured Videos" videos={featuredVideos} surface="featured" correlationId={featuredFeed.correlationId} algorithmVersion={featuredFeed.algorithmVersion} />
       <section className="mt-8">
         <VideoSection title="Latest Videos">
@@ -140,13 +166,6 @@ export default async function HomePage({
           </FourRowVideoGrid>
         </VideoSection>
       </section>
-      <RecommendationShelf
-        title={recommendedFeed.personalized ? "Recommended for you" : "Discover videos"}
-        videos={recommendedVideos}
-        surface="recommended"
-        correlationId={recommendedFeed.correlationId}
-        algorithmVersion={recommendedFeed.algorithmVersion}
-      />
     </div>
   );
 }

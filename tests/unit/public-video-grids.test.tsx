@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { PublicVideo } from "@/lib/public/catalog";
+import { getRecommendationFeed } from "@/lib/recommendations/service";
 
 const video: PublicVideo = {
   id: "first",
@@ -25,14 +26,14 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/recommendations/service", () => ({
   latestRecommendations: async () => ({ videos: [video], cursor: null }),
-  getRecommendationFeed: async ({ surface }: { surface: string }) => ({
+  getRecommendationFeed: vi.fn(async ({ surface }: { surface: string }) => ({
     videos: surface === "featured" || surface === "recommended"
       ? [{ ...video, id: `${surface}-video`, slug: `${surface}-video`, title: `${surface} video` }]
       : [],
     personalized: false,
     correlationId: "test-correlation",
     algorithmVersion: "erobabe-rec-v1",
-  }),
+  })),
 }));
 
 vi.mock("@/lib/public/catalog", () => ({
@@ -86,9 +87,29 @@ describe("public listing grids and video cards", () => {
     expect(videoGrids.length).toBeGreaterThanOrEqual(3);
     expect(html).toContain("Featured Videos");
     expect(html).toContain("Latest Videos");
-    expect(html).toContain("Discover videos");
+    expect(html).toContain("Recommended for you");
     expect(videoGrids.every((grid) => !grid.className.includes("grid-cols-5"))).toBe(true);
     expect(html).not.toContain("repeat(auto-fill");
+  });
+
+  it("puts Recommended for you first and fills it from the public catalog when recommendations are empty", async () => {
+    vi.mocked(getRecommendationFeed).mockResolvedValue({
+      videos: [],
+      cursor: null,
+      personalized: false,
+      correlationId: "empty-feed",
+      algorithmVersion: "erobabe-rec-v1",
+    });
+
+    const html = renderToStaticMarkup(
+      await home.default({ searchParams: Promise.resolve({}) }),
+    );
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const recommended = doc.querySelector('section[aria-label="Recommended for you"]');
+
+    expect(html.indexOf("Recommended for you")).toBeLessThan(html.indexOf("Featured Videos"));
+    expect(recommended?.textContent).toContain("First video");
+    expect(recommended?.querySelectorAll('a[href^="/video/"]').length).toBeGreaterThan(0);
   });
 
   it("removes the old five-column layout from search results too", async () => {

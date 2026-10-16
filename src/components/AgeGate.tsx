@@ -1,31 +1,18 @@
 "use client";
-import { useEffect, useLayoutEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { LOGO_URL } from "../data/content";
 
-/** Where the visitor's one-time confirmation is remembered in their browser. */
-export const AGE_GATE_STORAGE_KEY = "erobabe-age-verified";
+type GateState = "open" | "passed";
 
 /**
- * `useLayoutEffect` runs before the browser paints, which is what keeps the
- * dialog from flashing for an already-verified visitor. It is swapped for
- * `useEffect` during the server render, where React would otherwise warn that
- * layout effects do nothing there.
- */
-const useBeforeFirstPaint =
-  typeof window === "undefined" ? useEffect : useLayoutEffect;
-
-type GateState = "checking" | "open" | "passed";
-
-/**
- * Age gate shown once, before the visitor can use the public website.
- * The confirmation is remembered in `localStorage`, so it is asked only on the
- * first visit and never again until the browser data is cleared.
+ * Ask for age confirmation on every fresh entry to the public site. The choice
+ * only lasts for this mounted page session; it is not saved in browser storage.
  * This front-end confirmation does not verify a visitor's age remotely.
  */
 export default function AgeGate() {
-  // Nothing is rendered until the stored choice is known, which keeps the
-  // server markup and the first client render identical (no hydration drift).
-  const [state, setState] = useState<GateState>("checking");
+  // Starting open makes the age gate part of the server-rendered page as well
+  // as the first client render, so visitors never see the site before the gate.
+  const [state, setState] = useState<GateState>("open");
   const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (state !== "open") return;
@@ -34,28 +21,9 @@ export default function AgeGate() {
     return () => previous?.focus();
   }, [state]);
 
-  useBeforeFirstPaint(() => {
-    try {
-      setState(
-        window.localStorage.getItem(AGE_GATE_STORAGE_KEY) ? "passed" : "open",
-      );
-    } catch {
-      // Storage blocked (private mode, disabled cookies): ask once per load.
-      setState("open");
-    }
-  }, []);
-
   if (state !== "open") return null;
 
   const confirm = () => {
-    try {
-      window.localStorage.setItem(
-        AGE_GATE_STORAGE_KEY,
-        new Date().toISOString(),
-      );
-    } catch {
-      // Confirmation simply will not persist — the dialog still closes.
-    }
     setState("passed");
     requestAnimationFrame(() =>
       window.dispatchEvent(new Event("erobabe-age-declared")),
