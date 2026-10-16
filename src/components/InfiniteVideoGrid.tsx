@@ -93,9 +93,8 @@ export default function InfiniteVideoGrid({
 
       <div className="flex justify-center py-6" aria-live="polite">
         {loading ? (
-          <span className="flex items-center gap-2 text-[12px] text-ink-3">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" aria-hidden />
-            Loading more videos…
+          <span role="status" aria-label="Fetching more videos" className="flex items-center text-[12px] text-ink-3">
+            <Loader2 className="h-4 w-4 animate-spin text-accent" aria-hidden />
           </span>
         ) : done ? (
           <span className="text-[12px] text-ink-3">You&apos;ve reached the end.</span>

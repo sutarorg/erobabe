@@ -3,8 +3,9 @@ import {
   ArrowLeft, Bookmark, Check, Eye, Maximize2, Play, Settings, Share2, ThumbsUp, Volume2,
 } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
-import { CATEGORIES, VIDEOS, type Video } from "../data/content";
+import { VIDEOS, type Video } from "../data/content";
 import { cn } from "../utils/cn";
+import Categories from "./Categories";
 import InfiniteVideoGrid from "./InfiniteVideoGrid";
 import VideoGrid from "./VideoGrid";
 
@@ -214,36 +215,7 @@ export default function VideoPage({
 
       {/* Top categories */}
       <section className="mt-8 border-t border-line pt-5">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-[15px] font-semibold tracking-tight text-ink">Top Categories</h2>
-          <span className="text-[11.5px] text-ink-3">Jump to a genre</span>
-        </div>
-        <div className="mt-3.5 grid grid-cols-3 gap-2.5 @md:grid-cols-6 @2xl:grid-cols-8">
-          {CATEGORIES.map((cat) => {
-            const Icon = cat.icon;
-            const active = cat.label === video.category;
-            return (
-              <button
-                key={cat.id}
-                type="button"
-                onClick={() => onSelectCategory?.(cat.label)}
-                className={cn(
-                  "group flex h-[82px] flex-col items-center justify-center gap-2 rounded-lg border bg-card transition-colors duration-150",
-                  active
-                    ? "border-accent/70 bg-accent/8"
-                    : "border-line hover:border-accent/45 hover:bg-card-hover"
-                )}
-              >
-                <Icon
-                  className="h-5 w-5 text-accent transition-transform duration-200 group-hover:scale-110"
-                  strokeWidth={1.8}
-                  aria-hidden
-                />
-                <span className="text-[12px] font-medium leading-none text-zinc-200">{cat.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        <Categories activeCategory={video.category} onSelect={onSelectCategory} />
       </section>
 
       {/* endless feed */}

@@ -69,8 +69,10 @@ describe("public listing grids and video cards", () => {
     const html = renderToStaticMarkup(
       await home.default({ searchParams: Promise.resolve({}) }),
     );
-    expect(html.match(/data-grid-rows="4"/g)).toHaveLength(2);
-    expect(html).not.toContain("grid-cols-5");
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const videoGrids = Array.from(doc.querySelectorAll("[data-grid-rows='4']"));
+    expect(videoGrids).toHaveLength(2);
+    expect(videoGrids.every((grid) => !grid.className.includes("grid-cols-5"))).toBe(true);
     expect(html).not.toContain("repeat(auto-fill");
   });
 

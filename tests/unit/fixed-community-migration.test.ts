@@ -16,6 +16,7 @@ beforeAll(async () => {
  insert into filekosh_uploads(category_id) select id from categories where slug='retired';
  insert into videos values('${video}',(select id from categories where slug='retired'),'published','public','cleared','approved',false,now());`);
  await db.exec(readFileSync('supabase/migrations/00000000000021_fixed_categories_and_community.sql', 'utf8'));
+ await db.exec(readFileSync('supabase/migrations/00000000000022_unique_anonymous_comment_profiles.sql', 'utf8'));
 }, 30000);
 afterAll(() => db.close());
 describe('fixed categories and community SQL', () => {
@@ -38,6 +39,11 @@ describe('fixed categories and community SQL', () => {
  it('persists comments and enforces the posting cooldown', async () => {
   await db.query('select post_video_comment($1,$2,$3,$4)', [video, 'DiscoPanda1234', 'Hello', 'visitor']);
   await expect(db.query('select post_video_comment($1,$2,$3,$4)', [video, 'DiscoPanda1234', 'Again', 'visitor'])).rejects.toThrow('30 seconds');
+ });
+ it('stores one stable username per visitor and rejects case-insensitive duplicates', async () => {
+  await db.query('insert into anonymous_comment_profiles(visitor_hash,profile_name) values($1,$2)', ['a'.repeat(64), 'Professor Picklewhiskers ABCDEF123456']);
+  await expect(db.query('insert into anonymous_comment_profiles(visitor_hash,profile_name) values($1,$2)', ['b'.repeat(64), 'professor picklewhiskers abcdef123456'])).rejects.toThrow('duplicate key value');
+  await expect(db.query('insert into anonymous_comment_profiles(visitor_hash,profile_name) values($1,$2)', ['a'.repeat(64), 'Another Funny Name 123456ABCDEF'])).rejects.toThrow('duplicate key value');
  });
  it('likes are idempotent and unlikes never make the count negative', async () => {
   for (const liked of [true,true]) await db.query('select set_video_like($1,$2,$3)', [video,'visitor',liked]);

@@ -1,4 +1,5 @@
 "use client";
+import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PublicVideo } from "@/lib/public/catalog";
 import type { FeedCursor } from "@/lib/public/watch-feed";
@@ -39,10 +40,14 @@ export default function LatestVideoFeed({ videoId }: { videoId: string }) {
   return <section className="mt-8 border-t border-line pt-5">
     <h2 className="text-[15px] font-semibold">Latest</h2>
     <div ref={grid} className="video-grid mt-3.5" style={gridStyle(columns)}>{videos.map(v => <PublicVideoCard key={v.id} video={v} />)}</div>
-    <div ref={sentinel} className="py-6 text-center text-sm text-ink-3">
-      {busy && <p role="status">Loading videos…</p>}
+    <div ref={sentinel} className="flex min-h-12 flex-col items-center justify-center py-6 text-center text-sm text-ink-3">
+      {busy && (
+        <span role="status" aria-label="Fetching more videos">
+          <Loader2 className="h-5 w-5 animate-spin text-accent" aria-hidden />
+        </span>
+      )}
       {error && <p role="alert">{error}</p>}
-      {!done && <button disabled={busy} onClick={load} className="mt-2 rounded-lg border border-line px-4 py-2 disabled:opacity-50">{error ? "Retry" : "Load more"}</button>}
+      {!done && <button disabled={busy} onClick={() => void load()} className="mt-2 rounded-lg border border-line px-4 py-2 disabled:opacity-50">{error ? "Retry" : "Load more"}</button>}
       {done && <p>{videos.length ? "You’re all caught up." : "No more videos yet."}</p>}
     </div>
   </section>;

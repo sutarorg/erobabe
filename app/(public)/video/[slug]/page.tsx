@@ -262,7 +262,10 @@ export default async function VideoPage({
         </FourRowVideoGrid>
         {!section.videos.length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
       </section>)}
-      <WatchCategories categories={categories} />
+      <WatchCategories
+        categories={categories}
+        activeCategory={(video.category as any)?.label ?? null}
+      />
       <LatestVideoFeed key={video.id} videoId={video.id} />
     </div>
   );
