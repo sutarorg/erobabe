@@ -24,16 +24,16 @@ async function findAnonymousName(db: any, visitorHash: string): Promise<string |
   return typeof data?.profile_name === "string" ? data.profile_name : null;
 }
 
-/** Return the stable, globally unique AI username assigned to this browser. */
+/** Return the stable, globally unique, locally generated username assigned to this browser. */
 async function getOrCreateAnonymousName(db: any, visitorHash: string): Promise<string> {
   const existing = await findAnonymousName(db, visitorHash);
   if (existing) return existing;
 
   // The unique index is the final authority. If two requests for the same
   // visitor race, recover that visitor's inserted name; a genuine name
-  // collision gets a fresh AI name and unique suffix.
+  // collision gets a fresh local name and unique suffix.
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const generated = await generateFunnyUsername();
+    const generated = generateFunnyUsername();
     const suffix = randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase();
     const profileName = `${generated} ${suffix}`;
     const { data, error } = await db
@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
 
     if (!p.body) return NextResponse.json({ error: "A comment is required" }, { status: 400 });
 
-    // Do not spend an AI request for an unavailable or unpublished video.
+    // Only assign usernames for available, published videos.
     const { data: video } = await db
       .from("videos")
       .select("id")
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
     if (!video) return NextResponse.json({ error: "Video unavailable" }, { status: 404 });
 
     // Keep the existing server-side cooldown in the SQL RPC as the authority.
-    // This pre-check avoids spending an AI request on a visitor who is already
+    // This pre-check avoids reserving a profile for a visitor who is already
     // inside the cooldown window.
     const rateKey = createHmac("sha256", secret)
       .update(req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || p.visitorId)

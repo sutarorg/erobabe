@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { LoaderCircle, MessageCircle } from "lucide-react";
 import { anonymousProfile, saveAnonymousUsername } from "../utils/anonymousProfile";
 
 type Comment = { id: string; profile_name: string; body: string; created_at: string };
 
 export default function VideoComments({ videoId }: { videoId: string }) {
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [name, setName] = useState("");
   const [body, setBody] = useState("");
@@ -37,6 +39,14 @@ export default function VideoComments({ videoId }: { videoId: string }) {
     void load();
   }, [load]);
 
+  // Grow with the text instead of creating a nested scrolling input.
+  useEffect(() => {
+    const textarea = composerRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [body]);
+
   const postComment = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (posting || !body.trim()) return;
@@ -48,7 +58,7 @@ export default function VideoComments({ videoId }: { videoId: string }) {
       const res = await fetch("/api/community", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // The server creates the AI username on the first comment and returns
+        // The server creates a username from the local word library on the first comment and returns
         // the assigned name; clients cannot choose or reuse someone else's.
         body: JSON.stringify({ videoId, visitorId: profile.id, body }),
       });
@@ -69,7 +79,7 @@ export default function VideoComments({ videoId }: { videoId: string }) {
   };
 
   return (
-    <section className="mt-7 border-t border-line pt-5" aria-label="Comments">
+    <section className="mt-7 pt-5" aria-label="Comments">
       <h2 className="text-[15px] font-semibold">Comments</h2>
       <p className="mt-1 text-xs text-ink-3">Newest first</p>
 
@@ -101,7 +111,7 @@ export default function VideoComments({ videoId }: { videoId: string }) {
           type="button"
           disabled={busy || posting}
           onClick={() => void load(comments.length)}
-          className="mt-4 rounded-lg border border-line px-4 py-2 text-sm disabled:opacity-50"
+          className="mt-4 rounded-full px-3 py-2 text-sm text-ink-2 transition hover:bg-rail hover:text-ink disabled:opacity-50"
         >
           View more · 5 comments
         </button>
@@ -116,31 +126,32 @@ export default function VideoComments({ videoId }: { videoId: string }) {
       {/* The comment composer deliberately follows the list, at its bottom. */}
       <form
         onSubmit={postComment}
-        className="mt-5 rounded-xl border border-line p-3.5 sm:p-4"
+        className="mt-5"
         aria-label="Post a comment"
       >
-        <p className="mb-3 text-xs text-ink-3">
-          {name
-            ? `Comment anonymously as ${name}`
-            : ""}
-        </p>
-        <div className="flex flex-col gap-2 sm:flex-row">
+        {name && <p className="mb-2 text-xs text-ink-3">Comment anonymously as {name}</p>}
+        <div className="flex items-end gap-2">
           <textarea
+            ref={composerRef}
             aria-label="Your comment"
             required
             maxLength={1000}
-            rows={2}
+            rows={1}
             value={body}
             onChange={(event) => setBody(event.target.value)}
-            placeholder="Add a comment. Be respectful…"
-            className="min-w-0 flex-1 rounded-lg border border-line bg-void p-3 text-sm"
+            placeholder="Add a comment…"
+            className="no-scrollbar min-h-11 min-w-0 flex-1 resize-none overflow-hidden rounded-3xl border border-line bg-rail px-4 py-3 text-sm leading-5 transition-colors focus:border-accent"
           />
           <button
             type="submit"
+            aria-label={posting ? "Posting comment" : "Post comment"}
+            title={posting ? "Posting comment…" : "Post comment"}
             disabled={posting || busy || !body.trim()}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-white transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {posting ? "Posting…" : "Comment"}
+            {posting
+              ? <LoaderCircle aria-hidden="true" className="h-5 w-5 animate-spin" />
+              : <MessageCircle aria-hidden="true" className="h-5 w-5" />}
           </button>
         </div>
       </form>

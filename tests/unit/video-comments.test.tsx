@@ -3,11 +3,11 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import VideoComments from "@/src/components/VideoComments";
 import { anonymousProfile, saveAnonymousUsername } from "@/src/utils/anonymousProfile";
 
-const AI_NAME = "Mischievous Waffle 1A2B3C4D5E6F";
-const POST_AI_NAME = "Baffled Turnip 6F5E4D3C2B1A";
+const LOCAL_NAME = "Mischievous Waffle 1A2B3C4D5E6F";
+const POST_LOCAL_NAME = "Baffled Turnip 6F5E4D3C2B1A";
 const comment = (id: number) => ({
   id: String(id),
-  profile_name: AI_NAME,
+  profile_name: LOCAL_NAME,
   body: `Comment ${id}`,
   created_at: "2026-10-15T00:00:00Z",
 });
@@ -15,14 +15,14 @@ const comment = (id: number) => ({
 afterEach(() => vi.unstubAllGlobals());
 
 describe("anonymous comments", () => {
-  it("stores the funny AI username locally after the first comment", () => {
+  it("stores the funny username locally after the first comment", () => {
     const visitor = anonymousProfile();
     expect(visitor.name).toBeUndefined();
     expect(anonymousProfile()).toEqual(visitor);
     expect(JSON.parse(localStorage.getItem("erobabe-anonymous-profile")!)).toEqual({ id: visitor.id });
 
-    const named = saveAnonymousUsername(AI_NAME);
-    expect(named).toEqual({ id: visitor.id, name: AI_NAME });
+    const named = saveAnonymousUsername(LOCAL_NAME);
+    expect(named).toEqual({ id: visitor.id, name: LOCAL_NAME });
     expect(JSON.parse(localStorage.getItem("erobabe-anonymous-profile")!)).toEqual(named);
   });
 
@@ -41,17 +41,17 @@ describe("anonymous comments", () => {
     expect(screen.queryByRole("button", { name: /View more/ })).toBeNull();
   });
 
-  it("posts without a client-chosen name, saves the AI name, and refreshes comments", async () => {
+  it("posts without a client-chosen name, saves the reserved name, and refreshes comments", async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => ({ comments: [], hasMore: false }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, name: POST_AI_NAME }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, name: POST_LOCAL_NAME }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ comments: [comment(1)], hasMore: false }) });
     vi.stubGlobal("fetch", fetch);
     render(<VideoComments videoId="video" />);
 
     await screen.findByText("Be the first to comment.");
     fireEvent.change(screen.getByLabelText("Your comment"), { target: { value: "Hello there" } });
-    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Post comment" }));
     await screen.findByText("Comment anonymously as Baffled Turnip 6F5E4D3C2B1A");
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
     expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
@@ -61,7 +61,7 @@ describe("anonymous comments", () => {
     });
     expect(JSON.parse(localStorage.getItem("erobabe-anonymous-profile")!)).toEqual({
       id: anonymousProfile().id,
-      name: POST_AI_NAME,
+      name: POST_LOCAL_NAME,
     });
   });
 
@@ -77,6 +77,15 @@ describe("anonymous comments", () => {
     const list = screen.getByLabelText("Comment list");
     const composer = screen.getByRole("form", { name: "Post a comment" });
     expect(list.className).toContain("no-scrollbar");
+    expect(list.className).not.toMatch(/overflow-y|max-h-/);
+    expect(composer.className).not.toMatch(/border|bg-|rounded/);
+    const input = screen.getByRole("textbox", { name: "Your comment" });
+    expect(input.className).toContain("overflow-hidden");
+    expect(input.className).toContain("no-scrollbar");
+    expect(input.className).toContain("resize-none");
+    const submit = screen.getByRole("button", { name: "Post comment" });
+    expect(submit.textContent).toBe("");
+    expect(submit.querySelector("svg")).not.toBeNull();
     expect(list.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

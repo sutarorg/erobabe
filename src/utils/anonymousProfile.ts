@@ -1,13 +1,13 @@
 export interface AnonymousProfile {
   id: string;
-  /** Assigned by the server-side AI when this visitor posts their first comment. */
+  /** Assigned by the server from the local word library when this visitor posts their first comment. */
   name?: string;
 }
 
 const STORAGE_KEY = "erobabe-anonymous-profile";
 const UUID_PATTERN = /^[0-9a-f-]{36}$/i;
 // Handles created by the server end in a random hex tag so they remain unique.
-const AI_USERNAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}'’ -]{1,43} [0-9a-f]{12}$/iu;
+const USERNAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}'’ -]{1,43} [0-9a-f]{12}$/iu;
 
 let fallback: AnonymousProfile | undefined;
 
@@ -17,8 +17,8 @@ function readStoredProfile(): AnonymousProfile | null {
     if (!stored || typeof stored !== "object" || !UUID_PATTERN.test(stored.id)) return null;
 
     // Old builds saved locally-random names. Keep the visitor ID, but let the
-    // first post after this update receive a server-generated AI username.
-    const name = typeof stored.name === "string" && AI_USERNAME_PATTERN.test(stored.name)
+    // next post receive a server-reserved, locally generated username.
+    const name = typeof stored.name === "string" && USERNAME_PATTERN.test(stored.name)
       ? stored.name
       : undefined;
     return { id: stored.id, ...(name ? { name } : {}) };
@@ -51,7 +51,7 @@ function createVisitorId(): string {
 
 /**
  * Read or create a stable anonymous visitor ID. A username is deliberately not
- * generated here: names are created by AI only when the visitor posts a first
+ * generated here: names are created from the local word library when the visitor posts a first
  * comment, then persisted locally by `saveAnonymousUsername`.
  */
 export function anonymousProfile(): AnonymousProfile {
@@ -60,7 +60,7 @@ export function anonymousProfile(): AnonymousProfile {
   const stored = readStoredProfile();
   if (stored) {
     fallback = stored;
-    // Drop pre-AI random handles from older releases while preserving the ID.
+    // Drop unreserved handles from older releases while preserving the ID.
     persist(stored);
     return stored;
   }
@@ -70,10 +70,10 @@ export function anonymousProfile(): AnonymousProfile {
   return fallback;
 }
 
-/** Save the server-issued AI username beside this browser's stable visitor ID. */
+/** Save the server-reserved username beside this browser's stable visitor ID. */
 export function saveAnonymousUsername(name: string): AnonymousProfile {
   const normalized = name.trim().replace(/\s+/g, " ");
-  if (!AI_USERNAME_PATTERN.test(normalized)) return anonymousProfile();
+  if (!USERNAME_PATTERN.test(normalized)) return anonymousProfile();
 
   const profile = anonymousProfile();
   fallback = { id: profile.id, name: normalized };
