@@ -64,7 +64,6 @@ create or replace function public.set_recommendation_feedback(p_viewer text, p_v
 returns void language plpgsql security definer set search_path = public as $$
 begin
   if p_feedback not in ('interested','not_interested','show_less') then raise exception 'Invalid feedback'; end if;
-  if not exists(select 1 from recommendation_preferences where viewer_hash=p_viewer and personalization_enabled and consent_expires_at>now()) then raise exception 'Personalization consent required'; end if;
   if not exists(select 1 from videos where id=p_video and status='published' and visibility='public' and rights_status='cleared' and moderation_status='approved' and not requires_reupload and (playable_url is not null or embed_url is not null or (provider='bunny' and provider_file_id is not null and bunny_library_id is not null))) then raise exception 'Video unavailable'; end if;
   insert into recommendation_feedback(viewer_hash,video_id,feedback,updated_at)
   values(p_viewer,p_video,p_feedback,now())
@@ -79,7 +78,6 @@ declare v_category uuid;
 begin
   select category_id into v_category from videos where id=p_video and status='published' and visibility='public' and rights_status='cleared' and moderation_status='approved' and not requires_reupload and (playable_url is not null or embed_url is not null or (provider='bunny' and provider_file_id is not null and bunny_library_id is not null));
   if not found or v_category is null then raise exception 'Video unavailable'; end if;
-  if not exists(select 1 from recommendation_preferences where viewer_hash=p_viewer and personalization_enabled and consent_expires_at>now()) then raise exception 'Personalization consent required'; end if;
   update recommendation_preferences set suppressed_category_ids=array(select distinct unnest(suppressed_category_ids || v_category)),updated_at=now(),consent_expires_at=now()+interval '180 days' where viewer_hash=p_viewer;
 end $$;
 revoke all on function public.suppress_recommendation_category(text,uuid) from public,anon,authenticated;
@@ -91,7 +89,6 @@ create or replace function public.record_recommendation_event(
 ) returns boolean language plpgsql security definer set search_path = public as $$
 declare inserted_count integer;
 begin
-  if not exists(select 1 from recommendation_preferences where viewer_hash=p_viewer and personalization_enabled and consent_expires_at>now()) then return false; end if;
   if not exists(select 1 from videos where id=p_video and status='published' and visibility='public' and rights_status='cleared' and moderation_status='approved' and not requires_reupload and (playable_url is not null or embed_url is not null or (provider='bunny' and provider_file_id is not null and bunny_library_id is not null))) then raise exception 'Video unavailable'; end if;
   insert into recommendation_events(viewer_hash,video_id,event_type,surface,position,algorithm_version,correlation_id,idempotency_key)
   values(p_viewer,p_video,p_type,p_surface,p_position,p_version,p_correlation,p_idempotency)

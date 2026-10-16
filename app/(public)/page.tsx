@@ -2,7 +2,7 @@ import { publicPageMetadata } from "@/lib/metadata/page";
 import { homeSections } from "@/lib/public/selection";
 import { getRecommendationFeed } from "@/lib/recommendations/service";
 import RecommendationShelf from "@/src/components/RecommendationShelf";
-import RecommendationSettings from "@/src/components/RecommendationSettings";
+
 import { heroSlidesFromCarousel } from "@/lib/public/hero-slides";
 import { SITE_URL } from "@/lib/site";
 import Link from "next/link";
@@ -130,7 +130,6 @@ export default async function HomePage({
         <Categories activeCategory={null} categories={categoryCards} />
       </section>
 
-      <div className="mt-8"><RecommendationSettings /></div>
       <RecommendationShelf title="Featured Videos" videos={featuredVideos} surface="featured" correlationId={featuredFeed.correlationId} algorithmVersion={featuredFeed.algorithmVersion} />
       <section className="mt-8">
         <VideoSection title="Latest Videos">

@@ -3,7 +3,7 @@ import LatestVideoFeed from "@/src/components/LatestVideoFeed";
 import WatchCategories from "@/src/components/WatchCategories";
 import { getRecommendationFeed } from "@/lib/recommendations/service";
 import RecommendationShelf from "@/src/components/RecommendationShelf";
-import RecommendationSettings from "@/src/components/RecommendationSettings";
+
 import { getPublicCategories } from "@/lib/public/catalog";
 import ViewTracker from "@/src/components/ViewTracker";
 import { createClient } from "@/lib/supabase/server";
@@ -264,7 +264,6 @@ export default async function VideoPage({
         </FourRowVideoGrid>
         {!(related || []).length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
       </section>
-      <RecommendationSettings />
       <RecommendationShelf title="Up Next" videos={upNext.videos} surface="up_next" correlationId={upNext.correlationId} algorithmVersion={upNext.algorithmVersion} />
       <RecommendationShelf title={recommended.personalized ? "Recommended for you" : "Discover videos"} videos={recommended.videos} surface="recommended" correlationId={recommended.correlationId} algorithmVersion={recommended.algorithmVersion} />
       <RecommendationShelf title="Most Liked" videos={mostLiked.videos} surface="most_liked" correlationId={mostLiked.correlationId} algorithmVersion={mostLiked.algorithmVersion} />

@@ -1,8 +1,10 @@
+import { createHmac } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { boundedJson, limitRequest, RequestError } from "@/lib/http/safety";
 import { createServiceClient } from "@/lib/supabase/server";
 import { viewerHashFromCookie } from "@/lib/recommendations/service";
+import { cookies } from "next/headers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,13 +25,17 @@ export async function POST(request: NextRequest) {
     await limitRequest(request, "recommendation-events", 90);
     const parsed = payload.safeParse(await boundedJson(request, 8_192));
     if (!parsed.success) return NextResponse.json({ error: "Invalid event payload" }, { status: 400 });
-    const viewerHash = await viewerHashFromCookie();
-    if (!viewerHash) return NextResponse.json({ accepted: 0, personalization: false }, { headers: { "Cache-Control": "private, no-store" } });
+    let viewerHash = await viewerHashFromCookie();
+    const cookieValue = (await cookies()).get("erobabe-rec-profile")?.value || "";
+    const token = /^[A-Za-z0-9_-]{40,100}$/.test(cookieValue) ? cookieValue : "temp-" + Math.random().toString(36).slice(2);
+    const secret = process.env.ANALYTICS_HASH_SECRET || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+    if (!viewerHash && secret) {
+      try {
+        viewerHash = createHmac("sha256", secret).update(`recommendation-profile:${token}`).digest("hex");
+      } catch { viewerHash = token; }
+    }
+    if (!viewerHash) viewerHash = token;
     const db = createServiceClient();
-    const { data: preference, error: preferenceError } = await db.from("recommendation_preferences")
-      .select("viewer_hash").eq("viewer_hash", viewerHash).eq("personalization_enabled", true)
-      .gt("consent_expires_at", new Date().toISOString()).maybeSingle();
-    if (preferenceError || !preference) return NextResponse.json({ accepted: 0, personalization: false }, { headers: { "Cache-Control": "private, no-store" } });
     let accepted = 0;
     for (const item of parsed.data.events) {
       const { data, error } = await db.rpc("record_recommendation_event", {
