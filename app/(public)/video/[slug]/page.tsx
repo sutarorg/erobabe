@@ -115,8 +115,7 @@ export default async function VideoPage({
     .order("published_at", { ascending: false })
     .limit(16);
 
-  const [upNext, recommended, mostLiked, categories] = await Promise.all([
-    getRecommendationFeed({ surface: "up_next", currentVideoId: video.id, limit: 8 }),
+  const [recommended, mostLiked, categories] = await Promise.all([
     getRecommendationFeed({ surface: "recommended", currentVideoId: video.id, limit: 8 }),
     getRecommendationFeed({ surface: "most_liked", currentVideoId: video.id, limit: 8 }),
     getPublicCategories(),
@@ -264,7 +263,6 @@ export default async function VideoPage({
         </FourRowVideoGrid>
         {!(related || []).length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
       </section>
-      <RecommendationShelf title="Up Next" videos={upNext.videos} surface="up_next" correlationId={upNext.correlationId} algorithmVersion={upNext.algorithmVersion} />
       <RecommendationShelf title={recommended.personalized ? "Recommended for you" : "Discover videos"} videos={recommended.videos} surface="recommended" correlationId={recommended.correlationId} algorithmVersion={recommended.algorithmVersion} />
       <RecommendationShelf title="Most Liked" videos={mostLiked.videos} surface="most_liked" correlationId={mostLiked.correlationId} algorithmVersion={mostLiked.algorithmVersion} />
       <WatchCategories
