@@ -57,7 +57,7 @@ const SECTIONS: { number: string; title: string; paragraphs: string[] }[] = [
     number: "07",
     title: "Data retention, removal & contact",
     paragraphs: [
-      "You may clear your age-gate preference at any time by clearing site data in your browser. Advertisers may request updates or deletion of their account profile — subject to mandatory financial record-keeping — through the contact page.",
+      "Age-gate confirmation is held only while the public site remains open and is not saved in browser storage; you will be asked again when you enter the site in a fresh page session. Advertisers may request updates or deletion of their account profile — subject to mandatory financial record-keeping — through the contact page.",
       "To request immediate removal of any uploaded video on privacy, consent, or copyright grounds, use our Content Removal or DMCA Notice page.",
     ],
   },

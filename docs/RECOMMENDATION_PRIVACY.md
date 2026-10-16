@@ -37,7 +37,7 @@ No full viewer-facing event-history export or view-history dashboard is provided
 
 ## Security and abuse limits
 
-- Consent is a product permission, not proof of age or verified identity. The existing local age gate is a self-declaration stored in local browser storage; it is not remote age assurance. Legal/compliance owners must validate age assurance and adult-content distribution obligations separately before launch.
+- Consent is a product permission, not proof of age or verified identity. The public age gate is a self-declaration that is not persisted to browser storage; it is not remote age assurance. Legal/compliance owners must validate age assurance and adult-content distribution obligations separately before launch.
 - Recommendation events are client observations and can be spoofed by a determined client. Rate limits, strict schemas, idempotency keys, bounded event batches, and server-side eligibility reduce abuse; client analytics are not payment counters or a fraud-proof system. Do not use these raw events for monetary settlement or creator compensation.
 - Staff/application logs never include video IDs, titles, viewer hashes, event bodies, or personal histories. Feed operational log lines contain only surface, algorithm version, candidate count, empty status, and latency; ingestion errors log a stage name without user context.
 - HMAC secrets must be server-only, unique and backed up/rotated under existing incident procedures. Rotating the secret intentionally invalidates existing anonymous personalization and requires the visitor to opt in again.
