@@ -12,9 +12,9 @@ import { z } from "zod";
 import {
   GRAPHIC_SEXUAL_COPY,
   NON_NEGOTIABLE_COPY_PATTERNS,
-  REQUIRED_EXPLICIT_TERMS,
   containsRequiredExplicitTerm,
   isCompliantGeneratedCopy,
+  requiredExplicitTermsForCategory,
   resolveTitleStyle,
   titleCharBudget,
   titleKeywordViolation,
@@ -23,10 +23,8 @@ import {
   type TitleStyle,
 } from "./title-style";
 import {
-  articleFor,
   EXPLICIT_DESCRIPTION_SCENES,
   EXPLICIT_DESCRIPTION_TAILS,
-  EXPLICIT_FALLBACK_KEYWORDS,
   EXPLICIT_INTENSIFIERS,
   EXPLICIT_PLACES,
   EXPLICIT_TITLE_ARRANGEMENTS,
@@ -134,7 +132,6 @@ export interface SuggestedMetadata {
 
 /** Tags the model may return — anything else is filtered out. */
 export const PERMITTED_TAGS = [
-  "mature",
   "amateur",
   "pov",
   "lesbian",
@@ -145,12 +142,6 @@ export const PERMITTED_TAGS = [
   "big-ass",
   "threesome",
   "hardcore",
-  "kinky",
-  "couples",
-  "boudoir",
-  "romantic",
-  "solo",
-  "roleplay",
   "massage",
   "4k",
   "hd",
@@ -180,9 +171,11 @@ export const PERMITTED_TAGS = [
 ] as const;
 
 /**
- * The live upload taxonomy is first. The final eight labels are kept for older
- * rows and callers; newly generated copy always preserves the admin's exact
- * selected label instead of silently falling back to Mature.
+ * The complete, fixed upload taxonomy — it matches the `categories` table
+ * exactly (see `supabase/migrations/00000000000021_fixed_categories_and_community.sql`,
+ * which deleted every other category). Newly generated copy always preserves
+ * the admin's exact selected label instead of silently falling back to
+ * another category.
  */
 export const KNOWN_CATEGORIES = [
   "Amateur",
@@ -197,14 +190,6 @@ export const KNOWN_CATEGORIES = [
   "Threesome",
   "Hardcore",
   "Massage",
-  "Mature",
-  "Kinky",
-  "Mature 18+",
-  "Couples",
-  "Boudoir",
-  "Romantic",
-  "Solo",
-  "Roleplay",
 ] as const;
 
 export type KnownCategory = (typeof KNOWN_CATEGORIES)[number];
@@ -415,54 +400,6 @@ export const CATEGORY_STORIES: Record<KnownCategory, CategoryStory> = {
       "This adult massage video listing pairs category-specific context with a concise editorial preview and straightforward playback information for viewers exploring related content.",
     ],
   ),
-  Mature: categoryStoryData(
-    "mature adult video",
-    "mature-performer editorial: composed, self-assured, and adult-only",
-    ["Mature Cinema With a Quiet Confidence", "A Mature Adult Feature in Focus", "Mature Style With a Fresh Editorial Edge", "The Mature Cut With Timeless Presence"],
-    ["Browse mature adult video with category-led editorial copy, a concise preview, and clear viewing details for adults exploring this collection before playback begins.", "This mature video listing pairs a confident category summary with practical playback information and a distinctive editorial preview for adults browsing related features online."],
-  ),
-  Kinky: categoryStoryData(
-    "adult kinky video",
-    "playful alternative-genre editorial: distinctive and non-graphic, without guessing a specific activity",
-    ["Kinky Cinema With a Playful Point of View", "An Adult Kinky Feature With Its Own Rhythm", "Kinky Style Reframed for After Dark", "A Distinctive Kinky Cut in Focus"],
-    ["Explore adult kinky video through a category-specific editorial preview, clear browsing context, and practical viewing details for adults considering this collection.", "This kinky adult video listing brings genre context together with concise editorial language and straightforward playback information for viewers browsing related features online."],
-  ),
-  "Mature 18+": categoryStoryData(
-    "18+ mature adult video",
-    "18+ mature adult editorial: age-clear, respectful, and never youth-coded",
-    ["Mature Eighteen Plus Cinema in Focus", "An Adults Only Mature Feature With Style", "Mature 18 Plus With a Confident Mood", "Adult Mature Cinema With a Fresh Perspective"],
-    ["Browse mature 18+ adult video with age-clear category wording, a concise editorial summary, and practical viewing details before playback begins on this page.", "This adults-only mature listing pairs a clear category description with distinctive editorial copy and straightforward viewing information for adults exploring the collection online."],
-  ),
-  Couples: categoryStoryData(
-    "adult couples video",
-    "adult-couple editorial: warm and composed, without inventing personal relationships or events",
-    ["Couples Cinema With a Warm Editorial Glow", "An Adult Couples Feature in a New Light", "Couples Style With a Romantic Film Mood", "A Confident Couples Cut After Dark"],
-    ["Explore adult couples video with a warm category summary, concise editorial framing, and clear viewing information for adults browsing the collection before playback.", "This couples video listing offers an adult-only genre description, a distinct editorial preview, and practical playback details for viewers exploring related features online."],
-  ),
-  Boudoir: categoryStoryData(
-    "adult boudoir video",
-    "fashion-magazine boudoir editorial: refined, visual, and self-assured",
-    ["Boudoir in Velvet After Dark", "An Adult Boudoir Feature in Soft Focus", "Boudoir Style With a Cinematic Finish", "The Boudoir Edit With Quiet Confidence"],
-    ["Discover adult boudoir video through a refined category description, distinct editorial language, and practical viewing details for adults browsing this collection online.", "This boudoir video listing pairs an adult-only category summary with a concise editorial preview and straightforward playback information for viewers exploring related features."],
-  ),
-  Romantic: categoryStoryData(
-    "romantic adult video",
-    "romantic editorial: warm, artful, and non-prescriptive about the performers or scene",
-    ["Romantic Cinema With a Soft Focus", "An Adult Romantic Feature in Full Color", "Romance Styled for the Late Night Edit", "A Romantic Mood With an Editorial Edge"],
-    ["Browse romantic adult video through a mood-led category summary, concise editorial copy, and clear viewing information for adults exploring this collection online.", "This romantic listing uses an adult-only category description, distinctive editorial phrasing, and practical playback details for viewers considering related features."],
-  ),
-  Solo: categoryStoryData(
-    "adult solo video",
-    "solo-performance editorial: self-directed, confident, and respectful",
-    ["Solo Cinema With a Confident Point of View", "An Adult Solo Feature in Focus", "Solo Style With a Distinctive Editorial Rhythm", "The Solo Cut With a Fresh Perspective"],
-    ["Explore adult solo video with a category-focused editorial preview, clear listing details, and practical viewing information for adults browsing this collection online.", "This solo video listing pairs a concise adult-only category summary with polished editorial copy and straightforward playback information for viewers exploring related features."],
-  ),
-  Roleplay: categoryStoryData(
-    "adult roleplay video",
-    "costume-drama editorial: imaginative in voice, but never implying family roles, coercion, or unverified plot",
-    ["Roleplay Cinema With a Theatrical Edge", "An Adult Roleplay Feature After Dark", "Roleplay Style With a Cinematic Turn", "The Roleplay Edit Takes Center Stage"],
-    ["Browse adult roleplay video with a theatrical category summary, original editorial phrasing, and practical viewing details for adults browsing the collection online.", "This roleplay video listing features a concise adults-only genre description, distinct editorial framing, and straightforward playback information before viewers begin."],
-  ),
 };
 
 const DESCRIPTION_CLOSERS = ["For adult viewers.", "Review the listing details.", "Browse related listings in this collection."];
@@ -479,11 +416,11 @@ export function isKnownCategory(value: unknown): value is KnownCategory {
   return Boolean(wanted) && KNOWN_CATEGORIES.some((entry) => entry.toLowerCase() === wanted);
 }
 
-/** The story material for a category label, defaulting to Mature. */
+/** The story material for a category label, defaulting to Amateur. */
 export function categoryStory(category?: string): CategoryStory {
   const wanted = String(category ?? "").trim().toLowerCase();
   const match = KNOWN_CATEGORIES.find((entry) => entry.toLowerCase() === wanted);
-  return CATEGORY_STORIES[match || "Mature"];
+  return CATEGORY_STORIES[match || "Amateur"];
 }
 
 /* ------------------------------------------------------------------------- */
@@ -970,34 +907,26 @@ export function coerceSuggestionInput(value: unknown, fallbackCategory?: string)
     title: asText(rawTitle),
     description: asText(rawDescription),
     tags,
-    category: category || String(fallbackCategory || "").trim() || "Mature",
+    category: category || String(fallbackCategory || "").trim() || "Amateur",
   };
 }
 
 const TAG_SYNONYMS: Record<string, string> = {
-  milf: "mature",
-  stepmom: "mature",
-  stepmother: "mature",
-  "mature woman": "mature",
-  "older woman": "mature",
-  gilf: "mature",
+  stepmom: "milf",
+  stepmother: "milf",
+  "mature woman": "milf",
+  "older woman": "milf",
+  gilf: "milf",
   homemade: "amateur",
-  "real couple": "couples",
-  couple: "couples",
+  "real couple": "amateur",
+  couple: "amateur",
   "amateur couple": "amateur",
   "big ass": "big-ass",
   "point of view": "pov",
   "first person": "pov",
-  girl: "solo",
-  "solo female": "solo",
-  masturbation: "solo",
   girlgirl: "lesbian",
   "girl on girl": "lesbian",
   "two women": "lesbian",
-  bdsm: "kinky",
-  kink: "kinky",
-  fetish: "kinky",
-  bondage: "kinky",
   rough: "rough-sex",
   hardcore: "gonzo",
   "deep throat": "deepthroat",
@@ -1014,19 +943,12 @@ const TAG_SYNONYMS: Record<string, string> = {
   analingus: "anal",
   tittyfuck: "titfuck",
   "titty fuck": "titfuck",
-  "face sitting": "kinky",
   squirt: "squirting",
   spanked: "spanking",
   tits: "big-tits",
   "shaven pussy": "shaved",
-  lingerie: "boudoir",
-  "lingerie shoot": "boudoir",
-  "date night": "romantic",
-  "role play": "roleplay",
-  cosplay: "roleplay",
   spa: "massage",
   oiled: "massage",
-  sensual: "romantic",
   "1080p": "hd",
   uhd: "4k",
   "2160p": "4k",
@@ -1065,7 +987,7 @@ function normalizeTags(rawTags: string[]): string[] {
 function normalizeTagsWithFallback(rawTags: string[], category: string): string[] {
   const tags = normalizeTags(rawTags);
   if (tags.length) return tags;
-  return normalizeTags([category, "editorial", "mature"]);
+  return normalizeTags([category, "editorial", "featured"]);
 }
 
 function normalizeCategory(rawCategory: string, fallback: string): string {
@@ -1073,7 +995,7 @@ function normalizeCategory(rawCategory: string, fallback: string): string {
   const match = KNOWN_CATEGORIES.find((entry) => entry.toLowerCase() === wanted);
   if (match) return match;
   const fallbackMatch = KNOWN_CATEGORIES.find((entry) => entry.toLowerCase() === String(fallback || "").trim().toLowerCase());
-  return fallbackMatch || "Mature";
+  return fallbackMatch || "Amateur";
 }
 
 export function redactKeyMaterial(text: unknown): string {
@@ -1085,9 +1007,9 @@ export function redactKeyMaterial(text: unknown): string {
 
 function resolveCategory(requestedCategory: string | undefined, modelCategory: string): string {
   if (requestedCategory && isKnownCategory(requestedCategory)) {
-    return normalizeCategory(requestedCategory, "Mature");
+    return normalizeCategory(requestedCategory, "Amateur");
   }
-  return normalizeCategory(modelCategory, requestedCategory || "Mature");
+  return normalizeCategory(modelCategory, requestedCategory || "Amateur");
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1096,6 +1018,14 @@ function resolveCategory(requestedCategory: string | undefined, modelCategory: s
 
 const DASH_CHARACTERS = /[‐-―−﹘﹣－⁓〜]/g;
 const SEPARATING_HYPHEN = /(^|[^\p{L}\p{N}])-+(?![a-z0-9])/giu;
+
+/** Title Case for a plain lowercase phrase, e.g. `"real couple"` → `"Real Couple"`. */
+function titleCaseWord(value: string): string {
+  return String(value || "")
+    .split(/\s+/u)
+    .map((word) => (word ? word.charAt(0).toLocaleUpperCase("en") + word.slice(1) : word))
+    .join(" ");
+}
 
 export function sanitizeTitle(value: unknown): string {
   let text = String(value ?? "")
@@ -1218,7 +1148,13 @@ export function isCompliantCopy(
   return copyPolicyViolation(title, description, style) === null;
 }
 
-/** Category terms should be clear in the title and in the opening description. */
+/**
+ * Category terms should be clear in the opening description (the title is
+ * deliberately kept free of the category name — see `titleNamesSelectedCategory`
+ * below — because the listing's category field already carries that signal and
+ * a title like "Amateur Girlfriend Grabs My Cock..." reads like a keyword tag
+ * rather than a sentence about the scene).
+ */
 export function hasSelectedCategorySignal(value: string, category: string): boolean {
   const normalized = String(category || "").trim().toLowerCase();
   let pattern: RegExp;
@@ -1232,15 +1168,6 @@ export function hasSelectedCategorySignal(value: string, category: string): bool
     case "milf":
       pattern = /\bmilf\b|\bmature\b/iu;
       break;
-    case "mature 18+":
-      pattern = /\bmature\b|(?:^|\W)18\+(?=$|\W)|\beighteen[\s-]+plus\b/iu;
-      break;
-    case "couples":
-      pattern = /\bcouples?\b/iu;
-      break;
-    case "roleplay":
-      pattern = /\brole[\s-]?play\b/iu;
-      break;
     default: {
       const label = normalized.replace(/\s*\([^)]*\)\s*/g, " ").trim();
       const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1250,6 +1177,55 @@ export function hasSelectedCategorySignal(value: string, category: string): bool
   return pattern.test(String(value || ""));
 }
 
+/**
+ * Category labels that must never appear in a published title, in the exact
+ * wording the admin picks from the category dropdown. `Teen (18+)` is not
+ * listed: the word "teen" is already banned everywhere by the compliance
+ * floor, so there is no label left that could leak into a title. `Big Ass` is
+ * not listed either: "big ass" is itself one of that category's required
+ * anatomy words (see `CATEGORY_EXPLICIT_TERMS` in `./title-style`), so it is a
+ * description of the scene, not a category tag slapped on the front.
+ */
+const CATEGORY_NAME_PATTERNS: Partial<Record<KnownCategory, RegExp>> = {
+  Amateur: /\bamateur\b/iu,
+  Lesbian: /\blesbian\b/iu,
+  MILF: /\bmilf\b/iu,
+  Japanese: /\bjapanese\b/iu,
+  Hentai: /\bhentai\b/iu,
+  Ebony: /\bebony\b/iu,
+  POV: /\bpov\b/iu,
+  Threesome: /\bthreesome\b/iu,
+  Hardcore: /\bhardcore\b/iu,
+  Massage: /\bmassage\b/iu,
+};
+
+/** True when the title spells out the selected category's own label. */
+export function titleNamesSelectedCategory(title: string, category: string): boolean {
+  const known = KNOWN_CATEGORIES.find((entry) => entry.toLowerCase() === String(category || "").trim().toLowerCase());
+  const pattern = known ? CATEGORY_NAME_PATTERNS[known] : undefined;
+  return pattern ? pattern.test(String(title || "")) : false;
+}
+
+/**
+ * Removes the selected category's own label from a title, collapsing the
+ * resulting whitespace. `null` when the category has no forbidden pattern or
+ * the title does not actually contain it.
+ */
+function stripCategoryNameFromTitle(title: string, category: string): string | null {
+  const known = KNOWN_CATEGORIES.find((entry) => entry.toLowerCase() === String(category || "").trim().toLowerCase());
+  const pattern = known ? CATEGORY_NAME_PATTERNS[known] : undefined;
+  if (!pattern || !pattern.test(title)) return null;
+  // A pool phrase and the category phrase can both land the category's name
+  // in the same title (e.g. the Ebony vocabulary's own subjects), so every
+  // occurrence is removed, not just the first.
+  let working = title;
+  while (pattern.test(working)) {
+    working = working.replace(pattern, " ");
+  }
+  const stripped = sanitizeTitle(working);
+  return stripped && stripped.toLocaleLowerCase("en") !== title.trim().toLocaleLowerCase("en") ? stripped : null;
+}
+
 const TITLE_COMPARISON_STOPWORDS = new Set([
   "a", "an", "the", "and", "or", "but", "to", "of", "in", "on", "at", "by", "for", "from", "with", "as", "into", "after", "before", "its", "this", "that", "your", "my", "his", "her", "their", "our", "it", "is", "are", "was", "were", "be", "has", "have", "had", "one", "two", "three", "video", "videos", "adult", "adults", "only", "18", "plus", "4k", "hd",
   // Pronouns and connectives say nothing about which scene a title describes;
@@ -1257,7 +1233,7 @@ const TITLE_COMPARISON_STOPWORDS = new Set([
   "i", "me", "you", "he", "she", "we", "they", "him", "them", "us", "then", "until", "till", "while", "when", "where", "so", "than", "all", "over", "up", "out", "off", "each", "other", "every", "both",
 ]);
 const CATEGORY_COMPARISON_WORDS = new Set([
-  "amateur", "lesbian", "milf", "japanese", "hentai", "ebony", "pov", "big", "ass", "threesome", "hardcore", "massage", "mature", "kinky", "couples", "couple", "boudoir", "romantic", "solo", "roleplay", "role", "play",
+  "amateur", "lesbian", "milf", "japanese", "hentai", "ebony", "pov", "big", "ass", "threesome", "hardcore", "massage",
 ]);
 
 function comparisonTokens(value: unknown): string[] {
@@ -1408,13 +1384,14 @@ Places: ${EXPLICIT_PLACES.join(" | ")}
 Endings: ${vocabulary.closers.join(" | ")}
 Listing tails: ${vocabulary.tails.join(" | ")}`
     : "";
+  const requiredTerms = requiredExplicitTermsForCategory(category);
   return `Create one original, explicit adult title and search description for an adults-only porn listing.
 ${sharedPromptContract(category, source, avoidList)}
-Voice: this is a porn tube listing, not a film review. Write the blunt, concrete title an adult studio publishes for this scene. The selected category is ${JSON.stringify(category)}, so the title must contain the word ${JSON.stringify(vocabulary?.categoryPhrase || category)} exactly once.
+Voice: this is a porn tube listing, not a film review. Write the blunt, concrete title an adult studio publishes for this scene. The selected category is ${JSON.stringify(category)} — the listing's category field already carries that, so the title itself must NOT contain the category name ${JSON.stringify(vocabulary?.categoryPhrase || category)} or any form of it; write what happens instead of labelling the clip.
 Randomized writing direction for this request: ${writingDirection}
 ${pools}
 Title: exactly ${words.min}-${words.max} words (aim ${words.min + 4}-${words.max - 2}), ${characters.min}-${characters.max} characters, Title Case, one sentence with a subject and a verb. Name the sex plainly using words like fuck, fucking, cock, dick, pussy, ass, tits, blowjob, cumshot, creampie, anal, bareback, and say who is doing it to whom and where it was filmed.
-At least one of these must appear in the title: ${REQUIRED_EXPLICIT_TERMS.slice(0, 16).join(", ")}.
+At least one of these words for this category must appear in the title: ${requiredTerms.join(", ")}.
 Do NOT write euphemisms or art criticism. Never write cinema, cinematic, editorial, aesthetic, velvet, soft focus, mood, revelation, portrait, after dark, or a title that only hints at the scene.
 Do not use a metaphor for a body part or an act; "grabs my cock" is right, "takes his gift" is wrong.
 Description: exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words, adults-only and explicit but written as a listing summary, not a story. Name the category naturally once near the start, say what happens on camera, and never promise an act that the category does not imply.
@@ -1424,7 +1401,7 @@ Avoid clickbait, misleading promises, keyword stuffing, rankings guarantees, and
 
 export function buildPrompt(params: SuggestMetadataParams, angle?: string): string {
   const style = params.style ?? resolveTitleStyle();
-  const category = normalizeCategory(String(params.category || ""), "Mature");
+  const category = normalizeCategory(String(params.category || ""), "Amateur");
   const story = categoryStory(category);
   const avoidList = Array.from(
     new Set((params.existingTitles || []).map((title) => String(title || "").trim()).filter(Boolean)),
@@ -1461,9 +1438,12 @@ export function buildPrompt(params: SuggestMetadataParams, angle?: string): stri
 
 /**
  * The longest grammatical rung of one arrangement that still fits the explicit
- * budget, or an empty string when every rung is out of band.
+ * budget, or an empty string when every rung is out of band. The category's
+ * own name is stripped out (a vocabulary tail such as "Amateur Blowjob" would
+ * otherwise leak it) and its own anatomy vocabulary is required instead of the
+ * generic fallback list.
  */
-function explicitTitleCandidate(vocabulary: ExplicitTitleParts): string {
+function explicitTitleCandidate(vocabulary: ExplicitTitleParts, category: string): string {
   const slots: ExplicitSlots = {
     subject: randomItem(vocabulary.subjects),
     act: randomItem(vocabulary.acts),
@@ -1476,14 +1456,18 @@ function explicitTitleCandidate(vocabulary: ExplicitTitleParts): string {
   };
   const arrangement = randomItem([...EXPLICIT_TITLE_ARRANGEMENTS]);
   for (const rung of arrangement(slots)) {
-    const cleaned = collapseDoubledWords(sanitizeTitle(rung));
+    let cleaned = collapseDoubledWords(sanitizeTitle(rung));
     if (!cleaned) continue;
+    if (titleNamesSelectedCategory(cleaned, category)) {
+      cleaned = collapseDoubledWords(stripCategoryNameFromTitle(cleaned, category) || "");
+      if (!cleaned) continue;
+    }
     // A rung trimmed of its tail clause can lose the sexual term; put one back
     // rather than publish a title that only hints at the scene.
-    const candidate = containsRequiredExplicitTerm(cleaned)
+    const candidate = containsRequiredExplicitTerm(cleaned, category)
       ? cleaned
-      : sanitizeTitle(`${cleaned} ${randomItem([...EXPLICIT_FALLBACK_KEYWORDS])}`);
-    if (withinExplicitBudget(candidate)) return candidate;
+      : sanitizeTitle(`${cleaned} ${titleCaseWord(randomItem(requiredExplicitTermsForCategory(category)))}`);
+    if (withinExplicitBudget(candidate) && !titleNamesSelectedCategory(candidate, category)) return candidate;
   }
   return "";
 }
@@ -1533,8 +1517,8 @@ export function titleSearchKey(title: string): string {
  * strand the composer on one canned line.
  */
 export function composeExplicitTitle(category: string, existingTitles: string[] = []): string {
-  const label = normalizeCategory(String(category || ""), "Mature");
-  const vocabulary = EXPLICIT_TITLE_VOCABULARY[label as KnownCategory] || EXPLICIT_TITLE_VOCABULARY.Mature;
+  const label = normalizeCategory(String(category || ""), "Amateur");
+  const vocabulary = EXPLICIT_TITLE_VOCABULARY[label as KnownCategory] || EXPLICIT_TITLE_VOCABULARY.Amateur;
   const avoid: string[] = [];
   const seen = new Set<string>();
   for (const raw of existingTitles) {
@@ -1549,10 +1533,10 @@ export function composeExplicitTitle(category: string, existingTitles: string[] 
   let reserve: string | null = null;
 
   for (let attempt = 0; attempt < EXPLICIT_COMPOSITION_ATTEMPTS; attempt += 1) {
-    const candidate = explicitTitleCandidate(vocabulary);
+    const candidate = explicitTitleCandidate(vocabulary, label);
     if (!candidate) continue;
     if (copyPolicyViolation(candidate, "", "explicit")) continue;
-    if (!hasSelectedCategorySignal(candidate, label)) continue;
+    if (titleNamesSelectedCategory(candidate, label)) continue;
     const key = titleSearchKey(candidate);
     if (!key || seen.has(key)) continue;
     if (!reserve) reserve = candidate;
@@ -1561,11 +1545,12 @@ export function composeExplicitTitle(category: string, existingTitles: string[] 
 
   if (reserve) return reserve;
   // Every drawn combination collided with an existing title: vary the shape
-  // that is always in band, so even this path does not repeat itself.
+  // that is always in band, so even this path does not repeat itself. The
+  // category's own anatomy word substitutes for its name.
   return sanitizeTitle(
-    `${vocabulary.categoryPhrase} ${randomItem(vocabulary.subjects)} ${randomItem(
-      vocabulary.acts,
-    )} ${randomItem([...EXPLICIT_INTENSIFIERS])} ${randomItem([...EXPLICIT_PLACES])}`,
+    `${randomItem(vocabulary.subjects)} ${randomItem(vocabulary.acts)} ${randomItem(
+      [...EXPLICIT_INTENSIFIERS],
+    )} ${titleCaseWord(randomItem(requiredExplicitTermsForCategory(label)))} ${randomItem([...EXPLICIT_PLACES])}`,
   );
 }
 
@@ -1582,8 +1567,8 @@ function joinClauses(clauses: string[]): string {
 }
 
 export function composeExplicitDescription(category: string): string {
-  const label = normalizeCategory(String(category || ""), "Mature");
-  const vocabulary = EXPLICIT_TITLE_VOCABULARY[label as KnownCategory] || EXPLICIT_TITLE_VOCABULARY.Mature;
+  const label = normalizeCategory(String(category || ""), "Amateur");
+  const vocabulary = EXPLICIT_TITLE_VOCABULARY[label as KnownCategory] || EXPLICIT_TITLE_VOCABULARY.Amateur;
   const scene = randomItem([...(vocabulary.scenes || EXPLICIT_DESCRIPTION_SCENES)]);
   const tail = randomItem([...EXPLICIT_DESCRIPTION_TAILS]);
   const beats = describeBeats(shuffle([...vocabulary.acts]));
@@ -1684,7 +1669,6 @@ function shuffle<T>(items: T[]): T[] {
 
 function fallbackCategoryPhrase(category: KnownCategory): string {
   if (category === "Teen (18+)") return "Adults Only";
-  if (category === "Mature 18+") return "Mature";
   return category;
 }
 
@@ -1720,13 +1704,13 @@ export function fallbackSuggestion(
   existingTitles: string[] = [],
   style: TitleStyle = resolveTitleStyle(),
 ): SuggestedMetadata {
-  const categoryLabel = normalizeCategory(String(category || ""), "Mature");
+  const categoryLabel = normalizeCategory(String(category || ""), "Amateur");
   if (style === "explicit") {
     const title = composeExplicitTitle(categoryLabel, existingTitles);
     return {
       title,
       description: composeExplicitDescription(categoryLabel),
-      tags: normalizeTags([categoryLabel, "hardcore", "mature", "4k", "featured"]),
+      tags: normalizeTags([categoryLabel, "hardcore", "4k", "featured"]),
       category: categoryLabel,
       reasoning:
         "Offline explicit title composer — AI unavailable or declined the request; review against the footage before publishing.",
@@ -1747,7 +1731,7 @@ export function fallbackSuggestion(
   return {
     title: sanitizeGeneratedTitle(title, categoryLabel),
     description,
-    tags: normalizeTags([categoryLabel, "editorial", "mature"]),
+    tags: normalizeTags([categoryLabel, "editorial", "featured"]),
     category: categoryLabel,
     reasoning: "Category-only fallback — AI unavailable; requires human review against the video before publishing.",
   };
@@ -1765,7 +1749,7 @@ export function generateCategoryFallbackMetadata(
   existingTitles: string[] = [],
   style: TitleStyle = resolveTitleStyle(),
 ): SuggestedMetadata {
-  const categoryLabel = normalizeCategory(String(category || ""), "Mature");
+  const categoryLabel = normalizeCategory(String(category || ""), "Amateur");
   return fallbackSuggestion(sourceName, categoryLabel, existingTitles, style);
 }
 
@@ -1960,69 +1944,6 @@ function trimTitleDroppingOpening(
   return best;
 }
 
-/** Category words that read as a setting rather than an adjective close the title instead. */
-const CATEGORY_TITLE_SUFFIXES: Partial<Record<KnownCategory, string>> = {
-  Threesome: "In A Threesome",
-  Massage: "During A Massage",
-  Couples: "As A Couple",
-  Roleplay: "In A Roleplay Scene",
-};
-
-function categoryTitleWord(category: KnownCategory): string {
-  if (category === "Teen (18+)") return "18+";
-  if (category === "Mature 18+") return "Mature";
-  return category;
-}
-
-/**
- * Works the selected category into a title that forgot it: as a closing phrase
- * for setting-like categories, after a leading determiner ("My Amateur
- * Girlfriend ..."), or as a prefix. `null` when no placement fits the budget.
- */
-function addCategoryToTitle(
-  title: string,
-  category: KnownCategory,
-  budget: TitleBudget,
-  keep: (candidate: string) => boolean,
-): string | null {
-  const signal = (candidate: string) => keep(candidate) && hasSelectedCategorySignal(candidate, category);
-  const words = title.split(/\s+/u).filter(Boolean);
-  const candidates: string[] = [];
-
-  const suffix = CATEGORY_TITLE_SUFFIXES[category];
-  if (suffix) {
-    // Make room first so a later trim never cuts the phrase back off.
-    const room: TitleBudget = {
-      minWords: 1,
-      minChars: 1,
-      maxWords: budget.maxWords - titleWordCount(suffix),
-      maxChars: budget.maxChars - suffix.length - 1,
-    };
-    const base = isOverTitleBudget(title, room) ? trimTitleToBudget(title, room, keep) : title;
-    if (base) candidates.push(`${base} ${suffix}`);
-  }
-
-  const word = categoryTitleWord(category);
-  const lead = bareWord(words[0] || "");
-  if (words.length > 1 && /^(?:my|the|this|her|his|our|your|their)$/u.test(lead)) {
-    candidates.push([words[0], word, ...words.slice(1)].join(" "));
-  } else if (words.length > 1 && /^(?:a|an)$/u.test(lead)) {
-    candidates.push([articleFor(word), word, ...words.slice(1)].join(" "));
-  }
-  candidates.push(`${word} ${title}`);
-
-  for (const raw of candidates) {
-    const candidate = sanitizeTitle(raw);
-    if (!isOverTitleBudget(candidate, budget)) {
-      if (signal(candidate)) return candidate;
-      continue;
-    }
-    const trimmed = trimTitleToBudget(candidate, budget, signal);
-    if (trimmed) return trimmed;
-  }
-  return null;
-}
-
 /** A setting the model's own description names, so an added place cannot contradict it. */
 const DESCRIBED_PLACE =
   /\b(?:at home|in bed|by the pool|(?:in|on) (?:the|our|her|his|my|their) (?:shower|kitchen counter|kitchen|bedroom|bathroom|living room couch|living room|hotel room|hotel bed|car|back seat|office desk|office|garage|pool|bed|couch|sofa|floor|balcony|desk|bathtub))\b/iu;
@@ -2120,7 +2041,8 @@ export interface ValidateOptions {
 }
 
 const DESCRIPTION_COUNT_MESSAGE = `description must contain ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words`;
-const CATEGORY_SIGNAL_MESSAGE = "title and opening description must use the selected category naturally";
+const CATEGORY_SIGNAL_MESSAGE = "opening description must use the selected category naturally";
+const CATEGORY_NAME_IN_TITLE_MESSAGE = "title must not spell out the selected category's own name";
 
 function descriptionLead(description: string): string {
   return description.split(/\s+/u).slice(0, 12).join(" ");
@@ -2176,7 +2098,7 @@ export function validateSuggestionPayload(
 
   const finalCategory = resolveCategory(requestedCategory, validated.data.category);
   // resolveCategory always lands on a known label.
-  const known = normalizeCategory(finalCategory, "Mature") as KnownCategory;
+  const known = normalizeCategory(finalCategory, "Amateur") as KnownCategory;
   const style = options.style ?? resolveTitleStyle();
   const repairs: string[] = [];
   let repairCost = 0;
@@ -2199,30 +2121,44 @@ export function validateSuggestionPayload(
   }
 
   const budget = titleBudgetFor(style);
-  // Every repaired title must stay readable, publishable and in voice.
+  // Every repaired title must stay readable, publishable, in voice (which, for
+  // the explicit voice, means it names this category's own anatomy words —
+  // see `CATEGORY_EXPLICIT_TERMS`), and must not spell out the category name.
   const keep = (candidate: string) =>
     isValidTitle(candidate) &&
-    !titleKeywordViolation(candidate, style) &&
-    !copyPolicyViolation(candidate, "", style);
+    !titleKeywordViolation(candidate, style, finalCategory) &&
+    !copyPolicyViolation(candidate, "", style) &&
+    (style !== "explicit" || !titleNamesSelectedCategory(candidate, finalCategory));
+
+  // A title that spells out the category label reads like a keyword tag
+  // ("Amateur Girlfriend Grabs My Cock...") rather than a sentence about the
+  // scene; the category is already a field on the listing. The name is
+  // stripped out instead of rejecting the whole reply over one word.
+  if (style === "explicit" && titleNamesSelectedCategory(title, finalCategory)) {
+    const stripped = strict ? null : stripCategoryNameFromTitle(title, finalCategory);
+    if (!stripped || !keep(stripped)) {
+      return { ok: false, message: CATEGORY_NAME_IN_TITLE_MESSAGE };
+    }
+    repairs.push("category name removed from the title");
+    repairCost += 1;
+    title = stripped;
+  }
 
   // An overlong title is cut back to its longest readable opening before the
   // voice is judged, so a stray clause cannot cost an otherwise usable reply.
   // (Compliance was checked on the full reply above: banned words are never
   // trimmed away silently.)
   if (!strict && isOverTitleBudget(title, budget)) {
-    const hadCategory = hasSelectedCategorySignal(title, finalCategory);
-    const preserve = (candidate: string) =>
-      keep(candidate) && (!hadCategory || hasSelectedCategorySignal(candidate, finalCategory));
-    let trimmed = trimTitleToBudget(title, budget, preserve);
+    let trimmed = trimTitleToBudget(title, budget, keep);
     if (!trimmed && lenient) {
-      trimmed = trimTitleDroppingOpening(title, budget, preserve);
+      trimmed = trimTitleDroppingOpening(title, budget, keep);
       if (trimmed) repairCost += 1;
     }
     if (!trimmed) {
       return {
         ok: false,
         message:
-          titleKeywordViolation(title, style) ||
+          titleKeywordViolation(title, style, finalCategory) ||
           titleLengthViolation(title, style, titleWordCount(title)) ||
           "title is too long",
       };
@@ -2233,39 +2169,22 @@ export function validateSuggestionPayload(
 
   // Then the voice. An editorial title that names the act, or an explicit title
   // that only hints at one, is both wrong for the site and worth one retry.
-  const voice = titleKeywordViolation(title, style);
+  const voice = titleKeywordViolation(title, style, finalCategory);
   if (voice) {
     return { ok: false, message: voice };
   }
 
-  if (strict) {
-    const shape = titleLengthViolation(title, style, titleWordCount(title));
-    if (shape) return { ok: false, message: shape };
-    if (!isValidDescription(description)) {
-      return { ok: false, message: `the suggestion was incomplete (description: ${DESCRIPTION_COUNT_MESSAGE})` };
-    }
-  } else {
-    if (lenient && !hasSelectedCategorySignal(title, finalCategory)) {
-      const withCategory = addCategoryToTitle(title, known, budget, keep);
-      if (withCategory) {
-        title = withCategory;
-        repairs.push("category added to the title");
-        repairCost += 1;
-      }
-    }
-
-    const shape = titleLengthViolation(title, style, titleWordCount(title));
-    if (shape) {
-      const extended = lenient ? extendShortTitle(title, style, budget, keep, description) : null;
-      if (!extended) return { ok: false, message: shape };
-      repairs.push(`title extended from ${titleWordCount(title)} words to ${titleWordCount(extended)}`);
-      title = extended;
-      repairCost += 1;
-    }
+  const shape = titleLengthViolation(title, style, titleWordCount(title));
+  if (shape) {
+    if (strict) return { ok: false, message: shape };
+    const extended = lenient ? extendShortTitle(title, style, budget, keep, description) : null;
+    if (!extended) return { ok: false, message: shape };
+    repairs.push(`title extended from ${titleWordCount(title)} words to ${titleWordCount(extended)}`);
+    title = extended;
+    repairCost += 1;
   }
-
-  if (!hasSelectedCategorySignal(title, finalCategory)) {
-    return { ok: false, message: CATEGORY_SIGNAL_MESSAGE };
+  if (strict && !isValidDescription(description)) {
+    return { ok: false, message: `the suggestion was incomplete (description: ${DESCRIPTION_COUNT_MESSAGE})` };
   }
 
   const titleRepaired = repairCost > 0;

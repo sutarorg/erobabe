@@ -154,10 +154,12 @@ export const EXPLICIT_TITLE_ARRANGEMENTS: readonly ExplicitArrangement[] = [
 ] as const;
 
 /**
- * Category vocabulary. `categoryPhrase` is what the per-category title check
- * looks for, and it differs from the raw database label for the sensitive ones:
- * `Teen (18+)` publishes as `18+ Adults Only` (the label is an internal name
- * that must never reach a public title) and `Mature 18+` publishes as `Mature`.
+ * Category vocabulary used for prompt hints and the offline composer.
+ * `categoryPhrase` is a label for internal bookkeeping only — published
+ * titles never spell out the category's own name (see
+ * `titleNamesSelectedCategory` in `./suggestion`) — and it differs from the
+ * raw database label for `Teen (18+)`, whose label is internal only and must
+ * never reach a public title at all.
  */
 export const EXPLICIT_TITLE_VOCABULARY: Record<KnownCategory, ExplicitTitleParts> = {
   Amateur: {
@@ -353,112 +355,6 @@ export const EXPLICIT_TITLE_VOCABULARY: Record<KnownCategory, ExplicitTitleParts
     moves: ["Oiled Doggy Style", "Table Side Blowjob", "Face Down And Spread", "Slow Oil Sex"],
     closers: ["Cums Into The Towel", "Takes A Cumshot On Her Oiled Back", "Squirts On The Table"],
     tails: ["Massage Sex Tape", "Oiled Fuck", "Happy Ending Blowjob"],
-  },
-  Mature: {
-    categoryPhrase: "Mature",
-    subjects: ["The Mature Babe", "My Experienced Girlfriend", "The Mature Performer"],
-    acts: [
-      "Takes My Dick Slow",
-      "Shows Her Soft Pussy",
-      "Rides Me Slow Then Hard",
-      "Sucks My Cock Standing",
-    ],
-    moves: ["Missionary With Eye Contact", "Slow Cowgirl Ride", "Doggy Style At The Bedside", "Spooning Sex"],
-    closers: ["Cums Twice And Keeps Going", "Takes The Cumshot On Her Tits"],
-    tails: ["Mature Sex Tape", "Private Fuck", "Experienced Blowjob"],
-  },
-  Kinky: {
-    categoryPhrase: "Kinky",
-    scenes: ["bondage fuck", "strapon scene", "spanking and sex", "blindfold blowjob"],
-    subjects: ["My Girlfriend", "The Mistress In Latex", "The Kinky Performer"],
-    acts: [
-      "Ties Me Up Then Takes Control",
-      "Uses A Strap On Her Pussy",
-      "Gets Bound And Fucked Raw",
-      "Spanks Me Until I Cum",
-      "Works A Vibrator On Her Clit",
-    ],
-    moves: ["Blindfolded Doggy Style", "Handcuffed Over The Bed", "Latex Strap On Sex", "Spanked Prone Bone"],
-    closers: ["Cums On Command", "Squirts While Tied Up", "Takes The Cumshot On Her Mask"],
-    tails: ["Kink Sex Tape", "Fetish Fuck", "Bondage Blowjob"],
-  },
-  "Mature 18+": {
-    categoryPhrase: "Mature",
-    subjects: ["The 18+ Verified Babe", "My Mature Girlfriend", "The Adults Only Performer"],
-    acts: ["Takes My Cock Bare", "Shows Her Shaven Pussy", "Sucks Me Then Rides", "Fucks Me Raw"],
-    moves: ["Raw Doggy Style", "Cowgirl On Top", "Missionary Up Close"],
-    closers: ["Cums On Camera", "Takes A Cumshot On Her Tits", "Squirts Twice"],
-    tails: ["18+ Sex Tape", "Adults Only Fuck", "Verified Blowjob"],
-  },
-  Couples: {
-    categoryPhrase: "Couples",
-    subjects: ["The Married Babe", "My Girlfriend", "The Couple On Cam"],
-    acts: [
-      "Fucks Raw And Slow On Camera",
-      "Takes Turns Riding Each Other",
-      "Shows How She Takes His Cock",
-      "Makes Eye Contact While She Cums",
-    ],
-    moves: ["Lotus Position Sex", "Slow Cowgirl Ride", "Doggy Style On The Bed", "Morning Couch Sex"],
-    closers: ["Cums Together On Camera", "She Squirts On His Dick", "Both Cum On The Pillow"],
-    tails: ["Couple Sex Tape", "Swinger Blowjob", "Two Person Fuck"],
-  },
-  Boudoir: {
-    categoryPhrase: "Boudoir",
-    scenes: ["lingerie sex", "boudoir fuck", "stocking blowjob", "bedspread sex"],
-    subjects: ["My Girlfriend In Lace", "The Babe In Stockings", "The Bride To Be"],
-    acts: [
-      "Peels Off Her Panties",
-      "Rubs Her Clit For The Camera",
-      "Straddles Me On The Chaise",
-      "Takes My Cock Through The Lace",
-    ],
-    moves: ["Lingerie Cowgirl", "Bedspread Missionary", "Standing In Stockings", "Mirror Side Doggy Style"],
-    closers: ["Cums On The Silk Sheets", "Takes A Cumshot On Her Stockings", "Squirts On The Bedspread"],
-    tails: ["Boudoir Sex Tape", "Lingerie Fuck", "Lace Blowjob"],
-  },
-  Romantic: {
-    categoryPhrase: "Romantic",
-    scenes: ["making love tape", "slow sex", "morning fuck", "lotus position sex"],
-    subjects: ["My Girlfriend", "The Couple In Love", "My Fiancée"],
-    acts: [
-      "Kisses Me Down To My Cock",
-      "Takes My Dick Slow And Naked",
-      "Wraps Her Legs Around My Head",
-      "Whispers Before She Rides",
-    ],
-    moves: ["Slow Missionary", "Spooning In The Dark", "Lotus Sex On The Bed", "Butterfly Position Sex"],
-    closers: ["Cums With Him Laughing", "Cums Whispering My Name", "Kisses Through Her Orgasm"],
-    tails: ["Romantic Sex Tape", "Making Love Sex Tape", "Slow Fuck Clip"],
-  },
-  Solo: {
-    categoryPhrase: "Solo",
-    scenes: ["solo play", "orgasm on cam", "toys and fingers", "shower handjob"],
-    subjects: ["My Girlfriend Alone At Home", "The Babe On Cam", "The Solo Performer"],
-    acts: [
-      "Fucks Her Own Pussy",
-      "Works A Vibrator On Her Clit",
-      "Rubs Her Tits To Orgasm",
-      "Slides A Toy Deep",
-      "Cums For The Camera",
-    ],
-    moves: ["Close Up On Her Pussy", "Toys And A Mirror", "Locked Door Sex", "Shower Self Fuck"],
-    closers: ["Cums Five Times", "Squirts Across The Mattress", "Moans Straight To Orgasm"],
-    tails: ["Solo Sex Tape", "Cam Show Orgasm", "Self Fuck Video"],
-  },
-  Roleplay: {
-    categoryPhrase: "Roleplay",
-    subjects: ["The Nurse On Shift", "My Girlfriend In Uniform", "The Boss After Hours"],
-    acts: [
-      "Locks The Door And Takes My Cock",
-      "Examines My Dick Then Sucks It",
-      "Pins Me To The Desk",
-      "Changes Costume Mid Fuck",
-      "Stays In Character On Her Knees",
-    ],
-    moves: ["Uniform Doggy Style", "Desk Sex Scene", "Nurse Table Blowjob", "Costume Change Cowgirl"],
-    closers: ["Cums In Character", "Takes A Cumshot On The Uniform", "Swallows And Stays In Role"],
-    tails: ["Roleplay Sex Tape", "Costume Fuck", "Uniform Blowjob"],
   },
 };
 

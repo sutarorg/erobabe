@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { MetadataError, suggestVideoMetadata } from "@/lib/metadata/openrouter";
-import { generateCategoryFallbackMetadata } from "@/lib/metadata/suggestion";
 import { normalizeTitleStyle, resolveTitleStyle } from "@/lib/metadata/title-style";
 import { z } from "zod";
 
@@ -12,10 +11,10 @@ export const maxDuration = 60;
  * Admin-only category-led AI metadata suggestions (OpenRouter, DeepSeek V3.2 by
  * default). Titles are written in the voice the site publishes — `explicit`
  * unless `VIDEO_TITLE_STYLE` says otherwise. Length near-misses in the model's
- * reply are repaired rather than rejected (see `suggestVideoMetadata`); only a
- * model that is unreachable, out of credits, or unwilling to write adults-only
- * copy is answered by the offline composer in the same voice, so the upload
- * queue always gets a publishable title instead of a filename.
+ * reply are repaired rather than rejected (see `suggestVideoMetadata`); a title
+ * is never composed offline. When OpenRouter is unreachable, out of credits, or
+ * unwilling to write adults-only copy, this route answers with an error instead
+ * of a filler title; the caller is expected to retry until the model answers.
  *
  * The upload flow can auto-publish after encoding, so the admin should preview
  * generated copy before starting an upload whenever possible.
@@ -203,52 +202,25 @@ export async function POST(req: NextRequest) {
           seenTitles.add(key);
           return true;
         });
-        try {
-          // The admin-selected category alone informs the creative copy. Filename,
-          // default title, and existing tags are intentionally not sent to AI.
-          const draft = await suggestVideoMetadata({
-            category: parsed.data.category,
-            existingTitles,
-            style,
-            deadline: receivedAt + GENERATION_DEADLINE_MS,
-          });
-          reserveTitle(draft.title);
-          return {
-            suggestion: draft,
-            source: "ai" as const,
-            warning: undefined as string | undefined,
-            warningCode: undefined as string | undefined,
-          };
-        } catch (error: unknown) {
-          if (!(error instanceof MetadataError)) throw error;
-          // A refused or unreachable model must not put a filename on a listing.
-          // The deterministic composer writes the same voice offline, and the
-          // admin is told why the model was not used.
-          // The composer reads recency from the end of its list.
-          const draft = generateCategoryFallbackMetadata(
-            "",
-            parsed.data.category,
-            [...existingTitles].reverse(),
-            style,
-          );
-          reserveTitle(draft.title);
-          return {
-            suggestion: draft,
-            source: "offline" as const,
-            warning: error.message,
-            warningCode: error.code,
-          };
-        }
+        // The admin-selected category alone informs the creative copy. Filename,
+        // default title, and existing tags are intentionally not sent to AI.
+        // A refused or unreachable model is never answered with an offline
+        // composed title: the caller is expected to retry until OpenRouter
+        // answers, so every published title is OpenRouter's own work.
+        const draft = await suggestVideoMetadata({
+          category: parsed.data.category,
+          existingTitles,
+          style,
+          deadline: receivedAt + GENERATION_DEADLINE_MS,
+        });
+        reserveTitle(draft.title);
+        return { suggestion: draft };
       });
       return NextResponse.json({
         suggestion: outcome.suggestion,
-        source: outcome.source,
+        source: "ai" as const,
         style,
-        ...(outcome.warning ? { warning: outcome.warning, warningCode: outcome.warningCode } : {}),
-        note:
-          outcome.source === "offline"
-            ? "Category-led offline draft in the site's title voice, checked against catalog titles; the model was not used. Human review against the footage is recommended before starting an upload because completion auto-publishes."
-            : "Category-led AI draft in the site's title voice, checked against catalog titles; human review against the footage is recommended before starting an upload because completion auto-publishes. No search ranking is guaranteed.",
+        note: "Category-led AI draft in the site's title voice, checked against catalog titles; human review against the footage is recommended before starting an upload because completion auto-publishes. No search ranking is guaranteed.",
       });
     } catch (error: unknown) {
       if (error instanceof MetadataError) {

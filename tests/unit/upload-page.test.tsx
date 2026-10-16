@@ -62,6 +62,19 @@ beforeEach(() => {
         },
         sessions: [],
       });
+    if (url.endsWith("/api/metadata/suggest")) {
+      return Response.json({
+        suggestion: {
+          title: "Girlfriend Grabs My Cock Raw In The Kitchen Before Sunrise",
+          description:
+            "Amateur kitchen fuck filmed at home: she grabs my cock raw and rides it before sunrise. 18+ adults only, one take.",
+          tags: ["amateur", "kitchen"],
+          category: "Category one",
+        },
+        source: "ai",
+        style: "explicit",
+      });
+    }
     if (url.endsWith("confirm")) {
       if (videoDeleted)
         return Response.json(
@@ -456,27 +469,36 @@ describe("device-only upload queue", () => {
     expect(suggestions).toBe(1);
   });
 
-  it("explains a genuine AI outage without calling the draft offline", async () => {
+  it("keeps retrying a genuine AI outage instead of calling a draft offline, then uses the model's own title once it recovers", async () => {
+    let suggestCalls = 0;
     fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
       if (!options?.body)
         return Response.json({
           policy: { mimeTypes: ["video/mp4"], concurrency: 4, headers: {} },
           sessions: [],
         });
-      if (url.endsWith("/api/metadata/suggest"))
+      if (url.endsWith("/api/metadata/suggest")) {
+        suggestCalls += 1;
+        if (suggestCalls === 1)
+          return Response.json(
+            {
+              error: "The model declined to produce a suggestion for this file.",
+              code: "bad_output",
+            },
+            { status: 502 },
+          );
         return Response.json({
           suggestion: {
-            title: "My Amateur Girlfriend Grabs My Cock For A Raw Fuck On Cam",
+            title: "Girlfriend Grabs My Cock For A Raw Fuck On Cam",
             description:
               "Amateur fuck at home with a verified 18+ couple, uncut, in one continuous take, ending with a cumshot on her tits before the light changes.",
             tags: ["amateur"],
             category: "Category one",
           },
-          source: "offline",
-          warning:
-            "The model declined to produce a suggestion for this file.",
-          warningCode: "bad_output",
+          source: "ai",
+          style: "explicit",
         });
+      }
       return Response.json({
         uploadUrl: "https://storage.example.com/signed",
         headers: {},
@@ -486,15 +508,28 @@ describe("device-only upload queue", () => {
     });
 
     await select();
+    // While the first attempt is failing, the entry is left waiting on the AI
+    // (never handed an offline draft), and the retry is automatic.
     await waitFor(() =>
-      expect(screen.getByText(/AI copy unavailable/)).toBeInTheDocument(),
+      expect(screen.getByText(/Waiting for AI title/)).toBeInTheDocument(),
     );
-    expect(screen.getByText(/declined to produce a suggestion/)).toBeInTheDocument();
-    expect(screen.getByText(/press Generate explicit title to try the AI again/)).toBeInTheDocument();
-    expect(screen.queryByText(/Written offline|offline/i)).toBeNull();
     expect(
-      screen.getByDisplayValue(/My Amateur Girlfriend Grabs My Cock For A Raw Fuck On Cam/),
+      screen.getByText(/declined to produce a suggestion for this file/),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/keeps retrying automatically; the upload will not start until it succeeds/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Written offline|offline/i)).toBeNull();
+    // Once the model answers, its own title is used and the notice clears.
+    await waitFor(
+      () =>
+        expect(
+          screen.getByDisplayValue("Girlfriend Grabs My Cock For A Raw Fuck On Cam"),
+        ).toBeInTheDocument(),
+      { timeout: 4000 },
+    );
+    expect(screen.queryByText(/Waiting for AI title/)).toBeNull();
+    expect(suggestCalls).toBe(2);
   });
 
   describe("asking the metadata route again before drafting in the browser", () => {
@@ -594,6 +629,19 @@ describe("re-selected files and server session recovery", () => {
   function serverReturns(session: (body: any) => Record<string, unknown>) {
     fetchMock.mockImplementation(async (url: string, options?: RequestInit) => {
       if (!options?.body) return policyResponse();
+      if (url.endsWith("/api/metadata/suggest")) {
+        return Response.json({
+          suggestion: {
+            title: "Girlfriend Grabs My Cock Raw In The Kitchen Before Sunrise",
+            description:
+              "Amateur kitchen fuck filmed at home: she grabs my cock raw and rides it before sunrise. 18+ adults only, one take.",
+            tags: ["amateur", "kitchen"],
+            category: "Category one",
+          },
+          source: "ai",
+          style: "explicit",
+        });
+      }
       if (
         url.endsWith("/api/videos/bunny/sessions") &&
         options.method === "POST"
