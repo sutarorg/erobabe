@@ -748,10 +748,17 @@ prompt and validation), route: `/api/metadata/suggest`.
    configured where the Next.js server runs.
 5. Test: open **Admin → System Health** and press **Test OpenRouter**. It sends
    one tiny real request and reports the model, latency, and any provider error.
-   Then go to `/admin/videos/upload`, choose a category and source, and preview
-   the generated title, description, and tags before starting the upload. To
-   check a key from a terminal, run `OPENROUTER_API_KEY=sk-or-… npm run test:live`
-   — see `tests/live/README.md`.
+   It walks the same route chain an upload uses, so it answers even when the
+   preferred model is queueing. Then go to `/admin/videos/upload`, choose a
+   category and source, and preview the generated title, description, and tags
+   before starting the upload. To check a key from a terminal, run
+   `OPENROUTER_API_KEY=sk-or-… npm run test:live` — see `tests/live/README.md`.
+   **Model not answering?** The panel also lists the routes and any route that is
+   temporarily benched after stalling; upload titles keep coming from the
+   remaining routes. A free endpoint that never returns is the usual cause of
+   `Waiting for AI title: openRouter did not answer in time`, so keep the
+   fallback chain enabled (or set `OPENROUTER_FALLBACK_MODELS` to routes you
+   trust), and prefer a paid or dedicated route if the queue keeps stalling.
 6. Token and prompt budgets are kept small without shortening the validated
    fields: `OPENROUTER_MAX_OUTPUT_TOKENS` defaults to **512** for a suggestion;
    only an empty or cut-off response gets a larger retry cap, while semantic
@@ -762,10 +769,14 @@ prompt and validation), route: `/api/metadata/suggest`.
    field, the client retries without that optional field.
 7. Suggestions still require human review against the actual video. Length
    near-misses are repaired; unusable responses get up to three attempts within
-   the route's deadline. If the AI route fails, the upload workflow can use its
-   deterministic category-based fallback and flags the item for review. The
-   `/api/metadata/suggest` endpoint reports an actionable error so the AI path
-   can be diagnosed.
+   the route's deadline. A route that *stops answering* — the common failure of
+   a free endpoint, which is queued at the provider — is dropped after
+   `MODEL_ATTEMPT_TIMEOUT_MS` (20 s) and the next route in the chain is asked
+   inside the same budget, and a route that stalls twice in a row is benched for
+   two minutes so later retries skip it. Titles are still only ever written by a
+   model: there is no offline composer to fall back to, so if every route fails
+   the `/api/metadata/suggest` endpoint reports an actionable error and the
+   upload queue keeps retrying instead of publishing a filler title.
 8. **Data handling:** do not send video bytes, private rights documents, payment
    records, or personal information. Metadata generation uses the selected
    category and a compact recent-title avoid list; carousel copy generation
@@ -779,8 +790,10 @@ prompt and validation), route: `/api/metadata/suggest`.
 10. If the model repeatedly returns cut-off or unparsable JSON, first verify the
     model slug in OpenRouter's catalogue. Raise `OPENROUTER_MAX_OUTPUT_TOKENS`
     only if the model genuinely needs a larger completion; the default is sized
-    for this short JSON payload. The upload workflow remains available through
-    its category-based fallback.
+    for this short JSON payload. If a route is slow rather than wrong, remove it
+    from `OPENROUTER_FALLBACK_MODELS` or point `OPENROUTER_MODEL` at a faster one
+    — stall time is wasted budget, and every route in the chain spends a share of
+    it.
 
 ---
 
@@ -895,7 +908,8 @@ fly deploy
 | `BUNNY_STREAM_API_KEY` | Selected Video Library API Key | No | Stream → Library → API | Hosting secrets | uploads | Section D staging upload test | Yes |
 | `CRON_SECRET` | Shared secret the publish scheduler presents to `/api/cron/bunny-publish` (auto-publish after encoding, without a browser) | No | Any long random string (`openssl rand -hex 32`) | Hosting secrets **and** the GitHub Actions secret of the same name | prod | Admin → System Health → "Background auto-publish" says "Scheduler can authenticate"; `curl -i -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/bunny-publish` returns a JSON summary, not 401 | Yes |
 | `OPENROUTER_API_KEY` | OpenRouter API key for AI metadata suggestions | No | https://openrouter.ai/keys → Create key | Hosting secrets | prod (optional) | Test via System Health → Test OpenRouter, or `/api/metadata/suggest` as admin | Yes |
-| `OPENROUTER_MODEL` | OpenRouter model slug | No | `nvidia/nemotron-3-ultra-550b-a55b:free` (default) | Hosting env | prod (optional) | Check https://openrouter.ai/models for the slug | No |
+| `OPENROUTER_MODEL` | OpenRouter model slug (the preferred route) | No | `nvidia/nemotron-3-ultra-550b-a55b:free` (default) | Hosting env | prod (optional) | Check https://openrouter.ai/models for the slug | No |
+| `OPENROUTER_FALLBACK_MODELS` | Comma/space-separated routes tried, in order, when the preferred route stops answering | No | Unset → `nvidia/nemotron-3.5-lightning:free`, `nvidia/nemotron-3-super-120b-a12b:free`; set empty for the preferred model only | Hosting env | prod (optional) | Admin → System Health lists the chain and any benched route; `Waiting for AI title: openRouter did not answer in time` means the chain ran out — check the slug and the account's free-tier quota | No |
 | `OPENROUTER_MAX_OUTPUT_TOKENS` | First-attempt output-token cap for one metadata suggestion | No | `512` (default) | Hosting env | prod (optional) | Raise only if suggestions are truncated | No |
 | `VIDEO_TITLE_STYLE` | Voice of generated listing titles | No | `explicit` (default); `editorial` for the older euphemistic voice | Hosting env | prod (optional) | Generated title names the act in the explicit voice and stays non-graphic in the editorial voice; both keep the same age/consent guardrails | No |
 | `RESEND_API_KEY` | Resend API key | No | https://resend.com → API Keys | Hosting secrets, Supabase SMTP password | prod | Test via contact form | Yes |

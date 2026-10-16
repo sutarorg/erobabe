@@ -26,14 +26,20 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  DEFAULT_OPENROUTER_FALLBACK_MODELS,
   DEFAULT_OPENROUTER_MODEL,
+  MAX_MODEL_ROUTES,
   MIN_ATTEMPT_MS,
   MetadataError,
+  MODEL_ATTEMPT_TIMEOUT_MS,
   normalizeOpenRouterKey,
   openRouterDiagnostics,
+  openRouterModelChain,
+  openRouterRouteHealth,
   OPENROUTER_ENDPOINT,
   OPENROUTER_NOT_CONFIGURED_MESSAGE,
   probeOpenRouter,
+  resetOpenRouterModelHealth,
   suggestCarouselCopy,
   suggestVideoMetadata,
 } from "@/lib/metadata/openrouter";
@@ -118,6 +124,9 @@ beforeEach(() => {
   process.env.OPENROUTER_API_KEY = TEST_KEY;
   delete process.env.OPENROUTER_MODEL;
   delete process.env.OPENROUTER_MAX_OUTPUT_TOKENS;
+  delete process.env.OPENROUTER_FALLBACK_MODELS;
+  // A route benched by one test must not reorder the chain for the next one.
+  resetOpenRouterModelHealth();
 });
 
 afterEach(() => {
@@ -126,6 +135,8 @@ afterEach(() => {
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.OPENROUTER_MODEL;
   delete process.env.OPENROUTER_MAX_OUTPUT_TOKENS;
+  delete process.env.OPENROUTER_FALLBACK_MODELS;
+  resetOpenRouterModelHealth();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -418,7 +429,10 @@ describe("suggestVideoMetadata", () => {
     const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
     expect(error.code).toBe("model_unavailable");
     expect(error.message).toMatch(/vendor\/missing-model/);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // A retired preferred slug no longer stops the upload: every fallback route
+    // is asked before the caller is told, and only then does the missing model
+    // get named so the environment can be corrected.
+    expect(fetchMock).toHaveBeenCalledTimes(openRouterModelChain().length);
   });
 
   it("retries once after a server error and succeeds", async () => {
@@ -455,6 +469,122 @@ describe("suggestVideoMetadata", () => {
     const error = await suggestVideoMetadata({ fileName: "clip.mp4" }).catch((e) => e);
     expect(error.code).toBe("provider_error");
     expect(JSON.stringify(error.message)).not.toContain(TEST_KEY);
+  });
+});
+
+describe("route fallbacks when the preferred model stalls", () => {
+  /**
+   * A free endpoint that sits in the provider's queue answers nothing at all;
+   * without a fallback that silence is what left an upload queue retrying
+   * forever on "Waiting for AI title".
+   */
+  function silentRoute() {
+    const error = new Error("The operation was aborted due to timeout");
+    error.name = "TimeoutError";
+    return error;
+  }
+
+  it("drops a silent route and takes the answer from the next one", async () => {
+    fetchMock
+      .mockRejectedValueOnce(silentRoute())
+      .mockResolvedValueOnce(chatReply(modelOutput({ title: "Amateur Kitchen Counter Handheld" })));
+    const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4", category: "Amateur" });
+    expect(suggestion.title).toBe("Amateur Kitchen Counter Handheld");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sentBody(0).model).toBe(DEFAULT_OPENROUTER_MODEL);
+    expect(sentBody(1).model).toBe(DEFAULT_OPENROUTER_FALLBACK_MODELS[0]);
+  });
+
+  it("benches a route that keeps stalling, so later retries start with the fallback", async () => {
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.model === DEFAULT_OPENROUTER_MODEL) throw silentRoute();
+      return chatReply(modelOutput({ title: "Amateur Kitchen Counter Handheld" }));
+    });
+
+    // Two requests in a row: the preferred route stalls in both, the fallback
+    // carries the draft each time, and the second stall benches the silent one.
+    for (let index = 0; index < 2; index += 1) {
+      const suggestion = await suggestVideoMetadata({ category: "Amateur" });
+      expect(suggestion.title).toBe("Amateur Kitchen Counter Handheld");
+    }
+    expect(openRouterRouteHealth()[0]).toMatchObject({
+      model: DEFAULT_OPENROUTER_MODEL,
+      benched: true,
+    });
+
+    fetchMock.mockClear();
+    const suggestion = await suggestVideoMetadata({ category: "Amateur" });
+    expect(sentBody(0).model).toBe(DEFAULT_OPENROUTER_FALLBACK_MODELS[0]);
+    expect(suggestion.title).toBe("Amateur Kitchen Counter Handheld");
+  });
+
+  it("answers through a fallback when the configured model is gone", async () => {
+    process.env.OPENROUTER_MODEL = "vendor/missing-model";
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      return body.model === "vendor/missing-model"
+        ? jsonResponse(404, { error: { message: "No endpoints found" } })
+        : chatReply(modelOutput({ title: "Amateur Hallway Handheld Light" }));
+    });
+    const suggestion = await suggestVideoMetadata({ category: "Amateur" });
+    expect(suggestion.title).toBe("Amateur Hallway Handheld Light");
+    expect(sentBody(0).model).toBe("vendor/missing-model");
+    expect(sentBody(1).model).toBe(DEFAULT_OPENROUTER_FALLBACK_MODELS[0]);
+  });
+
+  it("names the silent route and reports a timeout only after every route stayed silent", async () => {
+    fetchMock.mockImplementation(async () => {
+      throw silentRoute();
+    });
+    const error = await suggestVideoMetadata({ category: "Amateur" }).catch((caught) => caught);
+    expect(error).toBeInstanceOf(MetadataError);
+    expect(error.code).toBe("timeout");
+    expect(error.message).toMatch(/did not answer in time/);
+    expect(error.message).toContain(DEFAULT_OPENROUTER_MODEL);
+  });
+
+  it("does not repeat a rejected key, quota refusal, or unreachable host down the chain", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: { message: "invalid key" } }));
+    await suggestVideoMetadata({ category: "Amateur" }).catch(() => undefined);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValue(new Error("socket reset"));
+    const unreachable = await suggestVideoMetadata({ category: "Amateur" }).catch((caught) => caught);
+    expect(unreachable.code).toBe("provider_error");
+    // The host itself was unreachable, so no fallback route was asked either:
+    // another model behind the same endpoint cannot answer that failure.
+    expect(
+      fetchMock.mock.calls.every(
+        ([, init]) => JSON.parse(String((init as RequestInit).body)).model === DEFAULT_OPENROUTER_MODEL,
+      ),
+    ).toBe(true);
+  });
+
+  it("uses the built-in free fallbacks by default, deduplicated and bounded", () => {
+    const chain = openRouterModelChain();
+    expect(chain[0]).toBe(DEFAULT_OPENROUTER_MODEL);
+    expect(chain).toEqual([DEFAULT_OPENROUTER_MODEL, ...DEFAULT_OPENROUTER_FALLBACK_MODELS]);
+    expect(new Set(chain).size).toBe(chain.length);
+    expect(chain.length).toBeLessThanOrEqual(MAX_MODEL_ROUTES);
+  });
+
+  it("honours OPENROUTER_FALLBACK_MODELS, including a deliberately empty list", async () => {
+    process.env.OPENROUTER_FALLBACK_MODELS = "vendor/one, vendor/two vendor/one";
+    expect(openRouterModelChain()).toEqual([DEFAULT_OPENROUTER_MODEL, "vendor/one", "vendor/two"]);
+
+    process.env.OPENROUTER_FALLBACK_MODELS = "";
+    expect(openRouterModelChain()).toEqual([DEFAULT_OPENROUTER_MODEL]);
+    // With fallbacks deliberately off, no route the operator did not configure
+    // is ever asked for a title.
+    fetchMock.mockImplementation(async () => chatReply(modelOutput()));
+    await suggestVideoMetadata({ category: "Amateur" });
+    expect(
+      fetchMock.mock.calls.every(
+        ([, init]) => JSON.parse(String((init as RequestInit).body)).model === DEFAULT_OPENROUTER_MODEL,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -650,6 +780,22 @@ describe("probeOpenRouter / openRouterDiagnostics", () => {
       maxOutputTokens: 512,
     });
     expect(JSON.stringify(diagnostics)).not.toContain(TEST_KEY);
+  });
+
+  it("reports the route chain and its stalls without leaking the key", () => {
+    const diagnostics = openRouterDiagnostics();
+    expect(diagnostics.models).toEqual(openRouterModelChain());
+    expect(diagnostics.routeTimeoutMs).toBe(MODEL_ATTEMPT_TIMEOUT_MS);
+    expect(diagnostics.routeHealth.map((route) => route.model)).toEqual(openRouterModelChain());
+    expect(JSON.stringify(diagnostics)).not.toContain(TEST_KEY);
+  });
+
+  it("reports the fallback route that answered when the preferred one stalls", async () => {
+    const timeout = new Error("The operation was aborted due to timeout");
+    timeout.name = "TimeoutError";
+    fetchMock.mockRejectedValueOnce(timeout).mockResolvedValueOnce(chatReply("ok"));
+    const probe = await probeOpenRouter();
+    expect(probe).toMatchObject({ ok: true, model: DEFAULT_OPENROUTER_FALLBACK_MODELS[0] });
   });
 
   it("reports a missing key without a network call", async () => {
@@ -923,6 +1069,22 @@ describe("POST /api/metadata/suggest", () => {
     expect(failed.status).toBe(502);
     expect(json.suggestion).toBeUndefined();
     expect(JSON.stringify(json)).not.toContain("FakeKeyMaterial");
+  });
+
+  it("still returns a draft when the preferred model stays silent", async () => {
+    seedAuth("admin-stall");
+    const timeout = new Error("The operation was aborted due to timeout");
+    timeout.name = "TimeoutError";
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.model === DEFAULT_OPENROUTER_MODEL) throw timeout;
+      return chatReply(modelOutput({ title: "Amateur Stairwell Handheld Light" }));
+    });
+
+    const response = await suggest(suggestRequest({ category: "Amateur" }));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).suggestion.title).toBe("Amateur Stairwell Handheld Light");
   });
 
   it("honours a per-request editorial voice", async () => {

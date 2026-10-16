@@ -32,6 +32,11 @@ The same check is available to admins at runtime: **Admin → System Health →
 - The model defaults to `nvidia/nemotron-3-ultra-550b-a55b:free`; override it with
   `OPENROUTER_MODEL`. Reasoning is disabled for speed. The free route is subject
   to OpenRouter's rate limits and availability.
+- A route that stops answering is dropped after 20 s for the next one in the
+  chain (`OPENROUTER_FALLBACK_MODELS`, free NVIDIA routes by default), so a
+  queued free endpoint does not park the upload queue. Live runs exercise
+  whichever route answers; the probe and the suggestion can therefore come back
+  from different models.
 - Keys issued by OpenRouter start with `sk-or-`. Create one at openrouter.ai/keys.
 - Never paste real production keys into an issue, a commit, or a bug report.
 
