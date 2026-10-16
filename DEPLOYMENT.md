@@ -122,7 +122,8 @@ these operations. Do not create retired upload relay functions.
 
 Set `SUPABASE_SECRET_KEY` (or the legacy service-role alias), `RESEND_API_KEY`,
 `OPENROUTER_API_KEY` when using metadata AI, `NOWPAYMENTS_API_KEY`,
-`NOWPAYMENTS_IPN_SECRET`, `BUNNY_STREAM_LIBRARY_ID`, `BUNNY_STREAM_API_KEY` and site
+`NOWPAYMENTS_IPN_SECRET`, `BUNNY_STREAM_LIBRARY_ID`, `BUNNY_STREAM_API_KEY`,
+`CRON_SECRET` when using background auto-publish, and site
 URL settings on the **Next.js application host**. Supabase Edge Function secrets
 alone are not visible to Next.js. Keep every secret server-only; redeploy after
 updates. See sections C/D for gateway and Stream configuration.
@@ -526,8 +527,10 @@ none of these providers/accounts has been approved by this implementation.
   missing expired resource by restarting transfer to the **same** video object.
 - Finished but DB error: Check and finish or Retry; never re-upload video.
 - Encoding takes a long time: upload workers are already free; the row remains
-  **Encoding** and `/admin/videos` resumes background reconciliation whenever an
-  admin opens the library. It is not eligible for review until status 4 and is not published until explicit approval. Status
+  **Encoding** and does **not** depend on this tab staying open. A scheduled
+  sweep (`/api/cron/bunny-publish`, see "Background auto-publish" below) reads
+  Bunny's status and publishes the video as soon as it reaches status 4, and
+  `/admin/videos` shows the result whenever an admin next looks. Status
   5/6 is a provider failure; inspect provider diagnostics rather than pretending
   the transfer succeeded.
 - Uncertain creation (timeout/lost response): creation is never replayed while
@@ -565,7 +568,59 @@ none of these providers/accounts has been approved by this implementation.
   subsequently deleted or moderated video: only an explicit reselection of the
   source file starts a new upload for it.
 
-### 6. Legacy media migration report/workflow
+### 6. Background auto-publish (closing the tab is safe)
+
+Bunny encodes long after the bytes are transferred, and the transfer only ever
+runs in the administrator's browser. Publication must not depend on that tab,
+so a server-side sweep finishes the job:
+
+- `GET /api/cron/bunny-publish` reconciles every upload session that has not
+  reached a terminal state (`uploading` with a stored thumbnail, `processing`,
+  `ready`), applying exactly the same `stage_bunny_upload` /
+  `finish_bunny_upload` / `fail_bunny_upload` RPCs the confirmation route uses,
+  as the administrator who uploaded the file. A session the browser abandoned
+  after storing its thumbnail is picked up too. The RPCs refuse to publish a
+  completed session twice, so overlapping sweeps — and a still-open upload page —
+  cannot create a duplicate.
+- It never publishes a video whose frame is missing from storage: a session
+  without a thumbnail is left alone, because only a browser that still holds the
+  file can produce one.
+- The route requires `Authorization: Bearer $CRON_SECRET` (constant-time
+  comparison) or an active administrator session, so an operator can always
+  trigger a sweep by hand. Anything else — a scheduler with the wrong secret, an
+  anonymous visitor — is answered 401. With no `CRON_SECRET` configured only the
+  administrator path works.
+
+**Configure one of these:**
+
+1. **Vercel** — `vercel.json` already schedules `/api/cron/bunny-publish` every
+   five minutes. Add `CRON_SECRET` to the project environment variables and
+   redeploy; Vercel sends the `Authorization` header itself. (Cron frequency
+   requires a paid plan — Vercel Hobby is already excluded for this project.)
+2. **Fly.io / Render / Railway / self-hosted** — point any scheduler at the
+   route, for example a system crontab entry:
+
+   ```
+   */5 * * * * curl -fsS -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/bunny-publish >/dev/null
+   ```
+
+3. **GitHub Actions** — a scheduled workflow with `curl`, using the same header.
+
+Verify it by hand (no video is published twice; the sweep is idempotent):
+
+```
+curl -i -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/bunny-publish
+```
+
+The JSON summary lists `checked`, `published`, `processing`, `failed` and
+`errors` counts plus a per-session `results` array; a session that could not be
+checked is reported with its reason and retried on the next run. A 401 means the
+secret is missing or wrong. Without a scheduler, nothing is lost — the upload
+page still polls while it is open — but an encoding that finishes after the tab
+is closed stays **Encoding** until a sweep (or an administrator confirming that
+session) runs.
+
+### 7. Legacy media migration report/workflow
 
 No hosted media bytes have been migrated in this change; there are no live DB or
 provider credentials here. Obtain counts with:
@@ -588,7 +643,7 @@ Existing direct-media records keep native playback. Known YouTube/Vimeo historic
 player formats retain restrictive iframe playback; untrusted generic iframes are
 not executed. Review historical generic embeds and re-upload authorized sources.
 
-### 7. Optional consent-gated vision ranking
+### 8. Optional consent-gated vision ranking
 
 Local ranking is complete and reliable without OpenRouter. To optionally enhance:
 
@@ -839,6 +894,7 @@ fly deploy
 | `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key for `x-nowpayments-sig` verification | No | NOWPayments Dashboard → Store Settings → IPN Secret Key | Hosting secrets | prod | Admin → System Health shows IPN secret set; every IPN is rejected without it | Yes |
 | `BUNNY_STREAM_LIBRARY_ID` | Selected Video Library ID | No | Stream → Library → API | Server env | uploads/playback | Section D | Yes |
 | `BUNNY_STREAM_API_KEY` | Selected Video Library API Key | No | Stream → Library → API | Hosting secrets | uploads | Section D staging upload test | Yes |
+| `CRON_SECRET` | Shared secret for the background publish sweep `/api/cron/bunny-publish` (auto-publish after encoding, without a browser) | No | Any long random string you generate | Hosting secrets | prod | `curl -i -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/bunny-publish` returns a JSON summary, not 401 | Yes |
 | `OPENROUTER_API_KEY` | OpenRouter API key for AI metadata suggestions | No | https://openrouter.ai/keys → Create key | Hosting secrets | prod (optional) | Test via System Health → Test OpenRouter, or `/api/metadata/suggest` as admin | Yes |
 | `OPENROUTER_MODEL` | OpenRouter model slug | No | `deepseek/deepseek-v3.2` (default) | Hosting env | prod (optional) | Check https://openrouter.ai/models for the slug | No |
 | `OPENROUTER_MAX_OUTPUT_TOKENS` | Output-token budget for one metadata suggestion | No | `2048` (default) | Hosting env | prod (optional) | Raise it if suggestions are truncated | No |
@@ -879,6 +935,8 @@ npx playwright test
 - [ ] Device uploads at `/admin/videos/upload` → multiple local files, real progress, local thumbnails and verified completion.
 - [ ] Choose a category, review editable filename-derived titles and generated thumbnails before upload. Existing metadata suggestion tools remain independent.
 - [ ] Verified Bunny Finished (4) plus stored thumbnail and atomic finalization creates private pending_review content; explicit rights/moderation review then sets published/public/cleared/approved. Unconfirmed sessions never appear publicly.
+- [ ] Close the upload tab while a file is still **Encoding** → within one sweep interval the video is published and appears public in `/admin/videos` without anyone confirming the session. Verify with `curl -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/bunny-publish`; a missing or wrong secret makes that URL answer 401.
+- [ ] Queue several files at once, then pick a category → titles are drafted for every file from a handful of `/api/metadata/suggest` requests, no "too many metadata requests in a row" notice appears, and no queue entry is left waiting on the model.
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
 - [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject
@@ -1032,6 +1090,10 @@ curl http://localhost:3000/robots.txt
 
 # Check for mock data leakage
 grep -R "pexels\|INITIAL_VIDEOS\|mock\|demo" --include="*.tsx" --include="*.ts" app/ | grep -v "node_modules" | grep -v "IMPLEMENTATION_AUDIT"
+
+# Prove the background publish sweep (auto-publish without a browser)
+curl -i -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/bunny-publish
+curl -i https://your-domain/api/cron/bunny-publish   # expect 401
 ```
 
 

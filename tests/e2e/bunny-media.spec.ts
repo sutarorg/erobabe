@@ -235,3 +235,16 @@ test("Bunny API surface requires authenticated administrator", async ({
       (await request.post(`/api/videos/bunny/${route}`, { data: {} })).status(),
     ).toBe(401);
 });
+
+test("background publish sweep is closed to anyone without its secret", async ({
+  request,
+}) => {
+  expect((await request.get("/api/cron/bunny-publish")).status()).toBe(401);
+  expect(
+    (
+      await request.get("/api/cron/bunny-publish", {
+        headers: { authorization: "Bearer wrong-secret" },
+      })
+    ).status(),
+  ).toBe(401);
+});

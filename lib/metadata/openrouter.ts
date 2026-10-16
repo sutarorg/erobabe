@@ -38,6 +38,8 @@ import {
 } from "./carousel-copy";
 
 export const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+/** Re-exported so callers never have to reach past this client for its types. */
+export type { SuggestedMetadata } from "./suggestion";
 export const DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v3.2";
 export const REQUEST_TIMEOUT_MS = 45_000;
 export const SUGGESTION_ATTEMPTS = 3;
