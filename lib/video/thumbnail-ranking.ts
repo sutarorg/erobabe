@@ -68,7 +68,7 @@ export async function rankThumbnailCandidates(
           data_collection: "deny",
         },
         temperature: 0,
-        max_tokens: 64,
+        max_completion_tokens: 64,
         messages: [
           {
             role: "user",

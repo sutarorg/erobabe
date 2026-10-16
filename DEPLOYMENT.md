@@ -6,7 +6,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 
 **Video-provider guidance audited**: October 14, 2026
 
-**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, OpenRouter (DeepSeek V3.2), Bunny Stream device uploads, Tailwind CSS 4.
+**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, OpenRouter (NVIDIA Nemotron 3 Ultra, free route), Bunny Stream device uploads, Tailwind CSS 4.
 
 ---
 
@@ -16,7 +16,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 - Supabase account (https://supabase.com)
 - NOWPayments account (https://nowpayments.io)
 - Resend account (https://resend.com)
-- OpenRouter account for AI metadata (DeepSeek V3.2) (https://openrouter.ai)
+- OpenRouter account for AI metadata (NVIDIA Nemotron 3 Ultra, free route) (https://openrouter.ai)
 - GitHub account with access to https://github.com/sutarorg/erobabe
 - Domain registrar (e.g., Cloudflare, Namecheap)
 - Hosting provider that permits lawful adult content and commercial use (NOT Vercel Hobby — see Hosting Restrictions). Recommended: Fly.io, Render, Railway, or self-hosted VPS with Docker. Verify Acceptable Use Policy before deploying.
@@ -726,82 +726,61 @@ historical metadata, not a current URL-upload option.
 
 ---
 
-## E. AI Metadata Setup (OpenRouter · DeepSeek V3.2)
+## E. AI Metadata Setup (OpenRouter · NVIDIA Nemotron 3 Ultra free route)
 
-Docs: https://openrouter.ai/deepseek/deepseek-v3.2 — code: `lib/metadata/`
-(`openrouter.ts` for the client, `suggestion.ts` for prompt and validation),
-route: `/api/metadata/suggest`.
+Model listing: https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free —
+code: `lib/metadata/` (`openrouter.ts` for the client, `suggestion.ts` for the
+prompt and validation), route: `/api/metadata/suggest`.
 
-1. Go to https://openrouter.ai/keys → **Create key**. Add credits to the
-   OpenRouter account; a key with no balance is rejected with a clear message.
-2. Copy the key — this is `OPENROUTER_API_KEY` (server-only, never expose to the
-   browser, never a `NEXT_PUBLIC_*` variable). Keys start with `sk-or-`.
-3. Set env: `OPENROUTER_API_KEY=<key>`. The model defaults to
-   `deepseek/deepseek-v3.2`; override with `OPENROUTER_MODEL` only if you need a
-   different OpenRouter model slug.
-4. In Vercel → Project → **Settings** → **Environment Variables**, set it for
-   Production (and Preview if you test there), then redeploy. **Important:**
-   this app runs on Vercel, so `OPENROUTER_API_KEY` must be in the Vercel
-   project's environment variables. Supabase *Edge Function* secrets are a
-   different store that this Next.js app never reads — a key stored only there
-   produces the error “OpenRouter is not configured — set the OPENROUTER_API_KEY
-   server variable” and every upload falls back to file-name metadata.
+1. Go to https://openrouter.ai/keys → **Create key**. The selected model route
+   is listed as free, but free-tier rate limits and provider availability apply.
+2. Copy the actual OpenRouter key — this is `OPENROUTER_API_KEY` (server-only,
+   never expose it in a `NEXT_PUBLIC_*` variable). Keys start with `sk-or-`.
+   **The model ID is not an API key.**
+3. Set `OPENROUTER_API_KEY=<key>`. With no `OPENROUTER_MODEL` override, the app
+   uses `nvidia/nemotron-3-ultra-550b-a55b:free` (the currently listed OpenRouter
+   ID for NVIDIA Nemotron 3 Ultra). If this hosting environment already sets
+   `OPENROUTER_MODEL` to an older model, remove that override or update it to
+   the desired slug.
+4. In the hosting provider's server environment, set the key for Production
+   (and Preview if needed), then redeploy. Supabase *Edge Function* secrets are
+   a different store that this Next.js app never reads — the key must be
+   configured where the Next.js server runs.
 5. Test: open **Admin → System Health** and press **Test OpenRouter**. It sends
-   one tiny real request and reports the model, the latency, and — on failure —
-   why OpenRouter rejected the call. Then go to `/admin/videos/upload`, choose a
-   category and source, then publish. The server must generate title,
-   description, and tags before it creates the video record. Alternatively POST
-   to `/api/metadata/suggest` as an admin with `{ "fileName": "clip.mp4" }` and
-   expect a `{ suggestion, source, style, note }` response. `source: "ai"` is the
-   normal answer, including when the model overshot a word budget and the reply
-   was trimmed or extended into range. `source: "offline"` with a `warning` and a
-   `warningCode` (`not_configured`, `quota_exceeded`, `model_unavailable`,
-   `provider_error`, `bad_output`, `timeout`) means the model could not be used
-   at all and the deterministic composer wrote the copy instead. To check a key from a terminal
-   instead (no deploy needed), run `OPENROUTER_API_KEY=sk-or-… npm run test:live`
-   — see `tests/live/README.md`. It needs outbound HTTPS to openrouter.ai.
-6. Optional tuning: `VIDEO_TITLE_STYLE` (default `explicit`) sets the voice —
-   blunt adult titles that name the act, or the restrained `editorial` voice.
-   `OPENROUTER_MAX_OUTPUT_TOKENS` (default `2048`) is the
-   per-suggestion output budget. Reasoning is turned off for every request
-   (`reasoning: { enabled: false }`), so the whole budget goes to the JSON.
-   If the provider rejects the JSON-mode or reasoning field, the client retries
-   without that field.
-7. AI metadata is an enhancement, not a gate. Length slips in the model's reply
-   are repaired and published as AI copy, other unusable replies get up to
-   three attempts within the route's 60 s limit, and the upload page asks the
-   route again after a network error, a 5xx, or a 429 (honouring `Retry-After`)
-   before it drafts anything itself. If AI is not configured, keeps returning
-   unusable output, refuses adults-only copy, or hits quota, the upload still
-   completes: the video is created with deterministic metadata built from the
-   selected category in the same voice (the offline composer in
-   `lib/metadata/explicit-titles.ts`, never from the file name)
-   (`/api/videos/upload*` answers with `metadataSource: "fallback"` and a
-   `metadataWarning`, and the admin UI flags the item for review). The
-   `/api/metadata/suggest` endpoint still answers 503/502/429 with an actionable
-   message so the AI path can be diagnosed. Title, description, and tags are
-   intentionally not browser-editable in this workflow.
-8. **Important**: Never send video bytes, private rights docs, payment
-   records, or personal info to the model. Only the source filename/URL path,
-   working title, selected category, and existing tags are sent for metadata
-   generation. AI output is not proof of rights, age, consent, or factual
-   attributes, and suggestions require human review.
-9. Diagnose: `OPENROUTER_API_KEY` missing → 503 "not configured" (the upload page
-   also shows an amber banner before you publish when the server cannot see the
-   key); rejected key (401/403) → 503; no credits or rate limit (402/429) → 429;
-   unknown model slug (404) → 502 naming the model; malformed model output → 502.
-   The suggest route itself answers these with an offline draft plus `warning`
-   and `warningCode`; it returns 429 with `Retry-After` only when one admin sends
-   more than 20 suggestion requests a minute.
-   The key never appears in responses or logs; any key-shaped text echoed by a
-   provider is redacted before it is shown.
-10. "The model's reply could not be parsed as JSON" means the model's text could
-    not be parsed even after the built-in clean-up (markdown fences, prose around
-    the payload, raw newlines inside strings, smart quotes, trailing commas, and
-    truncated output are all handled) and a retry. Raise
-    `OPENROUTER_MAX_OUTPUT_TOKENS` and retry, or set `OPENROUTER_MODEL` to a model
-    with JSON output support. Uploads are unaffected — they fall back to a
-    category draft in the site's title voice, never file-name metadata.
+   one tiny real request and reports the model, latency, and any provider error.
+   Then go to `/admin/videos/upload`, choose a category and source, and preview
+   the generated title, description, and tags before starting the upload. To
+   check a key from a terminal, run `OPENROUTER_API_KEY=sk-or-… npm run test:live`
+   — see `tests/live/README.md`.
+6. Token and prompt budgets are kept small without shortening the validated
+   fields: `OPENROUTER_MAX_OUTPUT_TOKENS` defaults to **512** for a suggestion;
+   only an empty or cut-off response gets a larger retry cap, while semantic
+   correction retries keep 512. Carousel copy is capped at 128 output tokens.
+   Reasoning is disabled, and at most the 32 most relevant existing titles are
+   included for near-duplicate avoidance; exact-repeat checks still run locally
+   against the full catalog. If the provider rejects JSON mode or the reasoning
+   field, the client retries without that optional field.
+7. Suggestions still require human review against the actual video. Length
+   near-misses are repaired; unusable responses get up to three attempts within
+   the route's deadline. If the AI route fails, the upload workflow can use its
+   deterministic category-based fallback and flags the item for review. The
+   `/api/metadata/suggest` endpoint reports an actionable error so the AI path
+   can be diagnosed.
+8. **Data handling:** do not send video bytes, private rights documents, payment
+   records, or personal information. Metadata generation uses the selected
+   category and a compact recent-title avoid list; carousel copy generation
+   sends listing text. The free model listing notes that requests may be logged
+   for security and product improvement, so send only non-confidential listing
+   metadata. AI output does not prove rights, age, consent, or factual attributes.
+9. Diagnose: missing key → 503; rejected key (401/403) → 503; account credit or
+   quota limits (402/429) → 429; unavailable/unknown model (404) → 502; malformed
+   output → 502. The key never appears in responses or logs; key-shaped text
+   echoed by a provider is redacted before it is shown.
+10. If the model repeatedly returns cut-off or unparsable JSON, first verify the
+    model slug in OpenRouter's catalogue. Raise `OPENROUTER_MAX_OUTPUT_TOKENS`
+    only if the model genuinely needs a larger completion; the default is sized
+    for this short JSON payload. The upload workflow remains available through
+    its category-based fallback.
 
 ---
 
@@ -916,8 +895,8 @@ fly deploy
 | `BUNNY_STREAM_API_KEY` | Selected Video Library API Key | No | Stream → Library → API | Hosting secrets | uploads | Section D staging upload test | Yes |
 | `CRON_SECRET` | Shared secret the publish scheduler presents to `/api/cron/bunny-publish` (auto-publish after encoding, without a browser) | No | Any long random string (`openssl rand -hex 32`) | Hosting secrets **and** the GitHub Actions secret of the same name | prod | Admin → System Health → "Background auto-publish" says "Scheduler can authenticate"; `curl -i -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/bunny-publish` returns a JSON summary, not 401 | Yes |
 | `OPENROUTER_API_KEY` | OpenRouter API key for AI metadata suggestions | No | https://openrouter.ai/keys → Create key | Hosting secrets | prod (optional) | Test via System Health → Test OpenRouter, or `/api/metadata/suggest` as admin | Yes |
-| `OPENROUTER_MODEL` | OpenRouter model slug | No | `deepseek/deepseek-v3.2` (default) | Hosting env | prod (optional) | Check https://openrouter.ai/models for the slug | No |
-| `OPENROUTER_MAX_OUTPUT_TOKENS` | Output-token budget for one metadata suggestion | No | `2048` (default) | Hosting env | prod (optional) | Raise it if suggestions are truncated | No |
+| `OPENROUTER_MODEL` | OpenRouter model slug | No | `nvidia/nemotron-3-ultra-550b-a55b:free` (default) | Hosting env | prod (optional) | Check https://openrouter.ai/models for the slug | No |
+| `OPENROUTER_MAX_OUTPUT_TOKENS` | First-attempt output-token cap for one metadata suggestion | No | `512` (default) | Hosting env | prod (optional) | Raise only if suggestions are truncated | No |
 | `VIDEO_TITLE_STYLE` | Voice of generated listing titles | No | `explicit` (default); `editorial` for the older euphemistic voice | Hosting env | prod (optional) | Generated title names the act in the explicit voice and stays non-graphic in the editorial voice; both keep the same age/consent guardrails | No |
 | `RESEND_API_KEY` | Resend API key | No | https://resend.com → API Keys | Hosting secrets, Supabase SMTP password | prod | Test via contact form | Yes |
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |

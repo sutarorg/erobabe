@@ -29,8 +29,9 @@ The same check is available to admins at runtime: **Admin → System Health →
 
 ## Notes
 
-- The model defaults to `deepseek/deepseek-v3.2`; override it with
-  `OPENROUTER_MODEL`. Reasoning is disabled for speed.
+- The model defaults to `nvidia/nemotron-3-ultra-550b-a55b:free`; override it with
+  `OPENROUTER_MODEL`. Reasoning is disabled for speed. The free route is subject
+  to OpenRouter's rate limits and availability.
 - Keys issued by OpenRouter start with `sk-or-`. Create one at openrouter.ai/keys.
 - Never paste real production keys into an issue, a commit, or a bug report.
 

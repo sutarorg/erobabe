@@ -58,6 +58,7 @@ describe("optional vision ranking", () => {
     vi.stubGlobal("fetch", fetch);
     expect(await rankThumbnailCandidates(frames)).toBe(1);
     const body = JSON.parse(fetch.mock.calls[1][1].body);
+    expect(body.max_completion_tokens).toBe(64);
     expect(body.provider).toMatchObject({
       only: ["operator-approved"],
       allow_fallbacks: false,

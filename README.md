@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Next.js application under production-readiness review with Supabase backend, NOWPayments crypto payments, Bunny Stream resumable device uploads, Resend email, AI metadata (DeepSeek V3.2 via OpenRouter), and SEO optimization.
+Next.js application under production-readiness review with Supabase backend, NOWPayments crypto payments, Bunny Stream resumable device uploads, Resend email, AI metadata (NVIDIA Nemotron 3 Ultra free route via OpenRouter), and SEO optimization.
 
 ## Quick Start
 
@@ -31,7 +31,7 @@ Open http://localhost:3000
 - Supabase (Auth, Postgres, Storage, RLS)
 - NOWPayments (crypto payments)
 - Resend (transactional email)
-- OpenRouter API, DeepSeek V3.2 (server-generated video metadata)
+- OpenRouter API, NVIDIA Nemotron 3 Ultra (free route; server-generated video metadata)
 - Bunny Stream direct pre-signed TUS uploads (`tus-js-client`)
 - Tailwind CSS 4
 
@@ -78,8 +78,8 @@ for credentials, content policy, recovery and a genuine staging upload test.
 `/admin/videos` places up to three videos in the homepage hero carousel (slots
 1–3). The card is a thumbnail with two short lines, so the listing title — written
 for search — is never printed there. Assigning a slot also generates that video's
-own copy through the AI (DeepSeek V3.2 via OpenRouter): a headline of **at most 5
-words** and a description of **at most 10 words**, stored in
+own copy through the AI (NVIDIA Nemotron 3 Ultra free route via OpenRouter): a
+headline of **at most 5 words** and a description of **at most 10 words**, stored in
 `videos.carousel_title` / `videos.carousel_description` (migration
 `00000000000020_carousel_ai_copy.sql`). The admin page shows the copy and can
 regenerate it per slot. If OpenRouter is unconfigured or answers with something

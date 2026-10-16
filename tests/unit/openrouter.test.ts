@@ -171,15 +171,15 @@ describe("suggestVideoMetadata", () => {
     expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${TEST_KEY}`);
   });
 
-  it("uses DeepSeek V3.2 by default with reasoning disabled and JSON mode requested", async () => {
+  it("uses NVIDIA Nemotron 3 Ultra (free) by default with reasoning disabled and JSON mode requested", async () => {
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput()));
     await suggestVideoMetadata({ fileName: "clip.mp4" });
     const body = sentBody();
-    expect(DEFAULT_OPENROUTER_MODEL).toBe("deepseek/deepseek-v3.2");
-    expect(body.model).toBe("deepseek/deepseek-v3.2");
+    expect(DEFAULT_OPENROUTER_MODEL).toBe("nvidia/nemotron-3-ultra-550b-a55b:free");
+    expect(body.model).toBe("nvidia/nemotron-3-ultra-550b-a55b:free");
     expect(body.reasoning).toEqual({ enabled: false });
     expect(body.response_format).toEqual({ type: "json_object" });
-    expect(body.max_tokens).toBe(2048);
+    expect(body.max_completion_tokens).toBe(512);
   });
 
   it("honours OPENROUTER_MODEL and OPENROUTER_MAX_OUTPUT_TOKENS", async () => {
@@ -187,7 +187,7 @@ describe("suggestVideoMetadata", () => {
     process.env.OPENROUTER_MAX_OUTPUT_TOKENS = "1024";
     fetchMock.mockResolvedValueOnce(chatReply(modelOutput()));
     await suggestVideoMetadata({ fileName: "clip.mp4" });
-    expect(sentBody()).toMatchObject({ model: "deepseek/deepseek-chat", max_tokens: 1024 });
+    expect(sentBody()).toMatchObject({ model: "deepseek/deepseek-chat", max_completion_tokens: 1024 });
   });
 
   it("treats source data as untrusted and keeps the guardrails in the prompt", async () => {
@@ -240,7 +240,7 @@ describe("suggestVideoMetadata", () => {
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
     expect(suggestion.title).toBe("Amateur in Velvet After Dark");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(sentBody(1).max_tokens).toBe(4096);
+    expect(sentBody(1).max_completion_tokens).toBe(1024);
   });
 
   it("retries an incorrect word count with corrective feedback", async () => {
@@ -249,6 +249,7 @@ describe("suggestVideoMetadata", () => {
     const suggestion = await suggestVideoMetadata({ fileName: "clip.mp4" });
     expect(suggestion.description.split(/\s+/)).toHaveLength(24);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sentBody(1).max_completion_tokens).toBe(512);
     const messages = sentBody(1).messages as Array<{ content: string }>;
     expect(messages[0].content).toContain("previous suggestion failed validation");
     expect(messages[0].content).toContain("description must contain 20-25 words");
@@ -368,6 +369,7 @@ describe("suggestVideoMetadata", () => {
     expect(error).toBeInstanceOf(MetadataError);
     expect(error.code).toBe("bad_output");
     expect(error.message).toMatch(/cut off/);
+    expect(sentBody(1).max_completion_tokens).toBe(1024);
   });
 
   it("rejects incomplete suggestions with the field named", async () => {
@@ -582,11 +584,13 @@ describe("suggestCarouselCopy", () => {
       source: "ai",
       trimmed: false,
     });
+    expect(sentBody().model).toBe(DEFAULT_OPENROUTER_MODEL);
     const messages = sentBody().messages as Array<{ content: string }>;
     expect(messages[0].content).toMatch(/never more than 5 words/);
     expect(messages[0].content).toMatch(/never more than 10 words/);
     expect(messages[0].content).toMatch(/untrusted source data/i);
     expect(messages[0].content).toMatch(/consenting adult aged 18 or over/i);
+    expect(sentBody().max_completion_tokens).toBe(128);
   });
 
   it("trims an over-long answer to 5 words and 10 words instead of failing", async () => {
@@ -643,6 +647,7 @@ describe("probeOpenRouter / openRouterDiagnostics", () => {
       keyKind: "openrouter",
       model: DEFAULT_OPENROUTER_MODEL,
       reasoning: "disabled",
+      maxOutputTokens: 512,
     });
     expect(JSON.stringify(diagnostics)).not.toContain(TEST_KEY);
   });
@@ -660,7 +665,7 @@ describe("probeOpenRouter / openRouterDiagnostics", () => {
     fetchMock.mockResolvedValueOnce(chatReply("ok"));
     const probe = await probeOpenRouter();
     expect(probe).toMatchObject({ ok: true, model: DEFAULT_OPENROUTER_MODEL });
-    expect(sentBody()).toMatchObject({ max_tokens: 32, temperature: 0 });
+    expect(sentBody()).toMatchObject({ max_completion_tokens: 32, temperature: 0 });
   });
 
   it("probes and reports an actionable failure without key material", async () => {
