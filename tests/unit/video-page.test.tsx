@@ -92,7 +92,13 @@ describe("/video/[slug] watch page", () => {
   it("renders the requested sections in order", async () => {
     const html = await renderPage();
     const headings = Array.from(new DOMParser().parseFromString(html, "text/html").querySelectorAll("h2")).map(h => h.textContent);
-    expect(headings).toEqual(["Comments", "More like this", "Recommendation controls", "Up Next", "Discover videos", "Most Liked", "Top Categories", "Latest"]);
+    expect(headings).toEqual(["Comments", "More like this", "Recommendation controls", "Discover videos", "Most Liked", "Top Categories", "Latest"]);
+  });
+
+  it("does not render an Up Next section", async () => {
+    const html = await renderPage();
+    expect(html).not.toContain("Up Next");
+    expect(html).not.toContain('aria-label="Up Next"');
   });
 
   it("shares the homepage five-card mobile category strip without horizontal scrolling", async () => {
