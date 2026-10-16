@@ -25,7 +25,7 @@ export default async function AdminLayout({
   }
 
   return (
-    <div className="flex h-screen bg-void text-ink">
+    <div className="flex h-screen overflow-hidden bg-void text-ink">
       <PortalSidebar portal="Admin" email={user.email || "Account"}>
         <AdminNav />
       </PortalSidebar>

@@ -32,7 +32,7 @@ export default function CategoriesPage({ onSelect }: CategoriesPageProps) {
               className="group relative flex min-h-[132px] min-w-0 flex-col items-start justify-end overflow-hidden rounded-xl border border-line bg-card p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/45 hover:bg-card-hover"
             >
               <div
-                className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"
+                className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent"
                 aria-hidden="true"
               />
               <span className="relative z-10 block w-full break-words text-[14px] font-semibold leading-snug text-ink transition-colors group-hover:text-accent">

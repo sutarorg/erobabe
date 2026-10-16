@@ -217,7 +217,7 @@ export default function NowpaymentsCheck() {
       )}
 
       {report && report.supportedPayCurrencies.length > 0 && (
-        <div className="mt-3 overflow-x-auto rounded-md border border-line">
+        <div className="mt-3 center-scroll overflow-x-auto rounded-md border border-line">
           <table className="w-full text-left text-[11.5px]">
             <thead className="border-b border-line bg-void text-[10px] uppercase tracking-wider text-ink-3">
               <tr>

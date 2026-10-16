@@ -189,10 +189,9 @@ describe("anonymous comments", () => {
     const list = screen.getByLabelText("Comment list");
     const composer = screen.getByRole("form", { name: "Post a comment" });
 
-    // Long lists remain scrollable without showing a scrollbar.
-    expect(list.className).toContain("overflow-y-auto");
-    expect(list.className).toMatch(/max-h-/);
+    // Comments flow with the page instead of a nested scroll area.
     expect(list.className).toContain("no-scrollbar");
+    expect(list.className).not.toMatch(/overflow-y|max-h-/);
 
     const input = screen.getByRole("textbox", { name: "Your comment" });
     expect(input).toHaveAttribute("placeholder", "Add a comment...");
