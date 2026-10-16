@@ -6,10 +6,21 @@
  * admin should preview and edit category-led drafts before starting whenever
  * possible.
  *
+ * One draft request asks the preferred model first and falls through to the
+ * configured fallback routes when that route stalls: a free endpoint can sit in
+ * a provider queue for longer than a draft may wait, and a single-route client
+ * turned that into an upload queue that never started. Each route gets a slice
+ * of the request budget (`MODEL_ATTEMPT_TIMEOUT_MS`), a route that stalls is
+ * benched for a while (`MODEL_COOLDOWN_MS`), and the caller keeps the unchanged
+ * rule that titles are only ever written by a model — never composed offline.
+ *
  * Configuration (server environment only, never shipped to the browser):
  *   OPENROUTER_API_KEY           required, starts with `sk-or-`
  *   OPENROUTER_MODEL             optional, default
  *                                `nvidia/nemotron-3-ultra-550b-a55b:free`
+ *   OPENROUTER_FALLBACK_MODELS   optional, comma-separated routes tried after
+ *                                the model above; unset uses the built-in free
+ *                                fallbacks, empty means "primary model only"
  *   OPENROUTER_MAX_OUTPUT_TOKENS optional, default 512
  */
 
@@ -43,6 +54,29 @@ export const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completion
 /** Re-exported so callers never have to reach past this client for its types. */
 export type { SuggestedMetadata } from "./suggestion";
 export const DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
+/**
+ * Free routes asked in order when the preferred model does not answer. They are
+ * the same NVIDIA-served family as the default model, so an upload batch keeps
+ * one content policy while a route that is queued, rate limited, or retired is
+ * skipped instead of stopping the queue.
+ */
+export const DEFAULT_OPENROUTER_FALLBACK_MODELS = [
+  "nvidia/nemotron-3.5-lightning:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+];
+/**
+ * Routes one draft request may ask. Three slices fit inside the suggestion
+ * budget, so a request still answers while the route it prefers is stalled.
+ */
+export const MAX_MODEL_ROUTES = 3;
+/**
+ * Longest a single route may take before the next one is asked. A free endpoint
+ * that has not produced a token in this long is queueing, not thinking, and
+ * waiting the full `REQUEST_TIMEOUT_MS` on it is what left uploads retrying
+ * forever.
+ */
+export const MODEL_ATTEMPT_TIMEOUT_MS = 20_000;
+/** Longest one request to one route may take when it is the only route left. */
 export const REQUEST_TIMEOUT_MS = 45_000;
 export const SUGGESTION_ATTEMPTS = 3;
 /**
@@ -52,6 +86,13 @@ export const SUGGESTION_ATTEMPTS = 3;
 export const SUGGESTION_BUDGET_MS = 50_000;
 /** An attempt with less time than this left is not started. */
 export const MIN_ATTEMPT_MS = 6_000;
+/**
+ * Consecutive stalls (a route that ran out of its slice without answering) that
+ * bench it, and how long it stays benched. Benched routes are still asked last,
+ * so a provider-wide slowdown cannot leave the queue with nothing to try.
+ */
+export const MODEL_STALL_LIMIT = 2;
+export const MODEL_COOLDOWN_MS = 120_000;
 /**
  * The most last-resort repairs (see `ValidateOptions.lenient`) a reply may
  * need and still be published when no attempt passes outright. Beyond this,
@@ -101,6 +142,101 @@ export function openRouterModelName(): string {
   return configured || DEFAULT_OPENROUTER_MODEL;
 }
 
+/** Splits a comma/space separated model list, dropping blanks. */
+function parseModelList(raw: string): string[] {
+  return raw
+    .split(/[,\s]+/)
+    .map((model) => model.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Routes to ask after the preferred model. Unset uses the built-ins above; an
+ * explicitly empty value means "the preferred model only", so an operator who
+ * does not want fallbacks can say so without unsetting the variable.
+ */
+export function openRouterFallbackModels(): string[] {
+  const configured = process.env.OPENROUTER_FALLBACK_MODELS;
+  if (configured === undefined) return [...DEFAULT_OPENROUTER_FALLBACK_MODELS];
+  return parseModelList(configured);
+}
+
+/**
+ * The preferred model first, then the fallbacks — deduplicated, and capped at
+ * `MAX_MODEL_ROUTES` because a longer chain cannot fit the request budget.
+ */
+export function openRouterModelChain(): string[] {
+  const chain: string[] = [];
+  for (const model of [openRouterModelName(), ...openRouterFallbackModels()]) {
+    if (!chain.includes(model)) chain.push(model);
+    if (chain.length === MAX_MODEL_ROUTES) break;
+  }
+  return chain;
+}
+
+/**
+ * Per-route health for this server process. Only stalls are recorded: a route
+ * that answers with an error quickly is cheap to retry, while one that never
+ * answers is what makes the upload queue sit still.
+ */
+const routeHealth = new Map<string, { stalls: number; benchedUntil: number }>();
+
+function routeState(model: string): { stalls: number; benchedUntil: number } {
+  return routeHealth.get(model) ?? { stalls: 0, benchedUntil: 0 };
+}
+
+function noteRouteAnswer(model: string): void {
+  routeHealth.delete(model);
+}
+
+function noteRouteStall(model: string): void {
+  const state = routeState(model);
+  const stalls = state.stalls + 1;
+  routeHealth.set(model, {
+    stalls,
+    benchedUntil:
+      stalls >= MODEL_STALL_LIMIT ? Date.now() + MODEL_COOLDOWN_MS : state.benchedUntil,
+  });
+}
+
+/** Preferred order, with benched routes moved to the end instead of dropped. */
+function rankedModelChain(chain: readonly string[]): string[] {
+  const now = Date.now();
+  const ready: string[] = [];
+  const benched: string[] = [];
+  for (const model of chain) {
+    (routeState(model).benchedUntil > now ? benched : ready).push(model);
+  }
+  return [...ready, ...benched];
+}
+
+/**
+ * Forgets which routes were stalling. Exported for tests, and for a caller that
+ * has just changed the model configuration.
+ */
+export function resetOpenRouterModelHealth(): void {
+  routeHealth.clear();
+}
+
+/** Secret-free route health for the admin UI. */
+export function openRouterRouteHealth(): Array<{
+  model: string;
+  benched: boolean;
+  stalls: number;
+  cooldownRemainingMs: number;
+}> {
+  const now = Date.now();
+  return openRouterModelChain().map((model) => {
+    const state = routeState(model);
+    return {
+      model,
+      benched: state.benchedUntil > now,
+      stalls: state.stalls,
+      cooldownRemainingMs: Math.max(0, state.benchedUntil - now),
+    };
+  });
+}
+
 type KeyKind = "openrouter" | "unknown" | "missing";
 
 function keyKindOf(key: string): KeyKind {
@@ -127,11 +263,18 @@ function mapHttpError(status: number, providerMessage: string, model: string): M
     );
   }
   if (status === 429) {
-    return new MetadataError("OpenRouter rate or quota limit reached. Try again shortly.", 429, "quota_exceeded");
+    // Free-model usage is capped per minute and per day at the account level, so
+    // this refusal outlives the usual retry backoff: say what hit the limit
+    // instead of promising an answer that the next retry cannot deliver.
+    return new MetadataError(
+      "OpenRouter rate or quota limit reached (free-model usage is capped per minute and per day). Try again shortly.",
+      429,
+      "quota_exceeded"
+    );
   }
   if (status === 404) {
     return new MetadataError(
-      `Model "${model}" is not available on OpenRouter. Check OPENROUTER_MODEL.`,
+      `Model "${model}" is not available on OpenRouter. Check OPENROUTER_MODEL and the fallback routes.`,
       502,
       "model_unavailable"
     );
@@ -147,21 +290,121 @@ interface ChatResult {
   text: string;
   finishReason?: string;
   refusal?: string;
+  /** Route that answered — the admin's "Test OpenRouter" reports this. */
+  model: string;
 }
 
 interface ChatOptions {
   maxTokens: number;
   temperature: number;
-  /** Overrides the default request timeout (an admin action waits on this). */
+  /**
+   * Budget for the whole call, shared by every route it asks. Each route gets
+   * at most `MODEL_ATTEMPT_TIMEOUT_MS` while another route is still untried.
+   */
   timeoutMs?: number;
 }
 
+/** Failures that mean "this route cannot answer now": the next one is asked. */
+const ROUTE_FAILURE_CODES = new Set<MetadataErrorCode>([
+  "timeout",
+  "provider_error",
+  "model_unavailable",
+]);
+
 /**
- * Sends one chat completion. The optional JSON mode and reasoning switch are
- * dropped one at a time if the provider rejects them, so an unusual upstream
- * route degrades to plain text instead of failing outright.
+ * Reaching OpenRouter itself failed (DNS, refused connection, reset socket).
+ * Every route lives behind the same host, so this is reported to the caller —
+ * which retries — instead of being repeated down the chain.
  */
-async function chatCompletion(prompt: string, model: string, key: string, options: ChatOptions): Promise<ChatResult> {
+class UnreachableError extends MetadataError {}
+
+/**
+ * Which message an admin should see when every route failed. The most
+ * actionable one wins: a rejected key is fixed in the environment, while a
+ * timeout just needs another try.
+ */
+const ERROR_PRIORITY: Record<MetadataErrorCode, number> = {
+  not_configured: 0,
+  quota_exceeded: 1,
+  model_unavailable: 2,
+  provider_error: 3,
+  timeout: 4,
+  bad_output: 5,
+};
+
+/** The timeout every admin sees, naming the route that stayed silent. */
+function timeoutError(model?: string): MetadataError {
+  return new MetadataError(
+    model
+      ? `OpenRouter did not answer in time (${model}). Try again.`
+      : "OpenRouter did not answer in time. Try again.",
+    504,
+    "timeout",
+  );
+}
+
+/**
+ * One chat completion, tried across the route chain until a route answers with
+ * content.
+ *
+ * This is the fix for uploads that sat on "Waiting for AI title": a free
+ * endpoint queued at the provider never answers, so a single-route client spent
+ * a whole request budget on one silent route, every retry repeated the wait,
+ * and the queue never started. Now a silent route is dropped for its slice, the
+ * next route is asked inside the same budget, and a route that stalls twice in
+ * a row is benched for `MODEL_COOLDOWN_MS` so later retries skip it. Key,
+ * quota, and request-option errors are not route-specific, so they fail
+ * immediately instead of being repeated down the chain.
+ */
+async function chatCompletion(
+  prompt: string,
+  models: readonly string[],
+  key: string,
+  options: ChatOptions
+): Promise<ChatResult> {
+  const chain = rankedModelChain(models.length ? models : openRouterModelChain());
+  const budget = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const startedAt = Date.now();
+  let failure: MetadataError | null = null;
+
+  for (let index = 0; index < chain.length; index += 1) {
+    const remaining = budget - (Date.now() - startedAt);
+    // A route with less than the minimum attempt window left is not started.
+    if (remaining < MIN_ATTEMPT_MS) break;
+    const routesAfter = chain.length - index - 1;
+    const slice = Math.min(remaining, routesAfter > 0 ? MODEL_ATTEMPT_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
+    const model = chain[index]!;
+
+    try {
+      const result = await chatOnce(prompt, model, key, options, slice);
+      noteRouteAnswer(model);
+      return result;
+    } catch (error: unknown) {
+      const mapped =
+        error instanceof MetadataError
+          ? error
+          : new MetadataError("OpenRouter request failed unexpectedly.", 502, "provider_error");
+      if (mapped instanceof UnreachableError || !ROUTE_FAILURE_CODES.has(mapped.code)) throw mapped;
+      if (mapped.code === "timeout") noteRouteStall(model);
+      if (!failure || ERROR_PRIORITY[mapped.code] < ERROR_PRIORITY[failure.code]) failure = mapped;
+    }
+  }
+
+  throw failure ?? timeoutError(chain[0]);
+}
+
+/**
+ * Sends one chat completion to one route. The optional JSON mode and reasoning
+ * switch are dropped one at a time if the provider rejects them, so an unusual
+ * upstream route degrades to plain text instead of failing outright.
+ */
+async function chatOnce(
+  prompt: string,
+  model: string,
+  key: string,
+  options: ChatOptions,
+  timeoutMs: number
+): Promise<ChatResult> {
   const optional = new Set(["response_format", "reasoning"]);
   let includeJson = true;
   let includeReasoning = true;
@@ -186,13 +429,13 @@ async function chatCompletion(prompt: string, model: string, key: string, option
           "X-Title": "Erobabe",
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error: unknown) {
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-        throw new MetadataError("OpenRouter did not answer in time. Try again.", 504, "timeout");
+        throw timeoutError(model);
       }
-      throw new MetadataError("Could not reach OpenRouter. Try again.", 502, "provider_error");
+      throw new UnreachableError("Could not reach OpenRouter. Try again.", 502, "provider_error");
     }
 
     const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
@@ -225,6 +468,7 @@ async function chatCompletion(prompt: string, model: string, key: string, option
       text: typeof content === "string" ? content : "",
       finishReason: typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined,
       refusal: typeof choice?.message?.refusal === "string" ? choice.message.refusal : undefined,
+      model,
     };
   }
 
@@ -280,7 +524,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
   if (!key) throw new MetadataError(OPENROUTER_NOT_CONFIGURED_MESSAGE, 503, "not_configured");
 
   const style: TitleStyle = params.style ?? resolveTitleStyle();
-  const model = openRouterModelName();
+  const models = openRouterModelChain();
   const existing = uniqueTitles(params.existingTitles);
   const takenKeys = new Set(existing.map(titleSearchKey));
   const shownToModel = existing.slice(0, PROMPT_AVOID_LIMIT);
@@ -296,17 +540,18 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
   for (let attempt = 0; attempt < SUGGESTION_ATTEMPTS; attempt += 1) {
     const remaining = deadline - Date.now();
     if (remaining < MIN_ATTEMPT_MS) {
-      lastError ??= new MetadataError("OpenRouter did not answer in time. Try again.", 504, "timeout");
+      lastError ??= timeoutError(models[0]);
       break;
     }
 
     const maxTokens = attempt === 0 ? baseTokens : retryMaxTokens;
     let result: ChatResult;
     try {
-      result = await chatCompletion(prompt + correction, model, key, {
+      result = await chatCompletion(prompt + correction, models, key, {
         maxTokens,
         temperature: attempt === 0 ? 0.9 : 0.75,
-        timeoutMs: Math.min(REQUEST_TIMEOUT_MS, remaining),
+        // Every route in the chain draws from what is left of the deadline.
+        timeoutMs: remaining,
       });
     } catch (error: unknown) {
       const mapped =
@@ -391,6 +636,12 @@ export const CAROUSEL_COPY_MAX_TOKENS = 128;
 export const CAROUSEL_COPY_ATTEMPTS = 2;
 /** Shorter than the listing-metadata budget: an admin is waiting on this click. */
 export const CAROUSEL_COPY_TIMEOUT_MS = 30_000;
+/**
+ * Budget for the admin-triggered connectivity probe. It is short on purpose:
+ * the probe walks the route chain within it, so a stalled preferred route is
+ * reported as a working fallback rather than as a minute of silence.
+ */
+export const PROBE_TIMEOUT_MS = 30_000;
 
 export interface CarouselCopyResult {
   /** Headline for the homepage card — never more than 5 words. */
@@ -424,6 +675,7 @@ export async function suggestCarouselCopy(
 ): Promise<CarouselCopyResult> {
   const fallback = fallbackCarouselCopy(source);
   const model = openRouterModelName();
+  const models = openRouterModelChain();
   const key = openRouterApiKey();
   const base = { model, trimmed: false };
 
@@ -443,7 +695,7 @@ export async function suggestCarouselCopy(
   for (let attempt = 0; attempt < CAROUSEL_COPY_ATTEMPTS; attempt += 1) {
     let text = "";
     try {
-      const result = await chatCompletion(prompt + correction, model, key, {
+      const result = await chatCompletion(prompt + correction, models, key, {
         maxTokens: CAROUSEL_COPY_MAX_TOKENS,
         temperature: attempt === 0 ? 0.6 : 0.2,
         timeoutMs: CAROUSEL_COPY_TIMEOUT_MS,
@@ -512,7 +764,8 @@ export interface OpenRouterProbeResult {
 export async function probeOpenRouter(): Promise<OpenRouterProbeResult> {
   const key = openRouterApiKey();
   const startedAt = Date.now();
-  const model = openRouterModelName();
+  const models = openRouterModelChain();
+  const model = models[0] ?? openRouterModelName();
   const base: OpenRouterProbeResult = {
     ok: false,
     configured: Boolean(key),
@@ -526,14 +779,19 @@ export async function probeOpenRouter(): Promise<OpenRouterProbeResult> {
   }
 
   try {
-    const result = await chatCompletion("Reply with the single word: ok", model, key, {
+    const result = await chatCompletion("Reply with the single word: ok", models, key, {
       maxTokens: 32,
       temperature: 0,
+      // Shorter than the suggestion budget: an admin is watching this click,
+      // and a stalled route is dropped for the next one instead of being waited on.
+      timeoutMs: PROBE_TIMEOUT_MS,
     });
     const text = result.text.trim();
     return {
       ...base,
       ok: true,
+      // The route that actually answered, which may be a fallback.
+      model: result.model,
       latencyMs: Date.now() - startedAt,
       ...(text ? {} : { hint: "The model answered without text — metadata suggestions may still work." }),
     };
@@ -566,6 +824,12 @@ export function openRouterDiagnostics() {
     endpoint: "openrouter.ai/api/v1/chat/completions",
     model: openRouterModelName(),
     defaultModel: DEFAULT_OPENROUTER_MODEL,
+    /** Routes a draft request may ask, preferred first (fallbacks included). */
+    models: openRouterModelChain(),
+    defaultFallbackModels: [...DEFAULT_OPENROUTER_FALLBACK_MODELS],
+    /** Routes currently benched in this process after stalling. */
+    routeHealth: openRouterRouteHealth(),
+    routeTimeoutMs: MODEL_ATTEMPT_TIMEOUT_MS,
     reasoning: "disabled",
     maxOutputTokens: suggestionOutputTokens(),
     titleStyle: resolveTitleStyle(),

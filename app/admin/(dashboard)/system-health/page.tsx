@@ -147,7 +147,7 @@ export default async function SystemHealthAdmin() {
       status: aiStatus,
       latency: "—",
       desc: ai.configured
-        ? `AI metadata assistant · key: ${ai.keyKind} · model ${ai.model} · reasoning ${ai.reasoning} · titles: ${ai.titleStyle} (${ai.titleWords.min}-${ai.titleWords.max} words)`
+        ? `AI metadata assistant · key: ${ai.keyKind} · model ${ai.model} · routes ${ai.models.length} (preferred first, then free fallbacks) · reasoning ${ai.reasoning} · titles: ${ai.titleStyle} (${ai.titleWords.min}-${ai.titleWords.max} words)`
         : `AI metadata assistant · OPENROUTER_API_KEY is not set · titles fall back to the offline ${ai.titleStyle} composer`,
     },
   ];

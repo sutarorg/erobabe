@@ -19,9 +19,12 @@ export const maxDuration = 60;
  * publishes — `explicit`
  * unless `VIDEO_TITLE_STYLE` says otherwise. Length near-misses in the model's
  * reply are repaired rather than rejected (see `suggestVideoMetadata`); a title
- * is never composed offline. When OpenRouter is unreachable, out of credits, or
- * unwilling to write adults-only copy, this route answers with an error instead
- * of a filler title; the caller is expected to retry until the model answers.
+ * is never composed offline. A route that stops answering is dropped for the
+ * next one in the chain (`OPENROUTER_FALLBACK_MODELS`), which is what keeps a
+ * queued free endpoint from parking an upload batch on "Waiting for AI title".
+ * When every route is unreachable, out of credits, or unwilling to write
+ * adults-only copy, this route answers with an error instead of a filler title;
+ * the caller is expected to retry until a model answers.
  *
  * One request can ask for several drafts (`count`), because an upload batch
  * needs one title per file: that is what keeps a large queue inside the
