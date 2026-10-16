@@ -176,10 +176,10 @@ export default function VideoComments({ videoId }: { videoId: string }) {
       <h2 className="text-[15px] font-semibold">Comments</h2>
       <p className="mt-1 text-xs text-ink-3">Newest first</p>
 
-      {/* After four lines in the comment section, a scrollbar appears */}
+      {/* Keep long comment threads scrollable without a visible scrollbar. */}
       <div
         aria-label="Comment list"
-        className="center-scroll mt-4 max-h-[300px] overflow-y-auto space-y-4 pr-1"
+        className="center-scroll no-scrollbar mt-4 max-h-[300px] overflow-y-auto space-y-4 pr-1"
       >
         {comments.map((comment) => {
           const isOwner = Boolean(
@@ -212,8 +212,9 @@ export default function VideoComments({ videoId }: { videoId: string }) {
                       title="Delete your comment"
                       className="inline-flex items-center gap-1 text-[11px] text-ink-3 opacity-70 transition hover:text-red-400 hover:opacity-100 disabled:opacity-40"
                     >
-                      <Trash2 className="h-3 w-3" aria-hidden="true" />
-                      <span>{deletingId === comment.id ? "Deleting…" : "Delete"}</span>
+                      {deletingId === comment.id
+                        ? <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />
+                        : <Trash2 className="h-3 w-3" aria-hidden="true" />}
                     </button>
                   )}
                 </div>
@@ -228,14 +229,14 @@ export default function VideoComments({ videoId }: { videoId: string }) {
         <p className="mt-4 text-sm text-ink-3">Be the first to comment.</p>
       )}
       {busy && <p role="status" className="mt-4 text-sm text-ink-3">Loading comments…</p>}
-      {more && (
+      {more && !busy && (
         <button
           type="button"
-          disabled={busy || posting}
+          disabled={posting}
           onClick={() => void load(comments.length)}
           className="mt-4 rounded-full px-3 py-2 text-sm text-ink-2 transition hover:bg-rail hover:text-ink disabled:opacity-50"
         >
-          View more · 5 comments
+          View more
         </button>
       )}
       {error && (
@@ -266,8 +267,8 @@ export default function VideoComments({ videoId }: { videoId: string }) {
             rows={1}
             value={body}
             onChange={(event) => setBody(event.target.value)}
-            placeholder="Add a comment… (no links, max 100 chars)"
-            className="no-scrollbar min-h-11 min-w-0 flex-1 resize-none overflow-hidden rounded-3xl border border-line bg-rail px-4 py-3 text-sm leading-5 transition-colors focus:border-accent"
+            placeholder="Add a comment..."
+            className="no-scrollbar min-h-11 max-h-32 min-w-0 flex-1 resize-none overflow-y-auto rounded-3xl border border-line bg-rail px-4 py-3 text-sm leading-5 transition-colors focus:border-accent"
           />
           <button
             type="submit"

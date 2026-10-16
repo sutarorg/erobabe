@@ -35,7 +35,9 @@ describe("anonymous comments", () => {
 
     await screen.findByText("Comment 2");
     expect(screen.queryByText("Comment 3")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /View more/ }));
+    fireEvent.click(screen.getByRole("button", { name: "View more" }));
+    expect(screen.queryByRole("button", { name: "View more" })).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading comments");
     await screen.findByText("Comment 7");
     expect(fetch.mock.calls[1][0]).toContain("offset=2");
     expect(screen.queryByRole("button", { name: /View more/ })).toBeNull();
@@ -159,8 +161,10 @@ describe("anonymous comments", () => {
 
     await screen.findByText("I made this comment");
     // Delete button visible on user's own comment
-    const deleteBtn = screen.getByRole("button", { name: /Delete/i });
+    const deleteBtn = screen.getByRole("button", { name: "Delete your comment" });
     expect(deleteBtn).toBeTruthy();
+    expect(deleteBtn.textContent).toBe("");
+    expect(deleteBtn.querySelector("svg")).not.toBeNull();
 
     fireEvent.click(deleteBtn);
     await waitFor(() => {
@@ -173,7 +177,7 @@ describe("anonymous comments", () => {
     );
   });
 
-  it("displays scrollable list with visible scrollbar after four lines", async () => {
+  it("displays a scrollable comment list with its scrollbar hidden", async () => {
     const fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ comments: [comment(1)], hasMore: false }),
@@ -185,13 +189,15 @@ describe("anonymous comments", () => {
     const list = screen.getByLabelText("Comment list");
     const composer = screen.getByRole("form", { name: "Post a comment" });
 
-    // Scrollbar appears with overflow-y-auto and max-h constraint (not hidden by no-scrollbar)
+    // Long lists remain scrollable without showing a scrollbar.
     expect(list.className).toContain("overflow-y-auto");
     expect(list.className).toMatch(/max-h-/);
-    expect(list.className).not.toContain("no-scrollbar");
+    expect(list.className).toContain("no-scrollbar");
 
     const input = screen.getByRole("textbox", { name: "Your comment" });
-    expect(input.className).toContain("overflow-hidden");
+    expect(input).toHaveAttribute("placeholder", "Add a comment...");
+    expect(input.className).toContain("overflow-y-auto");
+    expect(input.className).toContain("max-h-32");
     expect(input.className).toContain("no-scrollbar");
     expect(input.className).toContain("resize-none");
     const submit = screen.getByRole("button", { name: "Post comment" });
