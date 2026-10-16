@@ -1,19 +1,62 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { LoaderCircle, MessageCircle } from "lucide-react";
+import { LoaderCircle, MessageCircle, Trash2 } from "lucide-react";
 import { anonymousProfile, saveAnonymousUsername } from "../utils/anonymousProfile";
+import { containsLink, MAX_COMMENT_LENGTH } from "@/lib/community/validation";
+import { formatTimeAgo } from "@/lib/site";
 
 type Comment = { id: string; profile_name: string; body: string; created_at: string };
+
+function CommentBody({ body }: { body: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [isClamped, setIsClamped] = useState(false);
+  const textRef = useRef<HTMLParagraphElement>(null);
+
+  useEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    if (el.scrollHeight > el.clientHeight + 1) {
+      setIsClamped(true);
+    }
+  }, [body]);
+
+  const newlineLines = body.split("\n").length;
+  const isLong = newlineLines > 3 || isClamped;
+
+  return (
+    <div>
+      <p
+        ref={textRef}
+        className={`mt-1 whitespace-pre-wrap break-words text-sm text-ink-2 ${
+          !expanded ? "line-clamp-3" : ""
+        }`}
+      >
+        {body}
+      </p>
+      {isLong && (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="mt-1 inline-block text-xs font-medium text-ink-3 opacity-60 transition-opacity hover:text-ink hover:opacity-100"
+        >
+          {expanded ? "Show less" : "Read more"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function VideoComments({ videoId }: { videoId: string }) {
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [comments, setComments] = useState<Comment[]>([]);
+  const [myCommentIds, setMyCommentIds] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [body, setBody] = useState("");
   const [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [posting, setPosting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   const load = useCallback(async (offset = 0) => {
@@ -36,6 +79,10 @@ export default function VideoComments({ videoId }: { videoId: string }) {
 
   useEffect(() => {
     setName(anonymousProfile().name || "");
+    try {
+      const storedIds = JSON.parse(localStorage.getItem("erobabe-my-comment-ids") || "[]");
+      if (Array.isArray(storedIds)) setMyCommentIds(storedIds);
+    } catch {}
     void load();
   }, [load]);
 
@@ -51,6 +98,16 @@ export default function VideoComments({ videoId }: { videoId: string }) {
     event.preventDefault();
     if (posting || !body.trim()) return;
 
+    if (body.trim().length > MAX_COMMENT_LENGTH) {
+      setError(`Comments must be ${MAX_COMMENT_LENGTH} characters or fewer.`);
+      return;
+    }
+
+    if (containsLink(body)) {
+      setError("Links are not allowed in comments.");
+      return;
+    }
+
     setPosting(true);
     setError("");
     try {
@@ -58,9 +115,7 @@ export default function VideoComments({ videoId }: { videoId: string }) {
       const res = await fetch("/api/community", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // The server creates a username from the local word library on the first comment and returns
-        // the assigned name; clients cannot choose or reuse someone else's.
-        body: JSON.stringify({ videoId, visitorId: profile.id, body }),
+        body: JSON.stringify({ videoId, visitorId: profile.id, body: body.trim() }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
@@ -68,6 +123,15 @@ export default function VideoComments({ videoId }: { videoId: string }) {
       if (typeof data.name === "string") {
         const savedProfile = saveAnonymousUsername(data.name);
         setName(savedProfile.name || data.name);
+      }
+      if (typeof data.id === "string") {
+        setMyCommentIds((prev) => {
+          const updated = [...prev, data.id];
+          try {
+            localStorage.setItem("erobabe-my-comment-ids", JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
       }
       setBody("");
       await load();
@@ -78,28 +142,86 @@ export default function VideoComments({ videoId }: { videoId: string }) {
     }
   };
 
+  const deleteComment = async (commentId: string) => {
+    if (deletingId) return;
+    setDeletingId(commentId);
+    setError("");
+    try {
+      const profile = anonymousProfile();
+      const res = await fetch("/api/community", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commentId, visitorId: profile.id, videoId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Unable to delete comment");
+
+      setComments((old) => old.filter((c) => c.id !== commentId));
+      setMyCommentIds((prev) => {
+        const updated = prev.filter((id) => id !== commentId);
+        try {
+          localStorage.setItem("erobabe-my-comment-ids", JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    } catch (delError) {
+      setError(delError instanceof Error ? delError.message : "Unable to delete comment");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <section className="mt-7 pt-5" aria-label="Comments">
       <h2 className="text-[15px] font-semibold">Comments</h2>
       <p className="mt-1 text-xs text-ink-3">Newest first</p>
 
-      <div aria-label="Comment list" className="no-scrollbar mt-4 space-y-4">
-        {comments.map((comment) => (
-          <article key={comment.id} className="flex gap-3">
-            <span aria-hidden className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent">
-              {comment.profile_name.slice(0, 1)}
-            </span>
-            <div className="min-w-0">
-              <p className="text-xs font-semibold">
-                {comment.profile_name}
-                <time className="ml-2 font-normal text-ink-3" dateTime={comment.created_at}>
-                  {new Date(comment.created_at).toLocaleDateString()}
-                </time>
-              </p>
-              <p className="mt-1 whitespace-pre-wrap break-words text-sm text-ink-2">{comment.body}</p>
-            </div>
-          </article>
-        ))}
+      {/* After four lines in the comment section, a scrollbar appears */}
+      <div
+        aria-label="Comment list"
+        className="center-scroll mt-4 max-h-[300px] overflow-y-auto space-y-4 pr-1"
+      >
+        {comments.map((comment) => {
+          const isOwner = Boolean(
+            (name && comment.profile_name.toLowerCase() === name.toLowerCase()) ||
+            myCommentIds.includes(comment.id)
+          );
+
+          return (
+            <article key={comment.id} className="flex gap-3">
+              <span
+                aria-hidden
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent/15 text-accent"
+              >
+                {comment.profile_name.slice(0, 1)}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold">
+                    {comment.profile_name}
+                    <time className="ml-2 font-normal text-ink-3" dateTime={comment.created_at}>
+                      {formatTimeAgo(comment.created_at)}
+                    </time>
+                  </p>
+                  {isOwner && (
+                    <button
+                      type="button"
+                      onClick={() => void deleteComment(comment.id)}
+                      disabled={deletingId === comment.id}
+                      aria-label="Delete your comment"
+                      title="Delete your comment"
+                      className="inline-flex items-center gap-1 text-[11px] text-ink-3 opacity-70 transition hover:text-red-400 hover:opacity-100 disabled:opacity-40"
+                    >
+                      <Trash2 className="h-3 w-3" aria-hidden="true" />
+                      <span>{deletingId === comment.id ? "Deleting…" : "Delete"}</span>
+                    </button>
+                  )}
+                </div>
+                <CommentBody body={comment.body} />
+              </div>
+            </article>
+          );
+        })}
       </div>
 
       {!busy && !error && !comments.length && (
@@ -129,24 +251,29 @@ export default function VideoComments({ videoId }: { videoId: string }) {
         className="mt-5"
         aria-label="Post a comment"
       >
-        {name && <p className="mb-2 text-xs text-ink-3">Comment anonymously as {name}</p>}
+        <div className="mb-2 flex items-center justify-between text-xs text-ink-3">
+          {name ? <span>Comment anonymously as {name}</span> : <span />}
+          <span className={`tabular-nums ${body.length > MAX_COMMENT_LENGTH ? "text-red-400" : ""}`}>
+            {body.length}/{MAX_COMMENT_LENGTH}
+          </span>
+        </div>
         <div className="flex items-end gap-2">
           <textarea
             ref={composerRef}
             aria-label="Your comment"
             required
-            maxLength={1000}
+            maxLength={MAX_COMMENT_LENGTH}
             rows={1}
             value={body}
             onChange={(event) => setBody(event.target.value)}
-            placeholder="Add a comment…"
+            placeholder="Add a comment… (no links, max 100 chars)"
             className="no-scrollbar min-h-11 min-w-0 flex-1 resize-none overflow-hidden rounded-3xl border border-line bg-rail px-4 py-3 text-sm leading-5 transition-colors focus:border-accent"
           />
           <button
             type="submit"
             aria-label={posting ? "Posting comment" : "Post comment"}
             title={posting ? "Posting comment…" : "Post comment"}
-            disabled={posting || busy || !body.trim()}
+            disabled={posting || busy || !body.trim() || body.length > MAX_COMMENT_LENGTH}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent text-white transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
           >
             {posting

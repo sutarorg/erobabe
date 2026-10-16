@@ -1,5 +1,4 @@
 "use client";
-import { ArrowRight } from "lucide-react";
 import { ALL_CATEGORIES } from "../data/content";
 
 interface CategoriesPageProps {
@@ -23,7 +22,6 @@ export default function CategoriesPage({ onSelect }: CategoriesPageProps) {
       {/* Three columns at every width — four even rows of three cards. */}
       <div className="mt-5 grid grid-cols-3 auto-rows-fr gap-3">
         {tiles.map((cat) => {
-          const Icon = cat.icon;
           const name = cat.label;
           return (
             <button
@@ -31,20 +29,18 @@ export default function CategoriesPage({ onSelect }: CategoriesPageProps) {
               type="button"
               onClick={() => onSelect(cat.label)}
               aria-label={`Browse ${name}`}
-              className="group rounded-xl border border-line bg-card p-4 text-left transition-colors hover:border-accent/45 hover:bg-[#17171b]"
+              className="group relative flex min-h-[132px] min-w-0 flex-col items-start justify-end overflow-hidden rounded-xl border border-line bg-card p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/45 hover:bg-card-hover"
             >
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-accent/25 bg-accent/10">
-                <Icon className="h-5 w-5 text-accent" strokeWidth={1.8} aria-hidden />
-              </span>
-              <span className="mt-3 block text-[14px] font-semibold text-ink">{name}</span>
-              <span className="mt-2.5 flex items-center gap-1 text-[11px] font-semibold text-accent opacity-0 transition-opacity group-hover:opacity-100">
-                Browse
-                <ArrowRight className="h-3 w-3" aria-hidden />
+              <div
+                className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent"
+                aria-hidden="true"
+              />
+              <span className="relative z-10 block w-full break-words text-[14px] font-semibold leading-snug text-ink transition-colors group-hover:text-accent">
+                {name}
               </span>
             </button>
           );
         })}
-
       </div>
     </div>
   );

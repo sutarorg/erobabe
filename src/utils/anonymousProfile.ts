@@ -6,21 +6,24 @@ export interface AnonymousProfile {
 
 const STORAGE_KEY = "erobabe-anonymous-profile";
 const UUID_PATTERN = /^[0-9a-f-]{36}$/i;
-// Handles created by the server end in a random hex tag so they remain unique.
-const USERNAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}'’ -]{1,43} [0-9a-f]{12}$/iu;
+// Usernames are strictly two words (e.g. "Crazy Wobble")
+const USERNAME_PATTERN = /^[\p{L}\p{N}'’-]+ [\p{L}\p{N}'’-]+$/u;
 
 let fallback: AnonymousProfile | undefined;
+
+function cleanName(raw?: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  // Strip any legacy hex suffix so username is strictly two words
+  const stripped = raw.trim().replace(/\s+[0-9A-Fa-f]{12}$/, "");
+  return USERNAME_PATTERN.test(stripped) ? stripped : undefined;
+}
 
 function readStoredProfile(): AnonymousProfile | null {
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
     if (!stored || typeof stored !== "object" || !UUID_PATTERN.test(stored.id)) return null;
 
-    // Old builds saved locally-random names. Keep the visitor ID, but let the
-    // next post receive a server-reserved, locally generated username.
-    const name = typeof stored.name === "string" && USERNAME_PATTERN.test(stored.name)
-      ? stored.name
-      : undefined;
+    const name = cleanName(stored.name);
     return { id: stored.id, ...(name ? { name } : {}) };
   } catch {
     // Storage may be disabled; the in-memory identity still works this visit.
@@ -60,7 +63,6 @@ export function anonymousProfile(): AnonymousProfile {
   const stored = readStoredProfile();
   if (stored) {
     fallback = stored;
-    // Drop unreserved handles from older releases while preserving the ID.
     persist(stored);
     return stored;
   }
@@ -72,11 +74,11 @@ export function anonymousProfile(): AnonymousProfile {
 
 /** Save the server-reserved username beside this browser's stable visitor ID. */
 export function saveAnonymousUsername(name: string): AnonymousProfile {
-  const normalized = name.trim().replace(/\s+/g, " ");
-  if (!USERNAME_PATTERN.test(normalized)) return anonymousProfile();
+  const cleaned = cleanName(name);
+  if (!cleaned) return anonymousProfile();
 
   const profile = anonymousProfile();
-  fallback = { id: profile.id, name: normalized };
+  fallback = { id: profile.id, name: cleaned };
   persist(fallback);
   return fallback;
 }

@@ -6,8 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
  * so assertions cover the markup that actually ships.
  */
 const CATEGORIES = [
-  { id: "1", label: "Mature", slug: "mature", icon: "flame", video_count: 5, image_url: "https://cdn.example.com/categories/mature.jpg" },
-  { id: "2", label: "Amateur", slug: "amateur", icon: "camera", video_count: 0 },
+  { id: "1", label: "Mature", slug: "mature", icon: "flame", video_count: 5, description: "Mature curated collection", image_url: "https://cdn.example.com/categories/mature.jpg" },
+  { id: "2", label: "Amateur", slug: "amateur", icon: "camera", video_count: 0, description: "Amateur videos" },
   { id: "3", label: "POV", slug: "pov", icon: "eye", video_count: 0 },
   { id: "4", label: "Lesbian", slug: "lesbian", icon: "users", video_count: 0 },
   { id: "5", label: "Kinky", slug: "kinky", icon: "mask", video_count: 0 },
@@ -45,22 +45,25 @@ describe("/categories page", () => {
     expect(html.split('href="/category/').length - 1).toBe(12);
   });
 
-  it("shows the requested eyebrow, introduction, with category icons and without video counts", async () => {
+  it("shows the requested eyebrow, introduction, without category icons or descriptions, and with back gradient", async () => {
     const html = await render();
     expect(html).toContain(">Browse</p>");
     expect(html).not.toContain(">Browser</p>");
     expect(html).toContain("Explore the library by what you love — every category is hand-curated and updated daily.");
     expect(html).not.toContain("videos</span>");
     expect(html).toContain('aria-label="Browse Mature"');
-    expect(html).toContain("<svg");
+    // Icons and descriptions are completely removed from category cards
+    expect(html).not.toContain("<svg");
+    expect(html).not.toContain("Mature curated collection");
+    expect(html).not.toContain("Amateur videos");
+    // Back gradient is present on the cards to make category names visible
+    expect(html).toContain("bg-gradient-to-t");
   });
 
   it("renders the admin-uploaded thumbnail on the card that has one", async () => {
     const html = await render();
     // The Mature card carries an uploaded image…
     expect(html).toContain('src="https://cdn.example.com/categories/mature.jpg"');
-    // No icons, including on cards without thumbnails.
-    expect(html).toContain("<svg");
     expect(html).toContain("opacity-50");
     expect(html).toContain("group-hover:opacity-65");
     // Cards without an image render no <img> for that category.
