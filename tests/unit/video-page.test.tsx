@@ -80,8 +80,8 @@ describe("/video/[slug] watch page", () => {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const grid = doc.querySelector("[data-grid-rows='4']") as HTMLElement;
     expect(html).toContain("More like this");
-    expect(html).not.toContain("grid-cols-5");
     expect(grid).toBeTruthy();
+    expect(grid.className).not.toContain("grid-cols-5");
     // The no-JS/SSR layout starts at two columns, therefore eight cards.
     expect(grid.style.gridTemplateColumns).toBe("repeat(2, minmax(0, 1fr))");
     expect(grid.children).toHaveLength(8);
@@ -92,6 +92,30 @@ describe("/video/[slug] watch page", () => {
     const headings = Array.from(new DOMParser().parseFromString(html, "text/html").querySelectorAll("h2")).map(h => h.textContent);
     expect(headings).toEqual(["Comments", "More like this", "Recommended", "Top Rated", "Top Categories", "Latest"]);
   });
+
+  it("shares the homepage five-card mobile category strip without horizontal scrolling", async () => {
+    const html = await renderPage();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const grid = doc.querySelector(".category-grid") as HTMLElement;
+    expect(grid).toBeTruthy();
+    expect(grid.className).toContain("grid-cols-5");
+    expect(grid.className).toContain("sm:grid-cols-8");
+    expect(grid.className).not.toMatch(/overflow-x-auto|snap-x/);
+    expect(grid.children).toHaveLength(8);
+
+    const cards = Array.from(grid.children) as HTMLElement[];
+    const mobileCards = cards.filter((card) => !card.className.includes("hidden"));
+    expect(mobileCards.map((card) => card.textContent?.trim())).toEqual([
+      "Amateur",
+      "Lesbian",
+      "MILF",
+      "Japanese",
+      "More",
+    ]);
+    expect(mobileCards.at(-1)?.getAttribute("href")).toBe("/categories");
+    expect(html).not.toContain("overflow-x-auto");
+  });
+
   it("renders Like and Share buttons", async () => {
     const html = await renderPage();
     expect(html).toContain(">Like<");

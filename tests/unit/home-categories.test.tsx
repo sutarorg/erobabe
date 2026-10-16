@@ -18,13 +18,13 @@ const DATABASE_CATEGORIES = [
 ];
 
 describe("homepage categories", () => {
-  it("shows 6 category cards on mobile with More as the last card, and 8 on desktop without horizontal scrolling", () => {
+  it("shows 5 category cards on mobile with More last, and 8 on desktop without horizontal scrolling", () => {
     const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
     const grid = container.querySelector(".category-grid");
     expect(grid).toBeTruthy();
     expect(grid?.className).toMatch(/\bgrid\b/);
-    // Six columns on mobile (five featured + More) and eight columns on desktop.
-    expect(grid?.className).toContain("grid-cols-6");
+    // Five columns on mobile (four featured + More) and eight on desktop.
+    expect(grid?.className).toContain("grid-cols-5");
     expect(grid?.className).toContain("sm:grid-cols-8");
     expect(grid?.className).not.toMatch(/overflow-x-auto|snap-x/);
     expect(grid?.children).toHaveLength(8);
@@ -32,17 +32,16 @@ describe("homepage categories", () => {
     const links = within(grid as HTMLElement).getAllByRole("link");
     expect(links).toHaveLength(8);
     const mobileVisibleLinks = links.filter((link) => !link.className.includes("hidden"));
-    expect(mobileVisibleLinks).toHaveLength(6);
+    expect(mobileVisibleLinks).toHaveLength(5);
     expect(mobileVisibleLinks.map((link) => link.textContent?.trim())).toEqual([
       "Amateur",
       "Lesbian",
       "MILF",
       "Japanese",
-      "Teen (18+)",
       "More",
     ]);
-    expect(mobileVisibleLinks[5].textContent?.trim()).toBe("More");
-    expect(mobileVisibleLinks[5].getAttribute("href")).toBe("/categories");
+    expect(mobileVisibleLinks[4].textContent?.trim()).toBe("More");
+    expect(mobileVisibleLinks[4].getAttribute("href")).toBe("/categories");
     expect(links[7].textContent?.trim()).toBe("More");
     expect(links[7].getAttribute("href")).toBe("/categories");
   });
@@ -61,16 +60,16 @@ describe("homepage categories", () => {
 
   it("switches to the 8-card desktop row on a viewport breakpoint, never on the container", () => {
     // The centre panel is a container query context, and a 390–430px phone panel
-    // is wider than the 24rem container breakpoint — a `@sm:` variant here used
-    // to leak the 8-card desktop row into the mobile view. The mobile/desktop
-    // switch must stay viewport-based.
+    // is wider than the 24rem container breakpoint — a `@sm:` variant here can
+    // leak the 8-card desktop row into the mobile view. Keep the switch
+    // viewport-based.
     const { container } = render(<Categories categories={DATABASE_CATEGORIES} />);
     const grid = container.querySelector(".category-grid") as HTMLElement;
     expect(grid.className).not.toMatch(/@sm:grid-cols-8/);
 
     const cards = Array.from(grid.children) as HTMLElement[];
     const mobileHidden = cards.filter((card) => card.className.includes("hidden"));
-    expect(mobileHidden).toHaveLength(2);
+    expect(mobileHidden).toHaveLength(3);
     for (const card of mobileHidden) {
       expect(card.className).toContain("hidden");
       expect(card.className).toContain("sm:flex");
