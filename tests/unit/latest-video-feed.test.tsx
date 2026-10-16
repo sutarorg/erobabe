@@ -21,6 +21,7 @@ it("shows a spinner rather than visible loading text while the Latest feed auto-
   render(<LatestVideoFeed videoId="video-id" />);
   await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
   expect(screen.queryByText(/loading/i)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Load more/i })).not.toBeInTheDocument();
   expect(screen.getByRole("status", { name: "Fetching more videos" })).toBeInTheDocument();
 
   await act(async () => {

@@ -1,5 +1,5 @@
 "use client";
-import { Loader2 } from "lucide-react";
+import { Loader2, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PublicVideo } from "@/lib/public/catalog";
 import type { FeedCursor } from "@/lib/public/watch-feed";
@@ -47,7 +47,7 @@ export default function LatestVideoFeed({ videoId }: { videoId: string }) {
         </span>
       )}
       {error && <p role="alert">{error}</p>}
-      {!done && <button disabled={busy} onClick={() => void load()} className="mt-2 rounded-lg border border-line px-4 py-2 disabled:opacity-50">{error ? "Retry" : "Load more"}</button>}
+      {error && <button type="button" aria-label="Retry loading videos" title="Retry" onClick={() => void load()} className="mt-2 rounded-full p-2 text-ink-3 transition hover:text-ink"><RotateCw className="h-4 w-4" aria-hidden="true" /></button>}
       {done && <p>{videos.length ? "You’re all caught up." : "No more videos yet."}</p>}
     </div>
   </section>;
