@@ -1,4 +1,4 @@
-# Environment inventory — 2026-10-14
+# Environment inventory — 2026-10-16
 
 No real credentials were read, written or verified. `.env.example` contains placeholders only. Required below means required for that workflow, not proof that its production account is approved.
 
@@ -13,7 +13,7 @@ No real credentials were read, written or verified. `.env.example` contains plac
 | NOWPAYMENTS_DEFAULT_PAY_CURRENCY | setup diagnostics | Optional supported-asset diagnostic default; checkout uses its explicit validated asset/network choice, not a browser price and not this environment value as a universal checkout default. |
 | BUNNY_STREAM_LIBRARY_ID / BUNNY_STREAM_API_KEY | lib/video/bunny, sessions/status/confirm/admin publishing | Required for hosted uploads/playback verification. Positive safe numeric library ID, nonempty whitespace-free library key. Invalid config fails 503; account API key is not a library key. |
 | BUNNY_UPLOAD_MAX_BYTES | uploadConfiguration / validateVideo | Optional positive safe integer operator budget, exposed as policy but no secret. Invalid config fails; over-budget declared metadata rejected before provider creation. Actual provider-byte enforcement needs account-side controls/staging. |
-| OPENROUTER_API_KEY / OPENROUTER_MODEL / OPENROUTER_MAX_OUTPUT_TOKENS | metadata adapter/suggestion | Optional for core publishing, required for AI suggestions. Model/token defaults retained; missing/malformed credentials give diagnostics, no invented provider success. Human review required. |
+| OPENROUTER_API_KEY / OPENROUTER_MODEL / OPENROUTER_MAX_OUTPUT_TOKENS | metadata adapter/suggestion | Optional for core publishing, required for AI suggestions. Default model: `nvidia/nemotron-3-ultra-550b-a55b:free`; first-attempt output cap: 512. Missing/malformed credentials give diagnostics, no invented provider success. Human review required. |
 | OPENROUTER_THUMBNAIL_ENABLED / OPENROUTER_THUMBNAIL_CONTENT_APPROVED | thumbnail ranking | Optional, both must explicitly enable external frame transfer. Disabled by default. |
 | OPENROUTER_THUMBNAIL_MODEL / OPENROUTER_THUMBNAIL_PROVIDER | optional vision ranking | Required if ranking enabled; explicit approved image-capable model and pinned provider. Local actual-frame scoring remains fallback. |
 | FFMPEG_PATH | manual existing direct-media frame extraction | Optional executable override. Bundled linux-x64 FFmpeg retained/traced; host must allow executable/outbound media access. Browser local-frame pipeline does not need server FFmpeg. |

@@ -14,8 +14,9 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 /**
- * Admin-only category-led AI metadata suggestions (OpenRouter, DeepSeek V3.2 by
- * default). Titles are written in the voice the site publishes — `explicit`
+ * Admin-only category-led AI metadata suggestions (OpenRouter, NVIDIA Nemotron
+ * 3 Ultra free route by default). Titles are written in the voice the site
+ * publishes — `explicit`
  * unless `VIDEO_TITLE_STYLE` says otherwise. Length near-misses in the model's
  * reply are repaired rather than rejected (see `suggestVideoMetadata`); a title
  * is never composed offline. When OpenRouter is unreachable, out of credits, or

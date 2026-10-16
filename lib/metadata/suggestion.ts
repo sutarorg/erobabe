@@ -67,12 +67,12 @@ export function titleBands(style: TitleStyle = resolveTitleStyle()) {
 export const MIN_REPAIRABLE_DESCRIPTION_WORDS = 8;
 
 /**
- * How many existing titles the model is shown as its do-not-repeat list. Near
- * duplicates are judged against the same window: the model cannot avoid titles
- * it was never shown, so holding it to the whole catalogue only produced
- * rejections. Exact repeats are still checked against every known title.
+ * How many recent/relevant titles the model is shown as its do-not-repeat list.
+ * Keeping this compact limits repeated input tokens. Exact repeats are still
+ * checked locally against the full catalogue; near duplicates are judged only
+ * against titles visible to the model.
  */
-export const PROMPT_AVOID_LIMIT = 100;
+export const PROMPT_AVOID_LIMIT = 32;
 
 /** Whitespace-separated words; hyphenated words count as one. */
 export function descriptionWordCount(description: string): number {
@@ -85,7 +85,7 @@ export function isValidDescription(description: string): boolean {
   return description.trim().length <= 1000 && count >= MIN_DESCRIPTION_WORDS && count <= MAX_DESCRIPTION_WORDS;
 }
 
-export const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
+export const DEFAULT_MAX_OUTPUT_TOKENS = 512;
 const MIN_MAX_OUTPUT_TOKENS = 256;
 export const MAX_MAX_OUTPUT_TOKENS = 16_384;
 

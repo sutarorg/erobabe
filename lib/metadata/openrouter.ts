@@ -1,14 +1,16 @@
 /**
  * OpenRouter client for AI video metadata — server-only.
  *
- * Calls the OpenAI-compatible chat completions endpoint with DeepSeek V3.2 by
- * default. The upload flow can publish after encoding, so the admin should
- * preview and edit category-led drafts before starting whenever possible.
+ * Calls the OpenAI-compatible chat completions endpoint with NVIDIA Nemotron 3
+ * Ultra (free) by default. The upload flow can publish after encoding, so the
+ * admin should preview and edit category-led drafts before starting whenever
+ * possible.
  *
  * Configuration (server environment only, never shipped to the browser):
  *   OPENROUTER_API_KEY           required, starts with `sk-or-`
- *   OPENROUTER_MODEL             optional, default `deepseek/deepseek-v3.2`
- *   OPENROUTER_MAX_OUTPUT_TOKENS optional, default 2048
+ *   OPENROUTER_MODEL             optional, default
+ *                                `nvidia/nemotron-3-ultra-550b-a55b:free`
+ *   OPENROUTER_MAX_OUTPUT_TOKENS optional, default 512
  */
 
 import {
@@ -40,7 +42,7 @@ import {
 export const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 /** Re-exported so callers never have to reach past this client for its types. */
 export type { SuggestedMetadata } from "./suggestion";
-export const DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v3.2";
+export const DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 export const REQUEST_TIMEOUT_MS = 45_000;
 export const SUGGESTION_ATTEMPTS = 3;
 /**
@@ -169,7 +171,7 @@ async function chatCompletion(prompt: string, model: string, key: string, option
       model,
       messages: [{ role: "user", content: prompt }],
       temperature: options.temperature,
-      max_tokens: options.maxTokens,
+      max_completion_tokens: options.maxTokens,
     };
     if (includeJson) body.response_format = { type: "json_object" };
     if (includeReasoning) body.reasoning = { enabled: false };
@@ -285,6 +287,8 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
   const prompt = buildPrompt({ ...params, existingTitles: existing, style });
   const deadline = params.deadline ?? Date.now() + SUGGESTION_BUDGET_MS;
   const baseTokens = suggestionOutputTokens();
+  const expandedTokens = Math.min(baseTokens * 2, MAX_MAX_OUTPUT_TOKENS);
+  let retryMaxTokens = baseTokens;
   let correction = "";
   let lastError: MetadataError | null = null;
   let salvage: { suggestion: SuggestedMetadata; cost: number } | null = null;
@@ -296,7 +300,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
       break;
     }
 
-    const maxTokens = attempt === 0 ? baseTokens : Math.min(baseTokens * 2, MAX_MAX_OUTPUT_TOKENS);
+    const maxTokens = attempt === 0 ? baseTokens : retryMaxTokens;
     let result: ChatResult;
     try {
       result = await chatCompletion(prompt + correction, model, key, {
@@ -318,6 +322,9 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
     }
 
     if (!result.text.trim()) {
+      // Spend a larger output budget only when the previous response was empty;
+      // semantic/validation retries keep the compact default cap.
+      if (!result.refusal) retryMaxTokens = expandedTokens;
       lastError = new MetadataError(
         result.refusal
           ? "The model declined to produce a suggestion for this file."
@@ -365,6 +372,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
 
     correction = correctionPrompt(failure, style);
     const truncated = result.finishReason === "length" && !parseLooseJson(result.text);
+    retryMaxTokens = truncated ? expandedTokens : baseTokens;
     lastError = new MetadataError(
       truncated
         ? "The suggestion was cut off before it finished."
@@ -379,7 +387,7 @@ export async function suggestVideoMetadata(params: SuggestMetadataParams): Promi
 }
 
 /** Output-token budget for one carousel copy — two short fields, nothing more. */
-export const CAROUSEL_COPY_MAX_TOKENS = 256;
+export const CAROUSEL_COPY_MAX_TOKENS = 128;
 export const CAROUSEL_COPY_ATTEMPTS = 2;
 /** Shorter than the listing-metadata budget: an admin is waiting on this click. */
 export const CAROUSEL_COPY_TIMEOUT_MS = 30_000;

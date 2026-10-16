@@ -410,7 +410,7 @@ describe("VideoManager — categories, select all, carousel, bulk actions", () =
           carousel_title: "Seduced By The Neighbour",
           carousel_description: "She never expected him to knock tonight",
         },
-        carouselCopy: { source: "ai", model: "deepseek/deepseek-v3.2", trimmed: false, stored: true },
+        carouselCopy: { source: "ai", model: "nvidia/nemotron-3-ultra-550b-a55b:free", trimmed: false, stored: true },
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
