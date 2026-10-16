@@ -248,8 +248,12 @@ export const REQUIRED_EXPLICIT_TERMS = [
   "semen",
 ] as const;
 
+function escapeForAlternation(word: string): string {
+  return word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function keywordPattern(words: readonly string[]): RegExp {
-  return new RegExp(`(?:^|[^\\p{L}\\p{N}])(?:${words.join("|")})(?:$|[^\\p{L}\\p{N}])`, "iu");
+  return new RegExp(`(?:^|[^\\p{L}\\p{N}])(?:${words.map(escapeForAlternation).join("|")})(?:$|[^\\p{L}\\p{N}])`, "iu");
 }
 
 export const REQUIRED_EXPLICIT_PATTERN = keywordPattern(REQUIRED_EXPLICIT_TERMS);
@@ -257,9 +261,53 @@ const EXPLICIT_ACT_PATTERN = keywordPattern(EXPLICIT_ACT_WORDS);
 const EXPLICIT_BODY_PATTERN = keywordPattern(EXPLICIT_BODY_WORDS);
 const EXPLICIT_SUBJECT_PATTERN = keywordPattern(EXPLICIT_SUBJECT_WORDS);
 
-/** True when the copy names at least one of the required sexual search terms. */
-export function containsRequiredExplicitTerm(value: unknown): boolean {
-  return REQUIRED_EXPLICIT_PATTERN.test(String(value ?? ""));
+/**
+ * Anatomy/sex words a title must use for each of the site's fixed categories
+ * (see `KNOWN_CATEGORIES` in `./suggestion`, which this list matches exactly).
+ * This replaces the one-size-fits-all `REQUIRED_EXPLICIT_TERMS` list for
+ * prompt guidance and validation: a MILF title naming "mature pussy" is on
+ * topic in a way a generic "pussy" is not, and a Lesbian title should never be
+ * satisfied by "cock" alone.
+ */
+export const CATEGORY_EXPLICIT_TERMS: Record<string, readonly string[]> = {
+  Amateur: ["pussy", "cock", "dick", "boobs", "cum", "homemade", "real couple", "raw", "creampie", "girlfriend"],
+  Lesbian: ["pussy", "tongue", "boobs", "clit", "scissoring", "tribbing", "strap-on", "eating out", "fingering", "wet"],
+  MILF: ["pussy", "cock", "big boobs", "mature pussy", "dick", "cougar", "housewife", "creampie", "busty", "riding"],
+  Japanese: ["pussy", "cock", "jav", "uncensored", "creampie", "tight pussy", "boobs", "hairy pussy", "dick", "pink"],
+  "Teen (18+)": ["pussy", "tight pussy", "cock", "dick", "boobs", "petite", "first time", "virgin", "creampie", "bare"],
+  Hentai: ["pussy", "cock", "dick", "animated boobs", "tentacles", "ahegao", "creampie", "anime pussy", "monster cock", "cum"],
+  Ebony: ["pussy", "big booty", "dick", "bbc", "boobs", "black pussy", "thick", "bwc", "ass", "creampie"],
+  POV: ["pussy", "cock", "dick", "blowjob", "boobs", "first person", "missionary", "doggystyle", "cum", "tight pussy"],
+  "Big Ass": ["pussy", "big ass", "booty", "dick", "boobs", "pawg", "thick", "bounce", "doggystyle", "cheeks"],
+  Threesome: ["pussy", "two cocks", "dick", "boobs", "dp", "double penetration", "spitroast", "ffm", "mmf", "cum"],
+  Hardcore: ["pussy", "cock", "dick", "anal", "gaping", "rough", "creampie", "gangbang", "dp", "cum"],
+  Massage: ["pussy", "cock", "dick", "oiled boobs", "happy ending", "nuru", "rubbing", "slippery", "sensual", "cum"],
+};
+
+/** The anatomy words required for a category, or the generic list for any other. */
+export function requiredExplicitTermsForCategory(category?: string): readonly string[] {
+  const wanted = String(category ?? "").trim().toLowerCase();
+  const key = Object.keys(CATEGORY_EXPLICIT_TERMS).find((entry) => entry.toLowerCase() === wanted);
+  return key ? CATEGORY_EXPLICIT_TERMS[key] : REQUIRED_EXPLICIT_TERMS;
+}
+
+const CATEGORY_EXPLICIT_PATTERNS: Record<string, RegExp> = Object.fromEntries(
+  Object.entries(CATEGORY_EXPLICIT_TERMS).map(([category, terms]) => [category, keywordPattern(terms)]),
+);
+
+function requiredExplicitPatternForCategory(category?: string): RegExp {
+  const wanted = String(category ?? "").trim().toLowerCase();
+  const key = Object.keys(CATEGORY_EXPLICIT_PATTERNS).find((entry) => entry.toLowerCase() === wanted);
+  return key ? CATEGORY_EXPLICIT_PATTERNS[key] : REQUIRED_EXPLICIT_PATTERN;
+}
+
+/**
+ * True when the copy names at least one of the required sexual search terms —
+ * this category's own anatomy vocabulary when `category` is given (and known),
+ * otherwise the generic cross-category list.
+ */
+export function containsRequiredExplicitTerm(value: unknown, category?: string): boolean {
+  return requiredExplicitPatternForCategory(category).test(String(value ?? ""));
 }
 
 /** True when the copy uses any blunt sexual wording at all (act or body part). */
@@ -404,15 +452,17 @@ export function isCompliantCopy(
 }
 
 /**
- * Vocabulary rules for a voice: the explicit voice has to name the act, and the
- * editorial voice has to keep it implied. Returns the reason for rejection, or
- * `null` when the title is on-voice.
+ * Vocabulary rules for a voice: the explicit voice has to name the act with
+ * this category's own anatomy words (or the generic list when no category is
+ * given), and the editorial voice has to keep it implied. Returns the reason
+ * for rejection, or `null` when the title is on-voice.
  */
-export function titleKeywordViolation(title: string, style: TitleStyle): string | null {
+export function titleKeywordViolation(title: string, style: TitleStyle, category?: string): string | null {
   const value = String(title ?? "");
   if (style === "explicit") {
-    if (!containsRequiredExplicitTerm(value)) {
-      return "title must name the sex plainly (fuck, cock, dick, pussy, ass, blowjob, creampie or similar)";
+    if (!containsRequiredExplicitTerm(value, category)) {
+      const sample = requiredExplicitTermsForCategory(category).slice(0, 6).join(", ");
+      return `title must include one of this category's required words (${sample})`;
     }
     if (containsEditorialTell(value)) {
       return "title must not use euphemistic magazine wording";

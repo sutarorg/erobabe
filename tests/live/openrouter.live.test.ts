@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { isValidDescription, KNOWN_CATEGORIES } from "@/lib/metadata/suggestion";
+import { isValidDescription, KNOWN_CATEGORIES, titleNamesSelectedCategory } from "@/lib/metadata/suggestion";
 import { openRouterDiagnostics, probeOpenRouter, suggestVideoMetadata } from "@/lib/metadata/openrouter";
+import { requiredExplicitTermsForCategory } from "@/lib/metadata/title-style";
 
 /**
  * LIVE OpenRouter test — talks to the real OpenRouter API with the real key.
@@ -33,7 +34,7 @@ suite("OpenRouter live API", () => {
   }, 60_000);
 
   it("generates real metadata for a file name", async () => {
-    const suggestion = await suggestVideoMetadata({ fileName: "Hands_Only.mp4.ts.mp4", category: "Boudoir" });
+    const suggestion = await suggestVideoMetadata({ fileName: "Hands_Only.mp4.ts.mp4", category: "Amateur" });
     console.log("[live-openrouter] suggestion:", suggestion);
     expect(suggestion.title.length).toBeGreaterThan(2);
     expect(isValidDescription(suggestion.description)).toBe(true);
@@ -63,6 +64,17 @@ suite("OpenRouter live API", () => {
       suggestion.title,
     ).toMatch(/fuck|cock|dick|pussy|ass|sex|tits|blowjob|creampie|cumshot|slut|anal|strapon/i);
     expect(suggestion.title).not.toMatch(/cinema|velvet|editorial|revelation/i);
+    // The category's own name must never appear in the title (only the
+    // description may reference it), and the title must carry at least one
+    // of that category's specific required anatomy/sex words.
+    expect(titleNamesSelectedCategory(suggestion.title, category)).toBe(false);
+    const required = requiredExplicitTermsForCategory(category);
+    const hasRequiredTerm = required.some((term) =>
+      new RegExp(`(?:^|[^\\p{L}\\p{N}])${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[^\\p{L}\\p{N}])`, "iu").test(
+        suggestion.title,
+      ),
+    );
+    expect(hasRequiredTerm, `${suggestion.title} (expected one of: ${required.join(", ")})`).toBe(true);
   }, 90_000);
 
   it("rejects a bogus key with an actionable, secret-free message", async () => {

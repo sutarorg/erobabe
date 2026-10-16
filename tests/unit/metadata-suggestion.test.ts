@@ -27,7 +27,7 @@ import {
  * the deterministic fallback, and redaction. No network and no provider mocks.
  *
  * The suites here cover the shared shape machinery and the restrained
- * `editorial` voice, so they pin that voice: the fixtures ("Boudoir in Velvet
+ * `editorial` voice, so they pin that voice: the fixtures ("Amateur in Velvet
  * After Dark") are deliberately euphemistic, and several of them assert that
  * graphic wording is rejected. The voice the site publishes by default is
  * `explicit`, and `tests/unit/explicit-titles.test.ts` covers it (including a
@@ -47,24 +47,24 @@ afterEach(() => {
 
 function modelOutput(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
-    title: "Boudoir in Velvet After Dark",
-    description: "A refined adult boudoir portrait captured in soft cinematic light, with thoughtful composition and visual atmosphere. Browse this collection to discover related video listings.",
-    tags: ["mature", "boudoir", "4k"],
-    category: "Boudoir",
+    title: "Amateur in Velvet After Dark",
+    description: "A refined adult amateur portrait captured in soft cinematic light, with thoughtful composition and visual atmosphere. Browse this collection to discover related video listings.",
+    tags: ["amateur", "hd", "4k"],
+    category: "Amateur",
     ...overrides,
   });
 }
 
 describe("validateSuggestionPayload", () => {
   it("returns a validated suggestion from model output", () => {
-    const result = validateSuggestionPayload(modelOutput(), "Boudoir");
+    const result = validateSuggestionPayload(modelOutput(), "Amateur");
     expect(result).toMatchObject({
       ok: true,
       suggestion: {
-        title: "Boudoir in Velvet After Dark",
+        title: "Amateur in Velvet After Dark",
         description: expect.stringContaining("cinematic light"),
-        tags: ["mature", "boudoir", "4k"],
-        category: "Boudoir",
+        tags: ["amateur", "hd", "4k"],
+        category: "Amateur",
       },
     });
     if (result.ok) expect(result.suggestion.reasoning).toMatch(/human review/);
@@ -88,58 +88,58 @@ describe("validateSuggestionPayload", () => {
   });
 
   it("filters off-list tags and keeps a usable suggestion", () => {
-    const result = validateSuggestionPayload(modelOutput({ tags: ["mature", "not-a-real-tag-xyz", "boudoir"] }), "Boudoir");
+    const result = validateSuggestionPayload(modelOutput({ tags: ["amateur", "not-a-real-tag-xyz", "hd"] }), "Amateur");
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.suggestion.tags).toContain("mature");
+      expect(result.suggestion.tags).toContain("amateur");
       expect(result.suggestion.tags).not.toContain("not-a-real-tag-xyz");
     }
   });
 
   it("falls back to a known category for invalid model categories", () => {
-    const result = validateSuggestionPayload(modelOutput({ category: "Quantum Cooking" }), "Boudoir");
+    const result = validateSuggestionPayload(modelOutput({ category: "Quantum Cooking" }), "Amateur");
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.suggestion.category).toBe("Boudoir");
+    if (result.ok) expect(result.suggestion.category).toBe("Amateur");
   });
 
   it("accepts tags sent as a comma-separated string", () => {
-    const result = validateSuggestionPayload(modelOutput({ tags: "mature, boudoir, 4k" }), "Boudoir");
+    const result = validateSuggestionPayload(modelOutput({ tags: "amateur, hd, 4k" }), "Amateur");
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.suggestion.tags).toEqual(expect.arrayContaining(["mature", "boudoir"]));
+    if (result.ok) expect(result.suggestion.tags).toEqual(expect.arrayContaining(["amateur", "hd"]));
   });
 
   it("never rejects a reply over its tags outside strict validation", () => {
     // The upload publishes the title and description; tags fall back to the category.
-    for (const tags of [[], Array(12).fill("boudoir"), ["x".repeat(80)]]) {
-      const result = validateSuggestionPayload(modelOutput({ tags }), "Boudoir");
+    for (const tags of [[], Array(12).fill("amateur"), ["x".repeat(80)]]) {
+      const result = validateSuggestionPayload(modelOutput({ tags }), "Amateur");
       expect(result.ok, JSON.stringify(tags)).toBe(true);
       if (result.ok) expect(result.suggestion.tags.length).toBeGreaterThan(0);
     }
-    expect(validateSuggestionPayload(modelOutput({ tags: [] }), "Boudoir", { strictWordCount: true }).ok).toBe(false);
+    expect(validateSuggestionPayload(modelOutput({ tags: [] }), "Amateur", { strictWordCount: true }).ok).toBe(false);
   });
 
   it("cuts a runaway description instead of rejecting it as too long", () => {
-    const runaway = `A boudoir portrait ${"in soft window light ".repeat(80)}`;
+    const runaway = `An amateur scene ${"in soft window light ".repeat(80)}`;
     expect(runaway.length).toBeGreaterThan(1000);
-    const result = validateSuggestionPayload(modelOutput({ description: runaway }), "Boudoir");
+    const result = validateSuggestionPayload(modelOutput({ description: runaway }), "Amateur");
     expect(result.ok).toBe(true);
     if (result.ok) expect(isValidDescription(result.suggestion.description)).toBe(true);
   });
 
   it("cuts an overlong editorial title back to a complete opening", () => {
     const result = validateSuggestionPayload(
-      modelOutput({ title: "Boudoir Portrait With Silk Robes and Candle Light Through Tall Windows on a Winter Evening" }),
-      "Boudoir",
+      modelOutput({ title: "Amateur Portrait With Silk Robes and Candle Light Through Tall Windows on a Winter Evening" }),
+      "Amateur",
     );
     expect(result).toMatchObject({ ok: true, repairCost: 0 });
     if (result.ok) {
       expect(titleWordCount(result.suggestion.title)).toBeLessThanOrEqual(9);
-      expect(result.suggestion.title).toBe("Boudoir Portrait With Silk Robes and Candle Light");
+      expect(result.suggestion.title).toBe("Amateur Portrait With Silk Robes and Candle Light");
     }
     // Strict validation still reports the miss instead of repairing it.
     const strict = validateSuggestionPayload(
-      modelOutput({ title: "Boudoir Portrait With Silk Robes and Candle Light Through Tall Windows on a Winter Evening" }),
-      "Boudoir",
+      modelOutput({ title: "Amateur Portrait With Silk Robes and Candle Light Through Tall Windows on a Winter Evening" }),
+      "Amateur",
       { strictWordCount: true },
     );
     expect(strict.ok).toBe(false);
@@ -149,7 +149,7 @@ describe("validateSuggestionPayload", () => {
 
 describe("description word limits and title prompt", () => {
   it.each([20, 25])("accepts a description containing %i words", (count) => {
-    const description = ["Boudoir", ...Array(count - 1).fill("word")].join(" ");
+    const description = ["Amateur", ...Array(count - 1).fill("word")].join(" ");
     const result = validateSuggestionPayload(modelOutput({ description }));
     expect(result.ok).toBe(true);
     expect(descriptionWordCount(description)).toBe(count);
@@ -162,20 +162,20 @@ describe("description word limits and title prompt", () => {
   });
 
   it.each([29, 41, 100])("repairs a %i-word description into the published range instead of discarding it", (count) => {
-    const description = ["Boudoir", ...Array(count - 1).fill("word")].join(" ");
-    const result = validateSuggestionPayload(modelOutput({ description }), "Boudoir");
+    const description = ["Amateur", ...Array(count - 1).fill("word")].join(" ");
+    const result = validateSuggestionPayload(modelOutput({ description }), "Amateur");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(isValidDescription(result.suggestion.description)).toBe(true);
-      expect(result.suggestion.title).toBe("Boudoir in Velvet After Dark");
+      expect(result.suggestion.title).toBe("Amateur in Velvet After Dark");
       expect(result.suggestion.reasoning).toMatch(/human review/);
     }
   });
 
   it("keeps the model's own words when it trims an overlong description", () => {
-    const firstSentence = `Boudoir ${Array(19).fill("word").join(" ")}`;
+    const firstSentence = `Amateur ${Array(19).fill("word").join(" ")}`;
     const source = `${firstSentence}. ${Array(31).fill("extra").join(" ")}.`;
-    const result = validateSuggestionPayload(modelOutput({ description: source }), "Boudoir");
+    const result = validateSuggestionPayload(modelOutput({ description: source }), "Amateur");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(descriptionWordCount(result.suggestion.description)).toBe(20);
@@ -186,37 +186,37 @@ describe("description word limits and title prompt", () => {
   });
 
   it("extends a short description with story sentences for the selected category", () => {
-    const short = "Boudoir low light, soft fabric, and a long quiet moment before anything else begins.";
-    const boudoir = validateSuggestionPayload(modelOutput({ description: short }), "Boudoir");
-    expect(boudoir.ok).toBe(true);
-    if (boudoir.ok) {
-      expect(isValidDescription(boudoir.suggestion.description)).toBe(true);
-      expect(boudoir.suggestion.description.startsWith(short)).toBe(true);
-      expect(boudoir.suggestion.reasoning).toMatch(/extended from 14 words/);
+    const short = "Amateur low light, soft fabric, and a long quiet moment before anything else begins.";
+    const amateur = validateSuggestionPayload(modelOutput({ description: short }), "Amateur");
+    expect(amateur.ok).toBe(true);
+    if (amateur.ok) {
+      expect(isValidDescription(amateur.suggestion.description)).toBe(true);
+      expect(amateur.suggestion.description.startsWith(short)).toBe(true);
+      expect(amateur.suggestion.reasoning).toMatch(/extended from 14 words/);
     }
   });
 
   it("prefers the admin's selected category over the category the model returned", () => {
-    const result = validateSuggestionPayload(modelOutput({ category: "Solo" }), "Boudoir");
+    const result = validateSuggestionPayload(modelOutput({ category: "Lesbian" }), "Amateur");
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.suggestion.category).toBe("Boudoir");
+    if (result.ok) expect(result.suggestion.category).toBe("Amateur");
   });
 
   it("lets the model choose a category only when the admin chose none", () => {
     const result = validateSuggestionPayload(modelOutput({
-      title: "Solo Cinema With a Fresh Perspective",
-      description: "Explore adult solo video with a category-focused editorial preview, clear listing details, and practical viewing information for adults browsing this collection online.",
-      tags: ["solo", "mature", "editorial"],
-      category: "Solo",
+      title: "Lesbian Cinema With a Fresh Perspective",
+      description: "Explore adult lesbian video with a category-focused editorial preview, clear listing details, and practical viewing information for adults browsing this collection online.",
+      tags: ["lesbian", "amateur", "editorial"],
+      category: "Lesbian",
     }));
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.suggestion.category).toBe("Solo");
+    if (result.ok) expect(result.suggestion.category).toBe("Lesbian");
   });
 
   it("counts irregular and Unicode whitespace consistently and normalizes output", () => {
     expect(descriptionWordCount("  one\n two\tthree\u00a0four  ")).toBe(4);
     expect(descriptionWordCount(" \n ")).toBe(0);
-    const words = ["Boudoir", ...Array(21).fill("word")];
+    const words = ["Amateur", ...Array(21).fill("word")];
     const result = validateSuggestionPayload(modelOutput({ description: words.join(" \n\t") }));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.suggestion.description).toBe(words.join(" "));
@@ -227,7 +227,7 @@ describe("description word limits and title prompt", () => {
   });
 
   it("requests factual non-graphic copy with strict budgets and no fabricated stories", () => {
-    const prompt = buildPrompt({ fileName: "evening.mp4", category: "Boudoir" });
+    const prompt = buildPrompt({ fileName: "evening.mp4", category: "Amateur" });
     expect(prompt).toContain("4-9 words");
     expect(prompt).toContain("20-25 words");
     expect(prompt).toContain("untrusted source data");
@@ -236,12 +236,12 @@ describe("description word limits and title prompt", () => {
   });
 
   it("never lets a dash survive into a validated title", () => {
-    const payload = { ...JSON.parse(modelOutput()), title: "Boudoir in Velvet \u2014 A Story in Low Light" };
-    const result = validateSuggestionPayload(JSON.stringify(payload), "Boudoir");
+    const payload = { ...JSON.parse(modelOutput()), title: "Amateur in Velvet \u2014 A Story in Low Light" };
+    const result = validateSuggestionPayload(JSON.stringify(payload), "Amateur");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.suggestion.title).not.toMatch(/[\u2010-\u2015\u2212]/);
-      expect(result.suggestion.title).toBe("Boudoir in Velvet A Story in Low Light");
+      expect(result.suggestion.title).toBe("Amateur in Velvet A Story in Low Light");
     }
   });
 
@@ -285,8 +285,8 @@ describe("parseLooseJson", () => {
   const payload = {
     title: "An Evening in Velvet",
     description: "An elegant portrait.",
-    tags: ["mature", "4k"],
-    category: "Boudoir",
+    tags: ["amateur", "4k"],
+    category: "Amateur",
   };
 
   it("parses a plain JSON object", () => {
@@ -304,16 +304,16 @@ describe("parseLooseJson", () => {
   });
 
   it("repairs raw newlines inside strings", () => {
-    const raw = '{"title":"Velvet","description":"line one\nline two","tags":["mature"],"category":"Mature"}';
+    const raw = '{"title":"Velvet","description":"line one\nline two","tags":["amateur"],"category":"Amateur"}';
     const parsed = parseLooseJson(raw)?.value as Record<string, unknown>;
     expect(parsed.description).toBe("line one\nline two");
   });
 
   it("repairs smart quotes and trailing commas", () => {
-    const raw = '{"title":"“Velvet”","description":"soft light","tags":["mature",],"category":"Mature"}';
+    const raw = '{"title":"“Velvet”","description":"soft light","tags":["amateur",],"category":"Amateur"}';
     const parsed = parseLooseJson(raw)?.value as Record<string, unknown>;
     expect(parsed.title).toBe('"Velvet"');
-    expect(parsed.tags).toEqual(["mature"]);
+    expect(parsed.tags).toEqual(["amateur"]);
   });
 
   it("strips a byte-order mark and zero-width characters", () => {
@@ -337,13 +337,13 @@ describe("parseLooseJson", () => {
 
 describe("fallbackSuggestion", () => {
   it("builds reviewable category-only metadata without using the file name", () => {
-    const suggestion = fallbackSuggestion("private_zzunique_991234.mov", "Boudoir");
+    const suggestion = fallbackSuggestion("private_zzunique_991234.mov", "Amateur");
     expect(suggestion.title).not.toMatch(/private|zzunique|991234/i);
-    expect(suggestion.category).toBe("Boudoir");
-    expect(suggestion.tags).toContain("boudoir");
+    expect(suggestion.category).toBe("Amateur");
+    expect(suggestion.tags).toContain("amateur");
     expect(suggestion.tags.length).toBeGreaterThan(0);
     expect(isValidDescription(suggestion.description)).toBe(true);
-    expect(CATEGORY_STORIES.Boudoir.blurbPool).toContain(suggestion.description);
+    expect(CATEGORY_STORIES.Amateur.blurbPool).toContain(suggestion.description);
     expect(suggestion.reasoning).toMatch(/category-only fallback/i);
   });
 
@@ -373,14 +373,14 @@ describe("fallbackSuggestion", () => {
 
   it("always lands on a known category and a permitted tag", () => {
     const suggestion = fallbackSuggestion("clip.mp4", "Not A Category");
-    expect(suggestion.category).toBe("Mature");
+    expect(suggestion.category).toBe("Amateur");
     expect(suggestion.tags.length).toBeGreaterThan(0);
   });
 
   it("uses the selected category even when the source file name is empty", () => {
-    const suggestion = fallbackSuggestion("", "Solo");
-    expect(suggestion.category).toBe("Solo");
-    expect(CATEGORY_STORIES.Solo.titlePool).toContain(suggestion.title);
+    const suggestion = fallbackSuggestion("", "Lesbian");
+    expect(suggestion.category).toBe("Lesbian");
+    expect(CATEGORY_STORIES.Lesbian.titlePool).toContain(suggestion.title);
     expect(humanizeFileName("evening_in_velvet_20240512_1080p.mov")).toBe("Evening In Velvet 1080p");
   });
 
@@ -397,17 +397,17 @@ describe("fallbackSuggestion", () => {
 describe("normalizeDescription", () => {
   it("leaves an in-range description untouched", () => {
     const description = Array(22).fill("word").join(" ");
-    expect(normalizeDescription(description, "Boudoir")).toEqual({ description, adjusted: null });
+    expect(normalizeDescription(description, "Amateur")).toEqual({ description, adjusted: null });
   });
 
   it("rejects an empty description and a fragment too thin to repair", () => {
-    expect(normalizeDescription("", "Boudoir")).toBeNull();
-    expect(normalizeDescription("   ", "Boudoir")).toBeNull();
-    expect(normalizeDescription("A short blurb.", "Boudoir")).toBeNull();
+    expect(normalizeDescription("", "Amateur")).toBeNull();
+    expect(normalizeDescription("   ", "Amateur")).toBeNull();
+    expect(normalizeDescription("A short blurb.", "Amateur")).toBeNull();
   });
 
   it("never repeats a closer sentence within one description", () => {
-    const result = normalizeDescription(Array(12).fill("word").join(" "), "Solo");
+    const result = normalizeDescription(Array(12).fill("word").join(" "), "Lesbian");
     expect(result).not.toBeNull();
     const sentences = result!.description.split(/(?<=[.!?])\s+/);
     expect(new Set(sentences).size).toBe(sentences.length);
@@ -433,7 +433,7 @@ describe("normalizeDescription", () => {
   );
 
   it.each([8, 12, 17, 18, 19])("extends a %i-word description into range", (count) => {
-    const result = normalizeDescription(Array(count).fill("word").join(" "), "Romantic");
+    const result = normalizeDescription(Array(count).fill("word").join(" "), "Hardcore");
     expect(result).not.toBeNull();
     expect(isValidDescription(result!.description)).toBe(true);
     expect(result!.adjusted).toMatch(/^extended from/);
@@ -441,7 +441,7 @@ describe("normalizeDescription", () => {
 
   it("cuts an overlong description on a sentence boundary when it can", () => {
     const source = `${Array(22).fill("word").join(" ")}. ${Array(22).fill("tail").join(" ")}.`;
-    const result = normalizeDescription(source, "Romantic");
+    const result = normalizeDescription(source, "Hardcore");
     expect(result).not.toBeNull();
     expect(descriptionWordCount(result!.description)).toBe(22);
     expect(result!.description).not.toContain("tail");
@@ -449,7 +449,7 @@ describe("normalizeDescription", () => {
   });
 
   it("trims a single long run-on sentence without breaking a word", () => {
-    const result = normalizeDescription(Array(48).fill("word").join(" "), "Romantic");
+    const result = normalizeDescription(Array(48).fill("word").join(" "), "Hardcore");
     expect(result).not.toBeNull();
     expect(descriptionWordCount(result!.description)).toBe(25);
     expect(result!.description.endsWith(".")).toBe(true);
@@ -457,7 +457,7 @@ describe("normalizeDescription", () => {
 
   it("drops a dangling connector left by a hard cut", () => {
     const words = [...Array(24).fill("word"), "and"];
-    const result = normalizeDescription(words.join(" "), "Romantic");
+    const result = normalizeDescription(words.join(" "), "Hardcore");
     expect(result).not.toBeNull();
     expect(result!.description.endsWith("and.")).toBe(false);
   });
@@ -480,7 +480,7 @@ describe("sanitizeTitle", () => {
     expect(sanitizeTitle('"Quoted Title" ')).toBe("Quoted Title");
     expect(sanitizeTitle("Title.")).toBe("Title");
     // "<subject>: <subtitle>" is the same dash-shaped habit in another costume.
-    expect(sanitizeTitle("Roleplay: The Naughty Nurse")).toBe("Roleplay The Naughty Nurse");
+    expect(sanitizeTitle("Fantasy Night: The Secret Visit")).toBe("Fantasy Night The Secret Visit");
     expect(sanitizeTitle("Who Is The Boss?")).toBe("Who Is The Boss");
   });
 
@@ -503,8 +503,8 @@ describe("category-led generated titles", () => {
   it.each([
     ["Amateur", "Amateur Couple Share A Quiet Evening", "Amateur Couple Share A Quiet Evening"],
     ["Amateur", "A Quiet amateur Evening On Camera", "A Quiet amateur Evening On Camera"],
-    ["Mature 18+", "Mature 18+ Performer In Evening Light", "Mature 18+ Performer In Evening Light"],
-    ["Solo", "Solomon Enjoys A Quiet Evening", "Solomon Enjoys A Quiet Evening"],
+    ["Japanese", "A Quiet Japanese Evening On Camera", "A Quiet Japanese Evening On Camera"],
+    ["Lesbian", "Lesbianism Explored In New Light", "Lesbianism Explored In New Light"],
   ])("preserves the selected category signal without stripping substrings (%s)", (category, title, expected) => {
     expect(sanitizeGeneratedTitle(title, category)).toBe(expected);
   });
@@ -520,7 +520,7 @@ describe("category-led generated titles", () => {
   });
 
   it.each([29, 41])("rejects %i words under strict validation", (count) => {
-    expect(validateSuggestionPayload(modelOutput({ description: Array(count).fill("word").join(" ") }), "Boudoir", { strictWordCount: true }).ok).toBe(false);
+    expect(validateSuggestionPayload(modelOutput({ description: Array(count).fill("word").join(" ") }), "Amateur", { strictWordCount: true }).ok).toBe(false);
   });
 
   it("uses only the selected category and an exclusion list, never file/default metadata", () => {

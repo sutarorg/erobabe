@@ -14,6 +14,7 @@ import {
   isValidDescription,
   normalizeDescription,
   titleBands,
+  titleNamesSelectedCategory,
   titleWordCount,
   titlesAreTooSimilar,
   validateSuggestionPayload,
@@ -27,12 +28,18 @@ import {
 } from "@/lib/metadata/explicit-titles";
 import {
   DEFAULT_TITLE_STYLE,
+  containsRequiredExplicitTerm,
   copyComplianceViolation,
   normalizeTitleStyle,
   resolveTitleStyle,
   titleKeywordViolation,
   titleWordBudget,
 } from "@/lib/metadata/title-style";
+
+/** Categories whose own name must never appear in a published title (see `titleNamesSelectedCategory`). */
+const NAME_BANNED_CATEGORIES = KNOWN_CATEGORIES.filter((category) =>
+  titleNamesSelectedCategory(category, category),
+);
 
 /**
  * The voice the site publishes by default: blunt adult titles that name the act
@@ -44,11 +51,11 @@ import {
  */
 
 const SEX_WORD =
-  /\b(fuck|fucks|fucked|fucking|sex|cock|dick|pussy|ass|tits|boobs|clit|cumshot|creampie|blowjob|anal|slut|whore|orgasm|squirt|nude|naked|hardcore)\b/iu;
+  /\b(fuck|fucks|fucked|fucking|sex|cocks?|dicks?|pussy|pussies|ass|tits|boobs|clit|cumshot|creampie|blowjob|anal|slut|whore|orgasm|squirt|nude|naked|hardcore)\b/iu;
 
 function modelReply(fields: Record<string, unknown>) {
   return JSON.stringify({
-    title: "My Amateur Girlfriend Grabs My Cock For A Raw Doggy Style Fuck",
+    title: "My Girlfriend Grabs My Cock For A Raw Doggy Style Fuck",
     description:
       "Amateur fuck filmed at home: she grabs my cock, takes it raw doggy style and cums twice on camera. 18+ adults only, one take.",
     tags: ["amateur", "doggy-style", "4k"],
@@ -81,15 +88,18 @@ describe("default title voice", () => {
 });
 
 describe("explicit prompt", () => {
-  it("requires the sexual vocabulary and forbids the magazine voice", () => {
+  it("requires this category's own anatomy vocabulary, forbids the category name in the title, and forbids the magazine voice", () => {
     const prompt = buildPrompt({ category: "Amateur" });
     expect(prompt).toContain("porn tube listing, not a film review");
-    expect(prompt).toContain("At least one of these must appear in the title: fuck, fucks, fucked, fucking");
-    expect(prompt).toContain("cock, dick, pussy, ass, tits, blowjob, cumshot, creampie, anal, bareback");
+    expect(prompt).toContain(
+      "At least one of these words for this category must appear in the title: pussy, cock, dick, boobs, cum, homemade, real couple, raw, creampie, girlfriend.",
+    );
     expect(prompt).toContain("Do NOT write euphemisms");
     expect(prompt).toContain('"grabs my cock" is right');
-    expect(prompt).toContain("At least one of these must appear in the title");
     expect(prompt).toContain('"Amateur"');
+    // The listing's category field already carries the category, so the title
+    // itself must not spell out the category's own name.
+    expect(prompt).toContain("must NOT contain the category name");
     expect(prompt).toContain("6-16 words");
     expect(prompt).toContain("20-25 words");
     // The old instruction is gone: it is what produced the euphemistic titles.
@@ -113,11 +123,11 @@ describe("explicit prompt", () => {
   });
 
   it("still writes the restrained voice on request", () => {
-    const prompt = buildPrompt({ category: "Boudoir", style: "editorial" });
+    const prompt = buildPrompt({ category: "MILF", style: "editorial" });
     expect(prompt).toContain("non-graphic");
     expect(prompt).toContain("4-9 words");
     expect(prompt).toContain("Do not create graphic sexual descriptions");
-    expect(prompt).not.toContain("At least one of these must appear in the title");
+    expect(prompt).not.toContain("At least one of these words for this category must appear in the title");
   });
 });
 
@@ -140,7 +150,7 @@ describe("explicit validation", () => {
   it("rejects a euphemistic title instead of publishing a programme note", () => {
     const result = validateSuggestionPayload(
       modelReply({
-        title: "Amateur Cinema's Candid Boudoir Revelation In Soft Focus",
+        title: "Cinema's Candid Boudoir Revelation In Soft Focus For Her",
         description:
           "Amateur cinema listing with a candid editorial voice, clear category context and practical viewing details presented for adults before playback begins on this page today.",
       }),
@@ -148,16 +158,39 @@ describe("explicit validation", () => {
       { style: "explicit", strictWordCount: true },
     );
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.message).toMatch(/name the sex plainly/);
+    if (!result.ok) expect(result.message).toMatch(/must include one of this category's required words/);
   });
 
   it("rejects a title that is too short to describe a scene", () => {
-    const result = validateSuggestionPayload(modelReply({ title: "Raw Amateur Fuck" }), "Amateur", {
+    const result = validateSuggestionPayload(modelReply({ title: "Raw Hard Fuck" }), "Amateur", {
       style: "explicit",
       strictWordCount: true,
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.message).toMatch(/at least 6 words/);
+  });
+
+  it("rejects a title that spells out the selected category's own name", () => {
+    const result = validateSuggestionPayload(
+      modelReply({ title: "My Amateur Girlfriend Grabs My Raw Cock For A Fuck" }),
+      "Amateur",
+      { style: "explicit", strictWordCount: true },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toMatch(/must not spell out the selected category's own name/);
+  });
+
+  it("repairs a lenient reply that names the category by stripping the name instead of rejecting it", () => {
+    const result = validateSuggestionPayload(
+      modelReply({ title: "My Amateur Girlfriend Grabs My Raw Cock For A Fuck" }),
+      "Amateur",
+      { style: "explicit" },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.suggestion.title).not.toMatch(/\bamateur\b/iu);
+    expect(result.suggestion.title).toMatch(SEX_WORD);
+    expect(result.repairs).toContain("category name removed from the title");
   });
 
   it("still blocks age-ambiguous, family-role and non-consent wording", () => {
@@ -195,15 +228,16 @@ describe("explicit validation", () => {
     expect(isCompliantCopy(title, "", "explicit")).toBe(true);
     expect(isCompliantCopy(title, "", "editorial")).toBe(false);
     expect(titleKeywordViolation(title, "editorial")).toMatch(/non-graphic/);
-    expect(titleKeywordViolation("Boudoir Mood In Velvet", "explicit")).toMatch(/name the sex plainly/);
+    expect(titleKeywordViolation("Boudoir Mood In Velvet", "explicit")).toMatch(
+      /must include one of this category's required words/,
+    );
   });
 });
 
 describe("composeExplicitTitle", () => {
   const words = titleWordBudget("explicit");
 
-  it.each([...KNOWN_CATEGORIES])("writes publishable %s titles", (category) => {
-    const vocabulary = EXPLICIT_TITLE_VOCABULARY[category];
+  it.each([...KNOWN_CATEGORIES])("writes publishable %s titles that leave the category name out", (category) => {
     const seen = new Set<string>();
     const batch: string[] = [];
     for (let index = 0; index < 40; index += 1) {
@@ -217,16 +251,23 @@ describe("composeExplicitTitle", () => {
       expect(title.length, title).toBeGreaterThanOrEqual(35);
       expect(title.length, title).toBeLessThanOrEqual(150);
       expect(title, title).toMatch(SEX_WORD);
-      // The category check the publish path applies, not a literal phrase: the
-      // labels that must never reach a title ("Teen (18+)") are matched on the
-      // age-clear wording they publish as.
-      expect(hasSelectedCategorySignal(title, category), title).toBe(true);
+      // The listing's category field already carries the category; the title
+      // must carry this category's own anatomy vocabulary instead of its name.
+      expect(containsRequiredExplicitTerm(title, category), title).toBe(true);
+      expect(titleNamesSelectedCategory(title, category), title).toBe(false);
       expect(copyPolicyViolation(title, "", "explicit"), title).toBeNull();
       expect(title, title).not.toMatch(/\b(\w+)\s+\1\b/iu);
       expect(title, title).not.toMatch(/https?:|\.mp4|_\d{4,}/i);
     }
     // A batch of 40 must not collapse onto one canned line.
     expect(seen.size).toBeGreaterThan(12);
+  });
+
+  it.each([...NAME_BANNED_CATEGORIES])("never spells out %s as a literal word in the title", (category) => {
+    for (let index = 0; index < 15; index += 1) {
+      const title = composeExplicitTitle(category, []);
+      expect(title, title).not.toMatch(new RegExp(`\\b${category.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "iu"));
+    }
   });
 
   it("never repeats a title the queue already used", () => {
@@ -236,10 +277,10 @@ describe("composeExplicitTitle", () => {
     expect(new Set(lowered).size).toBe(lowered.length);
   });
 
-  it("treats an unknown category as Mature rather than failing", () => {
+  it("treats an unknown category as Amateur rather than failing", () => {
     const title = composeExplicitTitle("Voyeur Collection", []);
     expect(title.length).toBeGreaterThan(30);
-    expect(hasSelectedCategorySignal(title, "Mature")).toBe(true);
+    expect(containsRequiredExplicitTerm(title, "Amateur")).toBe(true);
     expect(copyPolicyViolation(title, "", "explicit")).toBeNull();
   });
 
@@ -282,7 +323,7 @@ describe("fallbackSuggestion in the explicit voice", () => {
   });
 
   it("is what the site default produces when the caller passes no voice", () => {
-    const suggestion = fallbackSuggestion("clip.mp4", "Boudoir");
+    const suggestion = fallbackSuggestion("clip.mp4", "MILF");
     expect(suggestion.title).toMatch(SEX_WORD);
     expect(copyPolicyViolation(suggestion.title, suggestion.description, "explicit")).toBeNull();
   });
@@ -304,7 +345,7 @@ describe("explicit vocabulary hygiene", () => {
       ...EXPLICIT_INTENSIFIERS,
       ...EXPLICIT_DESCRIPTION_TAILS,
     ];
-    expect(phrases.length).toBeGreaterThan(300);
+    expect(phrases.length).toBeGreaterThan(250);
     for (const phrase of phrases) {
       // "girl", "teen", "young", family nouns and anything implying a partner who
       // cannot consent must never appear in a pool, because a pool word is a
@@ -346,20 +387,21 @@ describe("repairing an explicit model reply instead of discarding it", () => {
     // The reported failure: "title must contain at most 16 words".
     [
       "Amateur",
-      "My Amateur Girlfriend Rides My Cock Raw On The Couch Until I Cum Inside Her Tight Wet Pussy Twice",
-      "My Amateur Girlfriend Rides My Cock Raw On The Couch",
+      "My Girlfriend Rides My Cock Raw On The Couch Until I Cum Inside Her Tight Wet Pussy Twice",
+      "My Girlfriend Rides My Cock Raw On The Couch",
     ],
     [
       "Amateur",
-      "My Amateur Wife Grinds Her Pussy On My Cock In The Hammock Until I Cum Inside Her Twice After Midnight",
-      "My Amateur Wife Grinds Her Pussy On My Cock In The Hammock",
+      "My Wife Grinds Her Pussy On My Cock In The Hammock Until I Cum Inside Her Twice After Midnight",
+      "My Wife Grinds Her Pussy On My Cock In The Hammock",
     ],
-    // The category sits in the last clause, so a middle clause is dropped instead.
     [
       "Threesome",
-      "Two Horny Babes Share My Cock On The Hotel Bed While I Film Every Second Of Our Wild Threesome Fuck",
-      "Two Horny Babes Share My Cock While I Film Every Second Of Our Wild Threesome Fuck",
+      "Two Babes Share My Two Cocks On The Hotel Bed While I Film Every Second Of Our Wild Fuck",
+      "Two Babes Share My Two Cocks On The Hotel Bed",
     ],
+    // "Big Ass" is itself a required anatomy term for this category (see
+    // `CATEGORY_EXPLICIT_TERMS`), so it is not stripped out as a category label.
     [
       "Big Ass",
       "Big Ass Ebony Babe Bounces On My Dick In Reverse Cowgirl And Twerks Until I Cum All Over Her Huge Booty",
@@ -367,10 +409,10 @@ describe("repairing an explicit model reply instead of discarding it", () => {
     ],
     [
       "POV",
-      "POV Blowjob Then Deepthroat And Facial From My Gorgeous Brunette Girlfriend In Our Tiny Bathroom At Home Tonight",
-      "POV Blowjob Then Deepthroat And Facial From My Gorgeous Brunette Girlfriend In Our Tiny Bathroom",
+      "Blowjob Then Deepthroat And Facial From My Gorgeous Brunette Girlfriend In Our Tiny Bathroom At Home Tonight",
+      "Blowjob Then Deepthroat And Facial From My Gorgeous Brunette Girlfriend In Our Tiny Bathroom",
     ],
-  ])("cuts an overlong %s title at a clause boundary that keeps the act and the category", (category, title, expected) => {
+  ])("cuts an overlong %s title at a clause boundary that keeps the act in voice", (category, title, expected) => {
     expect(titleWordCount(title)).toBeGreaterThan(titleBands("explicit").words.max);
     const result = validateSuggestionPayload(reply(title, category), category, { style: "explicit" });
     expect(result.ok).toBe(true);
@@ -378,26 +420,40 @@ describe("repairing an explicit model reply instead of discarding it", () => {
     expect(result.suggestion.title).toBe(expected);
     expect(titleWordCount(result.suggestion.title)).toBeLessThanOrEqual(titleBands("explicit").words.max);
     expect(result.suggestion.title).toMatch(SEX_WORD);
-    expect(hasSelectedCategorySignal(result.suggestion.title, category)).toBe(true);
+    expect(titleNamesSelectedCategory(result.suggestion.title, category)).toBe(false);
     expect(result.repairCost).toBe(0);
     expect(result.suggestion.reasoning).toMatch(/title trimmed from \d+ words/);
   });
 
-  it("drops a stray magazine clause with the overflow instead of rejecting the reply", () => {
+  it("strips the category's own name out of an otherwise-fine-length title as a repair, not a rejection", () => {
     const result = validateSuggestionPayload(
-      reply("My Amateur Girlfriend Rides My Cock Raw On The Couch In Soft Focus Until I Cum Inside Her Twice Tonight"),
+      reply("My Amateur Girlfriend Rides My Cock Raw On The Couch"),
       "Amateur",
       { style: "explicit" },
     );
     expect(result).toMatchObject({
       ok: true,
-      suggestion: { title: "My Amateur Girlfriend Rides My Cock Raw On The Couch" },
+      repairCost: 1,
+      suggestion: { title: "My Girlfriend Rides My Cock Raw On The Couch" },
+    });
+    if (result.ok) expect(result.repairs).toContain("category name removed from the title");
+  });
+
+  it("drops a stray magazine clause with the overflow instead of rejecting the reply", () => {
+    const result = validateSuggestionPayload(
+      reply("My Girlfriend Rides My Cock Raw On The Couch In Soft Focus Until I Cum Inside Her Twice Tonight"),
+      "Amateur",
+      { style: "explicit" },
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      suggestion: { title: "My Girlfriend Rides My Cock Raw On The Couch" },
     });
   });
 
   it("asks again when no cut keeps the title in voice, and drops the opening only as a last resort", () => {
     const title =
-      "Horny Wife Spends The Whole Lazy Sunday Afternoon Teasing Me Before She Finally Takes My Cock Doggy Style Amateur";
+      "Horny Wife Spends The Entire Lazy Sunday Teasing Me Slowly Over Many Hours Before She Finally Begs Me To Fuck Her Raw";
     const standard = validateSuggestionPayload(reply(title), "Amateur", { style: "explicit" });
     expect(standard.ok).toBe(false);
     if (!standard.ok) expect(standard.message).toMatch(/at most 16 words/);
@@ -406,13 +462,13 @@ describe("repairing an explicit model reply instead of discarding it", () => {
     expect(lastResort).toMatchObject({
       ok: true,
       repairCost: 1,
-      suggestion: { title: "She Finally Takes My Cock Doggy Style Amateur" },
+      suggestion: { title: "She Finally Begs Me To Fuck Her Raw" },
     });
   });
 
   it("never trims banned wording away, even when it sits in the overflow", () => {
     const title =
-      "My Amateur Girlfriend Rides My Cock Raw On The Couch Until Her Teen Friend Joins In Too Tonight Again";
+      "My Girlfriend Rides My Cock Raw On The Couch Until Her Teen Friend Joins In Too Tonight Again";
     for (const lenient of [false, true]) {
       const result = validateSuggestionPayload(reply(title), "Amateur", { style: "explicit", lenient });
       expect(result.ok).toBe(false);
@@ -428,7 +484,7 @@ describe("repairing an explicit model reply instead of discarding it", () => {
     const words = descriptionWordCount(description);
     expect(words < MIN_DESCRIPTION_WORDS || words > MAX_DESCRIPTION_WORDS).toBe(true);
     const result = validateSuggestionPayload(
-      reply("My Amateur Girlfriend Rides My Cock Raw On The Couch", "Amateur", description),
+      reply("My Girlfriend Rides My Cock Raw On The Couch", "Amateur", description),
       "Amateur",
       { style: "explicit" },
     );
@@ -450,7 +506,7 @@ describe("repairing an explicit model reply instead of discarding it", () => {
     }
   });
 
-  it("works a forgotten category into the title and description only as a last resort", () => {
+  it("works a category the description forgot into the description only, never into the title", () => {
     const forgetful = modelReply({
       title: "My Girlfriend Rides My Dick Raw On The Couch",
       description:
@@ -459,23 +515,27 @@ describe("repairing an explicit model reply instead of discarding it", () => {
     });
     const standard = validateSuggestionPayload(forgetful, "Big Ass", { style: "explicit" });
     expect(standard.ok).toBe(false);
-    if (!standard.ok) expect(standard.message).toMatch(/selected category/);
+    if (!standard.ok) expect(standard.message).toMatch(/opening description must use the selected category/);
 
     const lastResort = validateSuggestionPayload(forgetful, "Big Ass", { style: "explicit", lenient: true });
     expect(lastResort).toMatchObject({
       ok: true,
-      repairCost: 2,
-      suggestion: { title: "My Big Ass Girlfriend Rides My Dick Raw On The Couch" },
+      repairCost: 1,
+      // The title is already clean (no category label, a valid anatomy word):
+      // only the description, which forgot the category, is repaired.
+      suggestion: { title: "My Girlfriend Rides My Dick Raw On The Couch" },
     });
     if (lastResort.ok) {
       expect(lastResort.suggestion.description).toMatch(/^Big Ass scene: She rides my dick raw/);
       expect(isValidDescription(lastResort.suggestion.description)).toBe(true);
+      expect(lastResort.repairs).toContain("category added to the description");
     }
 
     const threesome = validateSuggestionPayload(
       modelReply({
-        title: "Two Babes Share My Cock On The Hotel Bed",
-        description: "Threesome fuck: two babes share my cock on the hotel bed and take turns riding it until I cum. All performers are 18+.",
+        title: "Two Babes Share My Two Cocks On The Hotel Bed",
+        description:
+          "Fuck tape: two babes share my cock on the hotel bed and take turns riding it until I cum. All performers are 18+.",
         category: "Threesome",
       }),
       "Threesome",
@@ -484,44 +544,57 @@ describe("repairing an explicit model reply instead of discarding it", () => {
     expect(threesome).toMatchObject({
       ok: true,
       repairCost: 1,
-      suggestion: { title: "Two Babes Share My Cock On The Hotel Bed In A Threesome" },
+      suggestion: { title: "Two Babes Share My Two Cocks On The Hotel Bed" },
     });
+    if (threesome.ok) {
+      expect(threesome.suggestion.description).toMatch(/^Threesome scene:/);
+      expect(threesome.repairs).toContain("category added to the description");
+    }
   });
 
   it("completes a short title with the setting its own description names", () => {
     const result = validateSuggestionPayload(
-      reply("Amateur Babe Fucks", "Amateur", "Amateur babe fucks me hard at home on camera and takes a messy cumshot to finish the scene. 18+ adults only, one take."),
+      reply(
+        "Raw Girlfriend Fucks Hard",
+        "Amateur",
+        "Amateur girlfriend fucks hard at home on camera and takes a messy cumshot to finish the scene. 18+ adults only, one take.",
+      ),
       "Amateur",
       { style: "explicit", lenient: true },
     );
-    expect(result).toMatchObject({ ok: true, repairCost: 1, suggestion: { title: "Amateur Babe Fucks At Home On Camera" } });
-    expect(validateSuggestionPayload(reply("Amateur Babe Fucks"), "Amateur", { style: "explicit" }).ok).toBe(false);
+    expect(result).toMatchObject({ ok: true, repairCost: 1, suggestion: { title: "Raw Girlfriend Fucks Hard On Camera" } });
+    expect(validateSuggestionPayload(reply("Raw Girlfriend Fucks Hard"), "Amateur", { style: "explicit" }).ok).toBe(false);
   });
 
   it("composes a description only for a title that needed no repair of its own", () => {
     const thin = validateSuggestionPayload(
-      reply("My Amateur Girlfriend Rides My Cock Raw On The Couch", "Amateur", "Too thin."),
+      reply("My Girlfriend Rides My Cock Raw On The Couch", "Amateur", "Too thin."),
       "Amateur",
       { style: "explicit", lenient: true },
     );
-    expect(thin).toMatchObject({ ok: true, repairCost: 1, suggestion: { title: "My Amateur Girlfriend Rides My Cock Raw On The Couch" } });
+    expect(thin).toMatchObject({ ok: true, repairCost: 1, suggestion: { title: "My Girlfriend Rides My Cock Raw On The Couch" } });
     if (thin.ok) {
       expect(isValidDescription(thin.suggestion.description)).toBe(true);
       expect(hasSelectedCategorySignal(thin.suggestion.description.split(" ").slice(0, 12).join(" "), "Amateur")).toBe(true);
     }
 
-    // No category in the title and no description: too little of the model's work is left.
+    // No description at all, but a clean title that needs no repair of its own:
+    // the lenient voice composes a description rather than discarding the reply.
     const titleOnly = validateSuggestionPayload(
       JSON.stringify({ title: "My Girlfriend Rides My Cock Raw On The Couch" }),
       "Amateur",
       { style: "explicit", lenient: true },
     );
-    expect(titleOnly.ok).toBe(false);
+    expect(titleOnly).toMatchObject({
+      ok: true,
+      suggestion: { title: "My Girlfriend Rides My Cock Raw On The Couch" },
+    });
+    if (titleOnly.ok) expect(isValidDescription(titleOnly.suggestion.description)).toBe(true);
   });
 
   it("replaces an unpublishable description as a last resort, but never an unpublishable title", () => {
     const badDescription = reply(
-      "My Amateur Girlfriend Rides My Cock Raw On The Couch",
+      "My Girlfriend Rides My Cock Raw On The Couch",
       "Amateur",
       "Amateur fuck at home with my stepsister riding my cock raw on the couch until I cum inside her. 18+ adults only, one take.",
     );
@@ -536,7 +609,7 @@ describe("repairing an explicit model reply instead of discarding it", () => {
       expect(copyPolicyViolation(lastResort.suggestion.title, lastResort.suggestion.description, "explicit")).toBeNull();
     }
 
-    const badTitle = reply("My Amateur Stepsister Rides My Cock Raw On The Couch");
+    const badTitle = reply("My Stepsister Rides My Cock Raw On The Couch");
     expect(validateSuggestionPayload(badTitle, "Amateur", { style: "explicit", lenient: true }).ok).toBe(false);
   });
 });

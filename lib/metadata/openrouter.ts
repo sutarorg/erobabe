@@ -51,7 +51,8 @@ export const MIN_ATTEMPT_MS = 6_000;
 /**
  * The most last-resort repairs (see `ValidateOptions.lenient`) a reply may
  * need and still be published when no attempt passes outright. Beyond this,
- * little of the model's writing would survive, so the offline composer is used.
+ * little of the model's own writing would survive, so the caller gets an
+ * error instead — titles are never composed offline.
  */
 export const MAX_SALVAGE_REPAIRS = 2;
 
@@ -244,7 +245,7 @@ function correctionPrompt(failure: string, style: TitleStyle): string {
   const { words } = titleBands(style);
   return `\nThe previous suggestion failed validation: ${failure}. Return a corrected JSON object. Keep the admin-selected category as the only content signal and choose a distinctly different angle and word order. ${
     style === "explicit"
-      ? `Write a ${words.min}-${words.max}-word adult-tube title that names the sex plainly with words like fuck, cock, dick, pussy, ass or blowjob, says who is doing it and where, contains the category word once, and never uses euphemisms or review language. Do not add an age, a family relationship, or anything implying a partner who cannot consent.`
+      ? `Write a ${words.min}-${words.max}-word adult-tube title that names the sex plainly with words like fuck, cock, dick, pussy, ass or blowjob, says who is doing it and where, never uses euphemisms or review language, and never spells out the category's own name in the title (the category field already carries that). Do not add an age, a family relationship, or anything implying a partner who cannot consent.`
       : `Use a factual non-graphic ${words.min}-${words.max}-word title.`
   } Write a category-led description of exactly ${MIN_DESCRIPTION_WORDS}-${MAX_DESCRIPTION_WORDS} words.\n`;
 }
@@ -263,7 +264,9 @@ function correctionPrompt(failure: string, style: TitleStyle): string {
  *
  * When no attempt passes outright, the best reply that needs at most
  * `MAX_SALVAGE_REPAIRS` last-resort repairs is published rather than discarded;
- * only when there is none does the caller fall back to the offline composer.
+ * only when there is none does this throw `MetadataError`. There is no offline
+ * fallback title: the caller (the `/api/metadata/suggest` route) is expected to
+ * surface the error and let the admin retry rather than publish a filler title.
  *
  * Exact repeats are checked against every supplied title; near-duplicates only
  * against the `PROMPT_AVOID_LIMIT` titles the model was shown.
