@@ -1,0 +1,32 @@
+name: Prune recommendation data
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recommendation-retention
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Prune expired pseudonymous recommendation data
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SITE_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Configure SITE_URL and CRON_SECRET repository secrets to enforce recommendation retention."
+            exit 1
+          fi
+          curl --silent --show-error --fail-with-body --max-time 60 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${SITE_URL%/}/api/cron/recommendation-retention"

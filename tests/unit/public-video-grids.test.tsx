@@ -23,6 +23,18 @@ vi.mock("next/navigation", () => ({
   },
 }));
 
+vi.mock("@/lib/recommendations/service", () => ({
+  latestRecommendations: async () => ({ videos: [video], cursor: null }),
+  getRecommendationFeed: async ({ surface }: { surface: string }) => ({
+    videos: surface === "featured" || surface === "recommended"
+      ? [{ ...video, id: `${surface}-video`, slug: `${surface}-video`, title: `${surface} video` }]
+      : [],
+    personalized: false,
+    correlationId: "test-correlation",
+    algorithmVersion: "erobabe-rec-v1",
+  }),
+}));
+
 vi.mock("@/lib/public/catalog", () => ({
   getPublishedVideos: async () => [video],
   searchPublishedVideos: async (query: string) =>
@@ -65,13 +77,16 @@ describe("public listing grids and video cards", () => {
     },
   );
 
-  it("uses the same four-row component for both homepage video sections", async () => {
+  it("renders distinct homepage recommendation and chronological sections in four-row grids", async () => {
     const html = renderToStaticMarkup(
       await home.default({ searchParams: Promise.resolve({}) }),
     );
     const doc = new DOMParser().parseFromString(html, "text/html");
     const videoGrids = Array.from(doc.querySelectorAll("[data-grid-rows='4']"));
-    expect(videoGrids).toHaveLength(2);
+    expect(videoGrids.length).toBeGreaterThanOrEqual(3);
+    expect(html).toContain("Featured Videos");
+    expect(html).toContain("Latest Videos");
+    expect(html).toContain("Discover videos");
     expect(videoGrids.every((grid) => !grid.className.includes("grid-cols-5"))).toBe(true);
     expect(html).not.toContain("repeat(auto-fill");
   });

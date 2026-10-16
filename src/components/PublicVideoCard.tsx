@@ -6,14 +6,14 @@ import ThumbImage from "./ThumbImage";
 
 const FALLBACK_THUMB = "https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png";
 
-export default function PublicVideoCard({ video }: { video: PublicVideo }) {
+export default function PublicVideoCard({ video, onClick }: { video: PublicVideo; onClick?: () => void }) {
   const publishedDate = video.published_at ? new Date(video.published_at) : null;
   const dateTime = publishedDate && Number.isFinite(publishedDate.getTime())
     ? publishedDate.toISOString()
     : undefined;
 
   return (
-    <Link href={`/video/${video.slug}`} prefetch className="group min-w-0">
+    <Link href={`/video/${video.slug}`} prefetch className="group min-w-0" onClick={onClick}>
       <div className="relative aspect-video overflow-hidden rounded-lg border border-line bg-card">
         <ThumbImage
           src={video.thumbnail_url || FALLBACK_THUMB}

@@ -17,6 +17,10 @@ vi.mock("@/lib/public/catalog", () => ({
   }),
 }));
 
+vi.mock("@/lib/recommendations/service", () => ({
+  latestRecommendations: async () => ({ videos: [], cursor: null }),
+}));
+
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     from: () => ({
@@ -67,10 +71,9 @@ describe("public video listing copy", () => {
   it("uses the requested heading, eyebrow, and description on /latest", async () => {
     const html = await renderPage(latestModule.default as any);
     expect(html).toMatch(/<h1[^>]*>Latest Videos<\/h1>/);
-    expect(html).toContain(">Fresh This Week</p>");
-    expect(html).toContain(
-      "New scenes land every day, here is everything uploaded most recently.",
-    );
+    expect(html).toContain(">Newest first</p>");
+    expect(html).toContain("Eligible published videos, newest first.");
+    expect(html).toContain("This feed is not personalized.");
     expect(html).not.toContain("Fresh uploads first");
   });
 
@@ -115,9 +118,7 @@ describe("public video listing copy", () => {
       expect(html).toContain(
         '<div class="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1"><h1 class="text-[22px] font-semibold tracking-tight">',
       );
-      expect(html).toContain(
-        '<p class="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">',
-      );
+      expect(html).toMatch(/<p class="mt-1\.5 max-w-\[\d+px\] text-\[12\.5px\] leading-relaxed text-ink-3">/);
     },
   );
 

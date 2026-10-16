@@ -26,6 +26,7 @@ function fakeSupabase(row: Record<string, any>) {
     eq: () => builder,
     neq: () => builder,
     not: () => builder,
+    or: () => builder,
     order: () => builder,
     limit: () => builder,
     single: async () => ({ data: row, error: null }),
@@ -44,6 +45,7 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/lib/public/catalog", () => ({ getPublicCategories: async () => [] }));
 
 vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
   notFound: () => {
     throw new Error("not found");
   },
@@ -90,7 +92,7 @@ describe("/video/[slug] watch page", () => {
   it("renders the requested sections in order", async () => {
     const html = await renderPage();
     const headings = Array.from(new DOMParser().parseFromString(html, "text/html").querySelectorAll("h2")).map(h => h.textContent);
-    expect(headings).toEqual(["Comments", "More like this", "Recommended", "Top Rated", "Top Categories", "Latest"]);
+    expect(headings).toEqual(["Comments", "More like this", "Recommendation controls", "Up Next", "Discover videos", "Most Liked", "Top Categories", "Latest"]);
   });
 
   it("shares the homepage five-card mobile category strip without horizontal scrolling", async () => {

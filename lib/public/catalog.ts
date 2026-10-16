@@ -97,6 +97,7 @@ async function loadPublishedVideos(limit: number): Promise<PublicVideo[]> {
   if (!supabase) return [];
   const { data } = await publishedQuery(supabase)
     .order("published_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(limit);
   return (data || []).map(mapVideo);
 }

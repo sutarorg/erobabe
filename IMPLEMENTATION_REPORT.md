@@ -303,3 +303,12 @@ No claim of live acceptance, account approval or completed legacy-media transfer
 - `tests/unit/filekosh-migration.test.ts`
 - `tests/unit/filekosh-routes.test.ts`
 - `tests/unit/filekosh-transfer.test.ts`
+
+
+## Recommendation engine implementation (16 October 2026)
+
+Completed research first (`docs/RECOMMENDATION_RESEARCH.md`) and repository/business audit (`docs/RECOMMENDATION_AUDIT.md`). Added a deterministic versioned SQL-candidate/ranking/diversity pipeline; actual production eligibility checks; separate Featured, Latest, Most Liked, Up Next and consent-gated Recommended behaviors; eligible, bounded source queries/indexes; idempotent rate-limited event/feedback endpoints; server-only opt-in preference storage; reset/disable/deletion; native media and documented Bunny Player.js event hooks; off-by-default accessible Bunny autoplay control; and daily scheduled data pruning. Admin hero carousel, comments, likes, SEO routes, provider publishing and payments were not intentionally changed.
+
+**Migration:** `supabase/migrations/00000000000024_recommendations.sql` (not applied to production during this work). **Privacy:** `docs/RECOMMENDATION_PRIVACY.md`. **Model details:** `docs/RECOMMENDATION_ALGORITHM.md`.
+
+**Honest limits:** no production catalog/data/credentials were available. No real staging SQL plan, API p95, Bunny live event acceptance, A/B test, offline production replay, lift, or optimal weight estimate is claimed. Current likes are binary; the watch section is labelled Most Liked, not rated. Co-watch and trend velocity are not implemented for lack of legitimate data. Age gate is self-declaration only and requires a separate legal/compliance review. Ranked shelves are bounded first pages; ranked infinite-scroll snapshot stability remains a follow-up before enabling that UI. Local validation results and honest E2E/environment limitations are recorded in `docs/RECOMMENDATION_VERIFICATION.md`.

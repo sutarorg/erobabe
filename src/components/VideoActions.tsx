@@ -2,6 +2,7 @@
 import { Check, Share2, ThumbsUp } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { anonymousProfile } from "../utils/anonymousProfile";
+import { ALGORITHM_VERSION } from "@/lib/recommendations/ranking";
 import { cn } from "../utils/cn";
 
 interface VideoActionsProps {
@@ -100,7 +101,8 @@ export default function VideoActions({ title, videoId }: VideoActionsProps) {
           try {
             const res = await fetch("/api/community", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ videoId, visitorId: anonymousProfile().id, liked: nextLiked }) });
             if (!res.ok) throw new Error("Unable to save your like. Please retry.");
-
+            const makeId = () => typeof crypto.randomUUID === "function" ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => { const random = Math.random() * 16 | 0; return (char === "x" ? random : (random & 0x3 | 0x8)).toString(16); });
+            void fetch("/api/recommendations/events", { method: "POST", keepalive: true, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ events: [{ videoId, type: nextLiked ? "like" : "unlike", surface: "watch", algorithmVersion: ALGORITHM_VERSION, correlationId: makeId(), idempotencyKey: makeId() }] }) }).catch(() => {});
           } catch { setRatingError("Your preference is kept on this device; the community count could not be synced."); }
           finally { setRatingBusy(false); }
         }}

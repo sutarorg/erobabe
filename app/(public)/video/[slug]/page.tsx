@@ -1,7 +1,9 @@
 import VideoComments from "@/src/components/VideoComments";
 import LatestVideoFeed from "@/src/components/LatestVideoFeed";
 import WatchCategories from "@/src/components/WatchCategories";
-import { watchFeed } from "@/lib/public/watch-feed";
+import { getRecommendationFeed } from "@/lib/recommendations/service";
+import RecommendationShelf from "@/src/components/RecommendationShelf";
+import RecommendationSettings from "@/src/components/RecommendationSettings";
 import { getPublicCategories } from "@/lib/public/catalog";
 import ViewTracker from "@/src/components/ViewTracker";
 import { createClient } from "@/lib/supabase/server";
@@ -32,6 +34,7 @@ export async function generateMetadata({
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
     .eq("moderation_status", "approved")
+    .or("playable_url.not.is.null,embed_url.not.is.null,and(provider.eq.bunny,provider_file_id.not.is.null,bunny_library_id.not.is.null)")
     .single();
 
   if (!video) {
@@ -88,6 +91,7 @@ export default async function VideoPage({
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
     .eq("moderation_status", "approved")
+    .or("playable_url.not.is.null,embed_url.not.is.null,and(provider.eq.bunny,provider_file_id.not.is.null,bunny_library_id.not.is.null)")
     .single();
 
   if (!video) {
@@ -105,14 +109,16 @@ export default async function VideoPage({
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
     .eq("moderation_status", "approved")
+    .or("playable_url.not.is.null,embed_url.not.is.null,and(provider.eq.bunny,provider_file_id.not.is.null,bunny_library_id.not.is.null)")
     .eq("category_id", video.category_id)
     .neq("id", video.id)
     .order("published_at", { ascending: false })
     .limit(16);
 
-  const [recommended, rated, categories] = await Promise.all([
-    watchFeed("recommended", video.id),
-    watchFeed("rated", video.id),
+  const [upNext, recommended, mostLiked, categories] = await Promise.all([
+    getRecommendationFeed({ surface: "up_next", currentVideoId: video.id, limit: 8 }),
+    getRecommendationFeed({ surface: "recommended", currentVideoId: video.id, limit: 8 }),
+    getRecommendationFeed({ surface: "most_liked", currentVideoId: video.id, limit: 8 }),
     getPublicCategories(),
   ]);
 
@@ -251,17 +257,17 @@ export default async function VideoPage({
       )}
 
       <VideoComments key={video.id} videoId={video.id} />
-      {[
-        { title: "More like this", videos: (related || []).map((v: any) => ({ ...v, description: null, category_label: null, category_slug: null })) },
-        { title: "Recommended", videos: recommended.videos },
-        { title: "Top Rated", videos: rated.videos },
-      ].map(section => <section key={section.title} className="mt-8 border-t border-line pt-5">
-        <h2 className="text-[15px] font-semibold">{section.title}</h2>
+      <section className="mt-8 border-t border-line pt-5">
+        <h2 className="text-[15px] font-semibold">More like this</h2>
         <FourRowVideoGrid className="video-grid mt-3.5">
-          {section.videos.map((v: any) => <PublicVideoCard key={v.id} video={v} />)}
+          {(related || []).slice(0, 8).map((v: any) => <PublicVideoCard key={v.id} video={{ ...v, description: null, category_label: null, category_slug: null }} />)}
         </FourRowVideoGrid>
-        {!section.videos.length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
-      </section>)}
+        {!(related || []).length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
+      </section>
+      <RecommendationSettings />
+      <RecommendationShelf title="Up Next" videos={upNext.videos} surface="up_next" correlationId={upNext.correlationId} algorithmVersion={upNext.algorithmVersion} />
+      <RecommendationShelf title={recommended.personalized ? "Recommended for you" : "Discover videos"} videos={recommended.videos} surface="recommended" correlationId={recommended.correlationId} algorithmVersion={recommended.algorithmVersion} />
+      <RecommendationShelf title="Most Liked" videos={mostLiked.videos} surface="most_liked" correlationId={mostLiked.correlationId} algorithmVersion={mostLiked.algorithmVersion} />
       <WatchCategories
         categories={categories}
         activeCategory={(video.category as any)?.label ?? null}
