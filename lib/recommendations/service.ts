@@ -94,7 +94,7 @@ async function querySource(db: Db, build: (query: any) => any): Promise<any[]> {
 
 async function loadPersonalContext(db: Db, viewerHash: string | null) {
   const base = {
-    enabled: false,
+    enabled: true,
     preferredCategoryIds: new Set<string>(),
     suppressedCategoryIds: new Set<string>(),
     interestedVideoIds: new Set<string>(),

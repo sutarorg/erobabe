@@ -20,10 +20,6 @@ export async function POST(request: NextRequest) {
     const viewerHash = await viewerHashFromCookie();
     if (!viewerHash) return NextResponse.json({ error: "Enable personalization to save feedback" }, { status: 409 });
     const db = createServiceClient();
-    const { data: preference, error: preferenceError } = await db.from("recommendation_preferences")
-      .select("viewer_hash").eq("viewer_hash", viewerHash).eq("personalization_enabled", true)
-      .gt("consent_expires_at", new Date().toISOString()).maybeSingle();
-    if (preferenceError || !preference) return NextResponse.json({ error: "Enable personalization to save feedback" }, { status: 409 });
     const { error } = parsed.data.action === "less_category"
       ? await db.rpc("suppress_recommendation_category", { p_viewer: viewerHash, p_video: parsed.data.videoId })
       : await db.rpc("set_recommendation_feedback", { p_viewer: viewerHash, p_video: parsed.data.videoId, p_feedback: parsed.data.action });

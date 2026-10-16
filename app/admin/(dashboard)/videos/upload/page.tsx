@@ -42,7 +42,7 @@ type Item = {
   categoryId?: string;
 };
 
-const PARALLEL_UPLOADS = 4;
+const PARALLEL_UPLOADS = 2;
 
 /** Longest a failed metadata request waits before asking again. */
 const MAX_METADATA_RETRY_WAIT_MS = 30_000;

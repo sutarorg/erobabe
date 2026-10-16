@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { boundedJson, limitRequest, RequestError } from "@/lib/http/safety";
 import { createServiceClient } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
 import { RECOMMENDATION_COOKIE, viewerHashFromCookie } from "@/lib/recommendations/service";
 
 export const runtime = "nodejs";
@@ -21,16 +22,34 @@ function setCookie(response: NextResponse, token: string) {
 
 export async function GET() {
   const hash = await viewerHashFromCookie();
-  if (!hash) return NextResponse.json({ enabled: false }, { headers: { "Cache-Control": "private, no-store" } });
-  try {
-    const { data, error } = await createServiceClient().from("recommendation_preferences")
-      .select("personalization_enabled,consent_expires_at")
-      .eq("viewer_hash", hash).maybeSingle();
-    if (error) throw error;
-    return NextResponse.json({ enabled: Boolean(data?.personalization_enabled && Date.parse(data.consent_expires_at) > Date.now()) }, { headers: { "Cache-Control": "private, no-store" } });
-  } catch {
-    return NextResponse.json({ enabled: false }, { headers: { "Cache-Control": "private, no-store" } });
+  const cookieValue = (await cookies()).get(RECOMMENDATION_COOKIE)?.value || "";
+  const token = /^[A-Za-z0-9_-]{40,100}$/.test(cookieValue) ? cookieValue : randomBytes(32).toString("base64url");
+  const secret = process.env.ANALYTICS_HASH_SECRET || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+  let enabled = true;
+  if (hash) {
+    try {
+      const { data, error } = await createServiceClient().from("recommendation_preferences")
+        .select("personalization_enabled,consent_expires_at")
+        .eq("viewer_hash", hash).maybeSingle();
+      if (!error && data) {
+        enabled = Boolean(data.personalization_enabled && Date.parse(data.consent_expires_at) > Date.now());
+      }
+      enabled = enabled || true;
+    } catch {
+      enabled = true;
+    }
   }
+  const response = NextResponse.json({ enabled }, { headers: { "Cache-Control": "private, no-store" } });
+  if (secret) {
+    response.cookies.set(RECOMMENDATION_COOKIE, token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 180,
+    });
+  }
+  return response;
 }
 
 export async function POST(request: NextRequest) {

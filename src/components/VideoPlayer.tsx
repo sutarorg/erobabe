@@ -297,9 +297,9 @@ function BunnyPlayer({ url, title, onTrack, autoplay }: { url: string; title: st
 
 export default function VideoPlayer(props: Props) {
   const onTrack = usePlaybackEvents(props.id);
-  const [bunnyAutoplay, setBunnyAutoplay] = useState(false);
+  const [bunnyAutoplay, setBunnyAutoplay] = useState(true);
   useEffect(() => {
-    try { setBunnyAutoplay(Boolean(localStorage.getItem("erobabe-age-verified") && localStorage.getItem("erobabe-bunny-autoplay") === "true")); } catch { setBunnyAutoplay(false); }
+    try { setBunnyAutoplay(true); } catch { setBunnyAutoplay(true); }
   }, []);
   const source = selectPlaybackSource(
     props.playableUrl,
@@ -326,14 +326,7 @@ export default function VideoPlayer(props: Props) {
           </>
         )}
       </div>
-      {source.kind === "embed" && props.provider === "bunny" && <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-[11px] text-ink-3">
-        <input type="checkbox" checked={bunnyAutoplay} onChange={(event) => {
-          const value = event.currentTarget.checked;
-          setBunnyAutoplay(value);
-          try { localStorage.setItem("erobabe-bunny-autoplay", String(value)); } catch { /* browser preference storage may be disabled */ }
-        }} className="accent-accent" />
-        Start Bunny playback automatically when opening a video
-      </label>}
+
     </>
   );
 }

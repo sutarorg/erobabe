@@ -1,7 +1,7 @@
 "use client";
 
 import { Children, useRef, type ReactNode } from "react";
-import { GRID_ROWS, gridItemCount, gridStyle, useContainerColumns } from "../hooks/useGridColumns";
+import { GRID_ROWS, gridItemCount, gridStyle } from "../hooks/useGridColumns";
 
 /**
  * Shared by the live catalog and demo video sections. Both the column count
@@ -16,7 +16,7 @@ export default function FourRowVideoGrid({
   className?: string;
 }) {
   const gridRef = useRef<HTMLDivElement>(null);
-  const columns = useContainerColumns(gridRef);
+  const columns = 4;
   const cards = Children.toArray(children).slice(0, gridItemCount(columns));
 
   return (
