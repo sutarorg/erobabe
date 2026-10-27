@@ -9,8 +9,8 @@ import {
 } from "../hooks/useGridColumns";
 
 /**
- * Shared by live catalog and demo video sections. Mobile grids show one video
- * per row in a single row; wider grids retain four rows.
+ * Shared by live catalog and demo video sections. Mobile grids show ten videos
+ * vertically; wider grids retain four rows.
  *
  * Card count follows the measured width, so a shelf never shows a partial row.
  */

@@ -48,9 +48,6 @@ function usePlaybackEvents(videoId: string) {
   }, [videoId]);
 }
 
-/** Give a visitor a beat with the poster before buffering starts on its own. */
-const BUFFER_AHEAD_DELAY_MS = 1_200;
-
 /**
  * Every destination worth trying for one catalog row, best first.
  *
@@ -100,14 +97,12 @@ function NativePlayer({
   onTrack: (type: PlaybackEvent) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const ahead = useRef(false);
   const recoveries = useRef(0);
   const startedRef = useRef(false);
   const [source, setSource] = useState(0);
   const [strategy, setStrategy] = useState<Strategy>(isHls ? "hls" : "native");
   const [triedAlternative, setTriedAlternative] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const [preload, setPreload] = useState<"metadata" | "auto">("metadata");
   const [started, setStarted] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -225,26 +220,6 @@ function NativePlayer({
     };
   }, [url, strategy, attempt, handleFailure]);
 
-  const bufferAhead = useCallback(() => {
-    if (!ahead.current) {
-      ahead.current = true;
-      setPreload("auto");
-    }
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setTimeout(bufferAhead, BUFFER_AHEAD_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [bufferAhead, attempt]);
-
-  // Setting `preload` does not restart the media element's resource selection
-  // on its own; `load()` is what actually applies the buffering hint. It must
-  // never run in hls.js mode, where it would detach the MediaSource.
-  useEffect(() => {
-    if (preload !== "auto" || started || strategy !== "native") return;
-    const video = videoRef.current;
-    if (video && typeof video.load === "function") video.load();
-  }, [preload, started, strategy]);
 
   /** The first moment playback can really begin, whatever the strategy. */
   const resume = useCallback(() => {
@@ -257,7 +232,6 @@ function NativePlayer({
   }, []);
 
   const start = () => {
-    bufferAhead();
     setFailed(false);
     setStarted(true);
     setWaiting(true);
@@ -275,7 +249,6 @@ function NativePlayer({
   };
 
   const retry = () => {
-    ahead.current = false;
     recoveries.current = 0;
     setFailed(false);
     setStarted(false);
@@ -289,10 +262,6 @@ function NativePlayer({
   return (
     <div
       className="relative h-full w-full"
-      onPointerEnter={bufferAhead}
-      onPointerDown={bufferAhead}
-      onFocus={bufferAhead}
-      onTouchStart={bufferAhead}
     >
       <video
         key={`${url}:${strategy}:${attempt}`}
@@ -303,7 +272,7 @@ function NativePlayer({
         {...fallbackReferrerPolicy(source)}
         aria-label={title}
         controls={started}
-        preload={preload}
+        preload="auto"
         poster={poster || undefined}
         playsInline
         className="h-full w-full bg-black"
@@ -418,7 +387,7 @@ export default function VideoPlayer(props: Props) {
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
           sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
           allowFullScreen
-          loading="lazy"
+          loading="eager"
           referrerPolicy="strict-origin-when-cross-origin"
         />
       ) : (

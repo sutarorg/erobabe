@@ -175,14 +175,18 @@ fallback, only the proxy can turn it into media.
 
 ## Grid layout
 
-Every video section on the public site is **one video per row on a phone**.
+Every video section on the public site shows **ten videos vertically on a phone** (one video per row), and four rows on desktop.
 `src/hooks/useGridColumns.ts` measures the grid element: below 448px of
 container width (the same 28rem `@md` container-query breakpoint the
 Tailwind-driven listings use) a shelf is a single column, above it 2–4 whole
 columns fit. The class-driven listings use
 `grid-cols-1 @md:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4`, so measured
 shelves and class-driven pages switch together. A caller-supplied `columnCount`
-(Up Next) is a **cap**, never a way to force two cards into a phone.
+(Up Next) is a **cap**, never a way to force two cards into a phone. The watch
+player uses `preload="auto"` for immediate native buffering, and its recommendation
+sections stream independently behind a fallback so they do not hold up the player.
+The browser still chooses how much media to buffer; `auto` can use more data than
+metadata-only loading, which is the deliberate tradeoff for fast playback.
 
 ## Operational notes
 

@@ -62,6 +62,14 @@ describe("distinct home sections", () => {
       featured.map((v) => v.view_count).sort((a, b) => b - a),
     );
   });
+  it("keeps at least ten recent cards when the catalog has ten or more videos", () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      slug: `v${i}`,
+      published_at: new Date(2026, 0, i + 1).toISOString(),
+      view_count: i,
+    }) as PublicVideo);
+    expect(homeSections(rows).latest).toHaveLength(10);
+  });
   it("handles an empty or one-video catalog honestly", () => {
     expect(homeSections([])).toEqual({ latest: [], featured: [] });
     expect(homeSections([{ slug: "only" } as PublicVideo]).featured).toEqual(

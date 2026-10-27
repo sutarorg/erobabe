@@ -8,9 +8,9 @@ import { useEffect, useLayoutEffect, useState, type CSSProperties, type RefObjec
  */
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
-/** Desktop video sections are four rows tall; mobile sections are one row. */
+/** Desktop video sections are four rows tall; mobile sections show ten videos. */
 export const GRID_ROWS = 4;
-export const MOBILE_GRID_ROWS = 1;
+export const MOBILE_GRID_ROWS = 10;
 export const MAX_GRID_COLUMNS = 4;
 
 /**

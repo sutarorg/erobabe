@@ -87,26 +87,12 @@ describe("video player", () => {
     expect(container.querySelector("iframe")).toBeNull();
   });
 
-  it("buffers ahead behind the poster so the first frame is instant", () => {
-    vi.useFakeTimers();
-    try {
-      const { container } = render(
-        <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
-      );
-      const video = container.querySelector("video")!;
-      expect(video).toHaveAttribute("preload", "metadata");
-
-      act(() => {
-        vi.advanceTimersByTime(1200);
-      });
-
-      expect(video).toHaveAttribute("preload", "auto");
-      expect(HTMLMediaElement.prototype.load).toHaveBeenCalled();
-      // Nothing was restarted: the same element keeps its buffered data.
-      expect(container.querySelector("video")).toBe(video);
-    } finally {
-      vi.useRealTimers();
-    }
+  it("starts buffering as soon as the player opens", () => {
+    const { container } = render(
+      <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
+    );
+    expect(container.querySelector("video")).toHaveAttribute("preload", "auto");
+    expect(HTMLMediaElement.prototype.load).not.toHaveBeenCalled();
   });
 
   it("starts the element that is already buffering instead of mounting a new one", () => {
