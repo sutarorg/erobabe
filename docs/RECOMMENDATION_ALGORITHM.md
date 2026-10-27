@@ -37,7 +37,7 @@ Requires an eligible current video, excludes it, and strongly weights same-categ
 
 ### Recommended / cold start
 
-Uses persistent profile data only after a separate explicit opt-in. A profile with explicit interests, recent qualified player events, or feedback can personalize; a just-enabled empty profile is still labelled as discovery rather than falsely advertised as personal. Without consent/history, recent, broadly viewed/liked and underexposed candidates are diversified without asserting a personal taste. New explicit feedback is stored immediately and triggers a server-component refresh.
+Uses persistent profile data by default: `RecommendationProfileInit` asks for a profile token on the first public page view of a session and the ranker reads any feedback and qualified player events stored under it. A profile with explicit interests, recent qualified player events, or feedback can personalize; an empty profile is still labelled as discovery rather than falsely advertised as personal. Without history — and for a visitor who called the disable action — recent, broadly viewed/liked and underexposed candidates are diversified without asserting a personal taste. New explicit feedback is stored immediately and triggers a server-component refresh.
 
 ## Versioned feature configuration
 

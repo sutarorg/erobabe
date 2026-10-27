@@ -2,7 +2,6 @@ import VideoComments from "@/src/components/VideoComments";
 import LatestVideoFeed from "@/src/components/LatestVideoFeed";
 import WatchCategories from "@/src/components/WatchCategories";
 import { getRecommendationFeed } from "@/lib/recommendations/service";
-import RecommendationSettings from "@/src/components/RecommendationSettings";
 import RecommendationShelf from "@/src/components/RecommendationShelf";
 
 import { getPublicCategories } from "@/lib/public/catalog";
@@ -257,21 +256,6 @@ export default async function VideoPage({
         </p>
       )}
 
-      {/* Embedded catalog entries credit the page they came from. */}
-      {video.source_url && (
-        <p className="mt-3 text-[11px] text-ink-3">
-          Source:{" "}
-          <a
-            href={video.source_url}
-            target="_blank"
-            rel="nofollow noopener noreferrer external"
-            className="underline decoration-dotted underline-offset-2 hover:text-accent"
-          >
-            {video.source_name === "damplips" ? "damplips.com" : video.source_name || "external source"}
-          </a>
-        </p>
-      )}
-
       <VideoComments key={video.id} videoId={video.id} />
       <section className="mt-8 border-t border-line pt-5">
         <h2 className="text-[15px] font-semibold">More like this</h2>
@@ -280,7 +264,6 @@ export default async function VideoPage({
         </FourRowVideoGrid>
         {!(related || []).length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
       </section>
-      <RecommendationSettings />
       <RecommendationShelf title={recommended.personalized ? "Recommended for you" : "Discover videos"} videos={recommended.videos} surface="recommended" correlationId={recommended.correlationId} algorithmVersion={recommended.algorithmVersion} />
       <RecommendationShelf title="Most Liked" videos={mostLiked.videos} surface="most_liked" correlationId={mostLiked.correlationId} algorithmVersion={mostLiked.algorithmVersion} />
       <WatchCategories

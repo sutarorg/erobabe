@@ -9,7 +9,17 @@
 
 ## Data collected
 
-Only after the visitor chooses **Turn on personalization**:
+Personalization is **on by default** (changed 2026-10-27: the in-page
+"Recommendation controls" panel was removed at the product owner's request).
+`src/components/RecommendationProfileInit.tsx` asks the server for a profile
+token on the first public page view of a session; there is no opt-in click. A visitor can still opt out through
+`POST /api/recommendations/preferences` with `{"action":"disable"}`, which deletes
+the profile rows and the cookie, and a stored `personalization_enabled = false`
+row is honoured for its 180-day lifetime. Treat turning adult viewing
+personalization on by default as a **legal/consent decision that needs privacy
+counsel review**, not just an implementation detail.
+
+What is stored under that profile:
 
 - A random opaque first-party token is placed in an `HttpOnly`, `SameSite=Lax`, path-wide cookie, with `Secure` in production and a 180-day browser expiry. The token is never exposed to client JavaScript and is not the existing anonymous comment/like identifier.
 - The server HMACs the cookie token using a server-only secret into a 64-hex pseudonymous profile key. The key is a recommendation namespace only, not an authenticated person, account ID, or verified age claim.
@@ -17,11 +27,15 @@ Only after the visitor chooses **Turn on personalization**:
 - Recommendation impressions, card selections, video likes/unlikes made while opted in, player starts, observed 25/50/75 progress milestones, actual `ended` completion events, and player errors can be stored. Event details are pruned after 30 days. No event implies satisfaction; page dwell and page visit are not playback.
 - The only playback-duration inputs are real native media events or Bunny's documented iframe Player.js events (`play`, `timeupdate`, `ended`, `error`). Bunny event monitoring has not been verified against a live Bunny account in this environment.
 
-Without consent, the application does not create a profile, record recommendation events, or use recommendation history. It returns a diversified public cold-start mix. Existing `video_likes` and aggregate `like_count` remain global community aggregates; they are not used to link a community visitor identity to an individual recommendation profile.
+Without a profile (a visitor who disabled personalization, or a request that
+never passed through the public middleware), the application does not record
+recommendation events or use recommendation history. It returns a diversified
+public cold-start mix. Existing `video_likes` and aggregate `like_count` remain global community aggregates; they are not used to link a community visitor identity to an individual recommendation profile.
 
 ## Explicit controls and data effects
 
-- **Turn on personalization:** explicit opt-in creates the opaque cookie and a server-side enabled preference. It is not preselected. A just-enabled profile does not claim to know interests.
+- **Personalization is on by default:** the opaque cookie is issued on the first public page view of a session and the server reads whatever feedback and playback events exist. A profile with no signals yet does not claim to know interests — the shelf is labelled "Discover videos" until real signals exist.
+- **Turn off personalization:** there is no in-page control any more; the API action `disable` deletes events, feedback and preference rows and clears the cookie.
 - **Interested / Not interested / Show less like this / Don't recommend this category:** updates feedback or suppression on the server. “Not interested” hard-suppresses the video; “show less” soft-demotes its category; category suppression hard-excludes that category. The page refreshes after a successful save.
 - **Reset recommendations:** deletes the visitor's events and video feedback and clears selected/suppressed categories, while keeping consent enabled. This starts with a clean profile.
 - **Pause and delete profile:** deletes events, feedback, and preference rows and clears the cookie. Browse continues in cold-start mode.

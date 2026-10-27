@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Play, RotateCcw } from "lucide-react";
 import { damplipsProxyUrl, isDamplipsMediaUrl, selectPlaybackSource } from "@/lib/video/playback";
+import { isHlsUrl } from "@/lib/video/hls";
 import { ALGORITHM_VERSION } from "@/lib/recommendations/ranking";
 
 type Props = {
@@ -43,32 +44,75 @@ function usePlaybackEvents(videoId: string) {
 const BUFFER_AHEAD_DELAY_MS = 1_200;
 
 /**
+ * Every destination worth trying for one catalog row, best first.
+ *
+ * damplips media is asked for through the same-origin proxy, which supplies the
+ * referer the host requires and rewrites HLS playlists. The unproxied address is
+ * kept as a second attempt: if the proxy itself is the problem (an outage or a
+ * blocking intermediary), the browser can still play the file directly.
+ */
+export function playbackCandidates(url: string): string[] {
+  if (!isDamplipsMediaUrl(url)) return [url];
+  const proxied = damplipsProxyUrl(url);
+  return [proxied, url];
+}
+
+/**
+ * `referrerPolicy` is not in React's `<video>` attribute types, but it is a real
+ * media attribute and the browser honours it on the element itself.
+ */
+function fallbackReferrerPolicy(source: number): Record<string, string> {
+  return source > 0 ? { referrerpolicy: "no-referrer" } : {};
+}
+
+/**
  * The native media element, with HLS support.
  *
  * A direct mp4 plays as-is. Damplips HLS playlists play natively where the
  * browser supports them (Safari) and through `hls.js` everywhere else.
  */
 function NativePlayer({
-  url,
+  urls,
+  isHls,
   title,
   poster,
-  isHls,
   onTrack,
 }: {
-  url: string;
+  urls: string[];
+  /** Derived from the catalog URL, not from the proxy URL it is played through. */
+  isHls: boolean;
   title: string;
   poster?: string | null;
-  isHls: boolean;
   onTrack: (type: PlaybackEvent) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ahead = useRef(false);
+  const [source, setSource] = useState(0);
+  const [attempt, setAttempt] = useState(0);
   const [nativeHls, setNativeHls] = useState(false);
   const [preload, setPreload] = useState<"metadata" | "auto">("metadata");
-  const [attempt, setAttempt] = useState(0);
   const [started, setStarted] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [failed, setFailed] = useState(false);
+
+  const url = urls[Math.min(source, urls.length - 1)];
+
+  /**
+   * A source that fails is replaced by the next one silently; only when every
+   * destination has failed does the visitor see an error.
+   */
+  const handleFailure = useCallback(() => {
+    setWaiting(false);
+    if (source < urls.length - 1) {
+      setSource((value) => value + 1);
+      setStarted(false);
+      setFailed(false);
+      setAttempt((value) => value + 1);
+      return;
+    }
+    setFailed(true);
+    onTrack("playback_error");
+  }, [onTrack, source, urls.length]);
 
   useEffect(() => {
     if (!isHls) {
@@ -93,26 +137,30 @@ function NativePlayer({
     void (async () => {
       try {
         const { default: Hls } = await import("hls.js");
-        if (destroyed || !Hls.isSupported()) return;
+        if (destroyed) return;
+        if (!Hls.isSupported()) {
+          // Neither the browser nor hls.js can play this playlist: move on to
+          // the next destination instead of sitting on "Preparing video…".
+          handleFailure();
+          return;
+        }
         const hls = new Hls({ enableWorker: true, lowLatencyMode: false });
         instance = hls;
         hls.loadSource(url);
         hls.attachMedia(video);
         hls.on(Hls.Events.ERROR, (_event: unknown, data: { fatal?: boolean }) => {
           if (!data?.fatal) return;
-          setWaiting(false);
-          setFailed(true);
-          onTrack("playback_error");
+          handleFailure();
         });
       } catch {
-        setFailed(true);
+        handleFailure();
       }
     })();
     return () => {
       destroyed = true;
       instance?.destroy();
     };
-  }, [url, isHls, nativeHls, attempt, onTrack]);
+  }, [url, isHls, nativeHls, attempt, handleFailure]);
 
   const bufferAhead = useCallback(() => {
     if (!ahead.current) {
@@ -157,6 +205,7 @@ function NativePlayer({
     setFailed(false);
     setStarted(false);
     setWaiting(false);
+    setSource(0);
     setAttempt((value) => value + 1);
   };
 
@@ -172,6 +221,9 @@ function NativePlayer({
         key={`${url}:${attempt}`}
         ref={videoRef}
         src={isHls && !nativeHls ? undefined : url}
+        // The fallback destination is damplips itself. Hotlink protection there
+        // usually rejects a foreign referer but allows a request without one.
+        {...fallbackReferrerPolicy(source)}
         aria-label={title}
         controls={started}
         preload={preload}
@@ -193,11 +245,7 @@ function NativePlayer({
         onWaiting={() => {
           if (started) setWaiting(true);
         }}
-        onError={() => {
-          setWaiting(false);
-          setFailed(true);
-          onTrack("playback_error");
-        }}
+        onError={handleFailure}
       >
         Your browser does not support the video tag.
       </video>
@@ -259,8 +307,6 @@ function NativePlayer({
   );
 }
 
-const HLS_PATTERN = /\.m3u8(?:[?#]|$)/i;
-
 export default function VideoPlayer(props: Props) {
   const onTrack = usePlaybackEvents(props.id);
   const source = selectPlaybackSource(props.playableUrl, props.embedUrl, props.provider);
@@ -271,8 +317,8 @@ export default function VideoPlayer(props: Props) {
       {source.kind === "direct" ? (
         <NativePlayer
           key={key}
-          url={isDamplipsMediaUrl(source.url) ? damplipsProxyUrl(source.url) : source.url}
-          isHls={HLS_PATTERN.test(source.url)}
+          urls={playbackCandidates(source.url)}
+          isHls={isHlsUrl(source.url)}
           title={props.title}
           poster={props.poster}
           onTrack={onTrack}

@@ -1,9 +1,9 @@
 "use client";
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 
-/** Desktop video sections are four rows tall; mobile sections are two. */
+/** Desktop video sections are four rows tall; mobile sections are one row. */
 export const GRID_ROWS = 4;
-export const MOBILE_GRID_ROWS = 2;
+export const MOBILE_GRID_ROWS = 1;
 export const MAX_GRID_COLUMNS = 4;
 
 /** Shared responsive row count for every fixed video shelf. */

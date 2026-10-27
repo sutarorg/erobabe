@@ -1,16 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { GET, HEAD } from "@/app/api/videos/stream/route";
+import { GET, HEAD, isPrivateHost } from "@/app/api/videos/stream/route";
 
 /**
  * `/api/videos/stream` is the only path through which damplips bytes reach a
- * browser. These tests pin its security properties: an allow-listed host only,
- * no credentials, https only, no redirects off the media host, and a real range
- * request forwarded so seeking works.
+ * browser. These tests pin its security properties — a damplips seed, no
+ * credentials, https only, no private hosts — and its playback behaviour: range
+ * requests are forwarded so seeking works, and HLS playlists are rewritten so
+ * every segment comes back through this same route instead of being blocked by
+ * CORS or resolved against the wrong base URL.
  */
 
 const MEDIA = "https://video.damplips.com/videos/67284.mp4";
 const PROXY = `https://erobabe.test/api/videos/stream?src=${encodeURIComponent(MEDIA)}`;
+const proxied = (url: string) => `/api/videos/stream?src=${encodeURIComponent(url)}`;
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -55,6 +58,65 @@ describe("GET /api/videos/stream", () => {
     expect(init.redirect).toBe("manual");
   });
 
+  it("asks the media host for bytes it can hand to a video element unchanged", async () => {
+    await GET(new NextRequest(PROXY, { headers: { range: "bytes=0-3" } }));
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["accept-encoding"]).toBe("identity");
+  });
+
+  it("rewrites an HLS playlist so every segment is fetched through the proxy", async () => {
+    const playlistUrl = "https://video.damplips.com/videos/67284/index.m3u8";
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        [
+          "#EXTM3U",
+          "#EXT-X-VERSION:3",
+          '#EXT-X-KEY:METHOD=AES-128,URI="/keys/67284.key"',
+          "#EXT-X-STREAM-INF:BANDWIDTH=1200000",
+          "720p/index.m3u8",
+          "",
+        ].join("\n"),
+        { status: 200, headers: { "content-type": "application/vnd.apple.mpegurl" } },
+      ),
+    );
+
+    const response = await GET(
+      new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(playlistUrl)}`),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/vnd.apple.mpegurl");
+    const body = await response.text();
+    expect(body).toContain(`#EXT-X-KEY:METHOD=AES-128,URI="${proxied("https://video.damplips.com/keys/67284.key")}"`);
+    expect(body).toContain(proxied("https://video.damplips.com/videos/67284/720p/index.m3u8"));
+    // The relative path is resolved against the playlist, never against us.
+    expect(body).not.toContain("\n720p/index.m3u8");
+  });
+
+  it("rewrites media segments listed as plain URIs", async () => {
+    const playlistUrl = "https://video.damplips.com/videos/67284/index.m3u8";
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        [
+          "#EXTM3U",
+          "#EXTINF:10.0,",
+          "segment-1.ts",
+          "#EXTINF:10.0,",
+          "https://video.damplips.com/videos/67284/segment-2.ts",
+          "#EXT-X-ENDLIST",
+        ].join("\n"),
+        { status: 200, headers: { "content-type": "application/x-mpegurl" } },
+      ),
+    );
+
+    const body = await (
+      await GET(new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(playlistUrl)}`))
+    ).text();
+
+    expect(body).toContain(proxied("https://video.damplips.com/videos/67284/segment-1.ts"));
+    expect(body).toContain(proxied("https://video.damplips.com/videos/67284/segment-2.ts"));
+  });
+
   it("refuses a request without a src", async () => {
     const response = await GET(new NextRequest("https://erobabe.test/api/videos/stream"));
     expect(response.status).toBe(400);
@@ -66,6 +128,7 @@ describe("GET /api/videos/stream", () => {
       "https://example.com/video.mp4",
       "https://video.damplips.com.evil.example/video.mp4",
       "https://notdamplips.com/a.mp4",
+      "https://127.0.0.1/video.mp4",
     ]) {
       const response = await GET(
         new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(src)}`),
@@ -75,9 +138,8 @@ describe("GET /api/videos/stream", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("refuses plain http, credentials and malformed URLs", async () => {
+  it("refuses credentials and malformed URLs", async () => {
     for (const src of [
-      "http://video.damplips.com/video.mp4",
       "https://user:pass@video.damplips.com/video.mp4",
       "not a url",
     ]) {
@@ -86,6 +148,16 @@ describe("GET /api/videos/stream", () => {
       );
       expect(response.status).toBe(400);
     }
+  });
+
+  it("upgrades a plain-http damplips link instead of rejecting it", async () => {
+    const response = await GET(
+      new NextRequest(
+        `https://erobabe.test/api/videos/stream?src=${encodeURIComponent("http://video.damplips.com/videos/1.mp4")}`,
+      ),
+    );
+    expect(response.status).toBe(206);
+    expect(String(fetchMock.mock.calls[0][0])).toBe("https://video.damplips.com/videos/1.mp4");
   });
 
   it("follows a redirect that stays on damplips", async () => {
@@ -98,19 +170,37 @@ describe("GET /api/videos/stream", () => {
     expect(String(fetchMock.mock.calls[1][0])).toBe("https://cdn.damplips.com/v/67284.mp4");
   });
 
-  it("refuses a redirect that leaves damplips", async () => {
+  it("follows a redirect to a damplips media CDN", async () => {
     fetchMock.mockResolvedValueOnce(
-      new Response(null, { status: 302, headers: { location: "https://example.com/video.mp4" } }),
+      new Response(null, { status: 302, headers: { location: "https://media-cdn.other-host.net/v/67284.mp4" } }),
     );
+    fetchMock.mockResolvedValueOnce(mediaResponse());
     const response = await GET(new NextRequest(PROXY));
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(206);
+    expect(String(fetchMock.mock.calls[1][0])).toBe("https://media-cdn.other-host.net/v/67284.mp4");
   });
 
-  it("gives up after three redirects", async () => {
+  it("refuses a redirect into a private network, plain http or a non-URL", async () => {
+    for (const location of [
+      "http://video.damplips.com/v/1.mp4",
+      "https://127.0.0.1/v/1.mp4",
+      "https://169.254.169.254/latest/meta-data/",
+      "https://localhost/v/1.mp4",
+      "https://admin.internal/v/1.mp4",
+    ]) {
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location } }));
+      const response = await GET(new NextRequest(PROXY));
+      expect(response.status).toBe(502);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("gives up after four redirects", async () => {
     fetchMock.mockImplementation(async () => new Response(null, { status: 302, headers: { location: MEDIA } }));
     const response = await GET(new NextRequest(PROXY));
     expect(response.status).toBe(502);
-    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(4);
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(5);
   });
 
   it("reports an unreachable or failing media host as a bad gateway", async () => {
@@ -121,9 +211,60 @@ describe("GET /api/videos/stream", () => {
     expect((await GET(new NextRequest(PROXY))).status).toBe(502);
   });
 
+  it("retries a rejected request without the origin and referer headers", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("hotlink", { status: 403 }));
+    fetchMock.mockResolvedValueOnce(mediaResponse());
+
+    const response = await GET(new NextRequest(PROXY));
+
+    expect(response.status).toBe(206);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, first] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [, second] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect((first.headers as Record<string, string>).referer).toBe("https://www.damplips.com/");
+    expect((second.headers as Record<string, string>).referer).toBe("https://www.damplips.com/");
+    expect((second.headers as Record<string, string>).origin).toBeUndefined();
+  });
+
+  it("gives up when every header profile is rejected", async () => {
+    fetchMock.mockImplementation(async () => new Response("hotlink", { status: 403 }));
+    const response = await GET(new NextRequest(PROXY));
+    expect(response.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("answers HEAD without a body", async () => {
     const response = await HEAD(new NextRequest(PROXY, { method: "HEAD" }));
     expect(response.status).toBe(206);
     expect(await response.text()).toBe("");
   });
+});
+
+describe("isPrivateHost", () => {
+  it.each([
+    "localhost",
+    "app.localhost",
+    "printer.local",
+    "db.internal",
+    "127.0.0.1",
+    "10.1.2.3",
+    "172.16.0.1",
+    "172.31.255.255",
+    "192.168.1.1",
+    "169.254.169.254",
+    "100.64.0.1",
+    "0.0.0.0",
+    "::1",
+    "fd00::1",
+    "fe80::1",
+  ])("blocks %s", (host) => {
+    expect(isPrivateHost(host)).toBe(true);
+  });
+
+  it.each(["video.damplips.com", "104.26.0.47", "public-cdn.example.net", "172.32.0.1"])(
+    "allows %s",
+    (host) => {
+      expect(isPrivateHost(host)).toBe(false);
+    },
+  );
 });

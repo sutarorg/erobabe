@@ -29,6 +29,22 @@ export function isDamplipsMediaUrl(url: string): boolean {
 }
 
 /**
+ * A damplips post page (`/p/<id>/`) is an HTML document, not a video file.
+ *
+ * Some imports stored that page in `playable_url`; handing it to a `<video>`
+ * element only ever produced "the video could not be loaded", so it is played
+ * as an embed instead.
+ */
+export function isDamplipsPostPage(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return isDamplipsHostname(parsed.hostname) && /^\/p\/\d+\/?$/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Same-origin URL that streams a damplips file through our route.
  *
  * damplips signs/referer-checks its media, so the browser asks our proxy and
@@ -80,9 +96,10 @@ export function selectPlaybackSource(
 
   const direct = safeUrl(playableUrl, /^https?:$/);
   if (direct) {
-    return isRetiredMediaHost(direct)
-      ? { kind: "unsupported" }
-      : { kind: "direct", url: direct.toString() };
+    if (isRetiredMediaHost(direct)) return { kind: "unsupported" };
+    // A post page saved as a "file" is an embed, not a source for `<video>`.
+    if (isDamplipsPostPage(direct.toString())) return { kind: "embed", url: direct.toString() };
+    return { kind: "direct", url: direct.toString() };
   }
 
   const embed = safeUrl(embedUrl, /^https?:$/);

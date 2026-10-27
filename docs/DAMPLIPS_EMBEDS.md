@@ -120,16 +120,36 @@ and a player:
 
 Damplips files are played through `/api/videos/stream?src=…`, a small proxy that:
 
-- only fetches `https://*.damplips.com` (no open proxy, no localhost/private hosts),
-- sends `Referer: https://www.damplips.com/` and `Origin`, forwards `Range`,
-- follows at most three redirects and refuses any that leave damplips,
-- passes through `content-type`, `content-range`, `content-length` and
-  `accept-ranges`, and streams the body without storing it.
+- only starts a request for a public `https://*.damplips.com` URL (no open
+  proxy, no loopback/link-local/private hosts); a plain-`http` damplips link is
+  upgraded to https,
+- sends a browser user-agent plus `Referer: https://www.damplips.com/` and
+  `Origin`, retries without `Origin` and then without either header when the
+  host answers 401/403/451 (hotlink protection is configured differently on
+  each host),
+- forwards `Range`, passes through `content-type`, `content-range`,
+  `content-length`, `content-encoding` and `accept-ranges`, and streams the body
+  without storing it. Upstream is asked for `accept-encoding: identity`, so a
+  re-encoded body can never reach a video element,
+- follows at most four redirects. A redirect may leave damplips for a media CDN,
+  but only to a public https host; anything private is refused.
 
-HLS (`.m3u8`) plays natively in Safari and through `hls.js` everywhere else.
+HLS (`.m3u8`) is the reason the proxy also *rewrites*: a playlist is a document
+whose segment, key, init-map and rendition URIs are fetched separately by the
+player. Those requests would otherwise go straight to damplips (blocked by CORS)
+or be resolved against `/api/videos/stream` (404). `lib/video/hls.ts` rewrites
+every URI to a proxy URL, so the player never talks to damplips itself. Playlists
+play natively in Safari and through `hls.js` everywhere else.
+
+In the browser, the player tries the proxy first and, if that destination fails,
+the direct file (with no referer, which hotlink protection usually allows) before
+showing an error. A damplips **post page** stored in `playable_url` is framed as
+an embed instead of being fed to a `<video>` element.
 
 ## Operational notes
 
+- **Source credit.** The watch page does not display a "Source: damplips.com"
+  line; the `source_url` column is still stored for takedowns and audit.
 - **Rights and takedowns.** Imported rows are marked `cleared` so categories are
   populated immediately. That is a product decision, not a legal one: you are
   responsible for having the right to embed each item. Keep `/dmca` and

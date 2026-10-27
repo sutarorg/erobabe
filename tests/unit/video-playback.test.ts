@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   damplipsProxyUrl,
   isDamplipsMediaUrl,
+  isDamplipsPostPage,
   selectPlaybackSource,
 } from "@/lib/video/playback";
 
@@ -27,6 +28,18 @@ describe("validated stored playback", () => {
     );
     expect(isDamplipsMediaUrl(url)).toBe(true);
     expect(isDamplipsMediaUrl("https://damplips.example.com/a.mp4")).toBe(false);
+  });
+
+  it("plays a post page stored as a file as an embed instead of a broken video", () => {
+    // Some imported rows kept the HTML post page in `playable_url`; a <video>
+    // element can never play it, so it is framed instead.
+    expect(selectPlaybackSource("https://www.damplips.com/p/67284/", null, "damplips")).toEqual({
+      kind: "embed",
+      url: "https://www.damplips.com/p/67284/",
+    });
+    expect(isDamplipsPostPage("https://www.damplips.com/p/67284/")).toBe(true);
+    expect(isDamplipsPostPage("https://video.damplips.com/videos/67284.mp4")).toBe(false);
+    expect(isDamplipsPostPage("https://www.damplips.com/p/67284/related")).toBe(false);
   });
 
   it("accepts a damplips embed page", () => {

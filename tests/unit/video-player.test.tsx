@@ -6,7 +6,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import VideoPlayer from "@/src/components/VideoPlayer";
+import VideoPlayer, { playbackCandidates } from "@/src/components/VideoPlayer";
 
 const props = {
   id: "22222222-2222-4222-8222-222222222222",
@@ -176,6 +176,44 @@ describe("video player", () => {
       "https://cdn.example.com/a.mp4",
     );
     expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
+  });
+
+  it("falls back to the direct damplips file when the proxy cannot deliver it", () => {
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+    const video = container.querySelector("video")!;
+    expect(video).toHaveAttribute("src", damplipsProxy);
+
+    fireEvent.error(video);
+
+    // The proxy is gone from the element and the visitor sees no error yet:
+    // the second destination is tried first.
+    const retried = container.querySelector("video")!;
+    expect(retried).not.toBe(video);
+    expect(retried).toHaveAttribute("src", damplipsFile);
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    fireEvent.error(retried);
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
+    expect(screen.getByRole("button", { name: "Retry playback" })).toBeInTheDocument();
+  });
+
+  it("returns to the proxy first when the visitor retries", () => {
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+    fireEvent.error(container.querySelector("video")!);
+    fireEvent.error(container.querySelector("video")!);
+    fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
+  });
+
+  it("offers exactly one destination for a non-damplips file", () => {
+    expect(playbackCandidates("https://cdn.example.com/a.mp4")).toEqual([
+      "https://cdn.example.com/a.mp4",
+    ]);
+    expect(playbackCandidates(damplipsFile)).toEqual([damplipsProxy, damplipsFile]);
   });
 
   it("keeps trusted historical players in their restrictive sandbox", () => {

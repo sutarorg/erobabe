@@ -92,7 +92,8 @@ describe("/video/[slug] watch page", () => {
   it("renders the requested sections in order", async () => {
     const html = await renderPage();
     const headings = Array.from(new DOMParser().parseFromString(html, "text/html").querySelectorAll("h2")).map(h => h.textContent);
-    expect(headings).toEqual(["Comments", "More like this", "Recommendation controls", "Discover videos", "Most Liked", "Top Categories", "Latest"]);
+    // Recommendations are on by default; the old opt-in controls are gone.
+    expect(headings).toEqual(["Comments", "More like this", "Discover videos", "Most Liked", "Top Categories", "Latest"]);
   });
 
   it("does not render an Up Next section", async () => {
