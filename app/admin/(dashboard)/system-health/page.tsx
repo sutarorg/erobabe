@@ -1,13 +1,10 @@
 import { createServiceClient } from "@/lib/supabase/server";
-import { inspectNowpaymentsSetup } from "@/lib/nowpayments/client";
-import { getSiteUrl } from "@/lib/site";
 import {
   uploadConfiguration,
   bunnyRequest,
   providerError,
 } from "@/lib/video/bunny";
 import { openRouterDiagnostics } from "@/lib/metadata/openrouter";
-import NowpaymentsCheck from "./NowpaymentsCheck";
 import OpenRouterCheck from "./OpenRouterCheck";
 
 export default async function SystemHealthAdmin() {
@@ -29,27 +26,6 @@ export default async function SystemHealthAdmin() {
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Unknown error";
     dbStatus = `Failed: ${message}`;
-  }
-
-  // Real NOWPayments check — verifies the API key against the live API.
-  let payStatus = "Not configured";
-  let payDetail = "Crypto payment gateway";
-  if (process.env.NOWPAYMENTS_API_KEY) {
-    const setup = await inspectNowpaymentsSetup(getSiteUrl());
-    if (setup.error) {
-      payStatus = "Unreachable";
-      payDetail = setup.error;
-    } else if (!setup.ipnSecretConfigured) {
-      payStatus = "IPN secret missing";
-      payDetail =
-        "NOWPAYMENTS_IPN_SECRET is not set — incoming payment notifications will be rejected";
-    } else if (setup.configWarnings.length) {
-      payStatus = "Needs attention";
-      payDetail = setup.configWarnings[0];
-    } else {
-      payStatus = "Operational";
-      payDetail = `API reachable · IPN secret set · callback ${setup.ipnUrl}. Delivery itself is not proven by this check — use "Test IPN reachability" below.`;
-    }
   }
 
   // Real AI metadata configuration check — reported without calling OpenRouter
@@ -109,10 +85,10 @@ export default async function SystemHealthAdmin() {
       desc: "Current administrator session passed authorization. Registration, recovery and email delivery require staging acceptance.",
     },
     {
-      name: "NOWPayments API",
-      status: payStatus,
+      name: "PayPal ad checkout",
+      status: "Manual review",
       latency: "—",
-      desc: payDetail,
+      desc: "Guest checkout uses the published PayPal QR. Staff verify each payment in PayPal before approving the ad; no payment-gateway API or advertiser account is required.",
     },
     {
       name: "Video Provider",
@@ -213,16 +189,14 @@ export default async function SystemHealthAdmin() {
         ))}
       </div>
 
-      <NowpaymentsCheck />
-
       <OpenRouterCheck />
 
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
         <p className="text-[11px] text-ink-3">
           Last checked: {new Date().toLocaleString()} — real diagnostic requests
-          performed for Database and the NOWPayments API. Bunny Stream
-          connectivity is checked with a read-only library request. Use “Test
-          OpenRouter” to prove the AI metadata key with a live call.
+          are performed for Database and Bunny Stream. Use “Test OpenRouter” to
+          prove the AI metadata key with a live call. PayPal payments are checked
+          manually in your PayPal account from Ad Review.
         </p>
       </div>
     </div>

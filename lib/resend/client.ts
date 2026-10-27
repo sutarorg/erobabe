@@ -1,4 +1,5 @@
 import { escapeHtml } from "@/lib/http/safety";
+import { SITE_URL } from "@/lib/site";
 import { Resend } from "resend";
 
 let resendClient: Resend | null = null;
@@ -86,6 +87,35 @@ export function templateCampaignApproved(email: string, campaignName: string) {
       <div style="background:#0a0a0c;color:#f5f5f7;font-family:Inter,sans-serif;padding:32px">
         <h1 style="color:#f5f5f7">Campaign approved</h1>
         <p style="color:#a1a1aa">Your campaign <strong>${escapeHtml(campaignName)}</strong> is now active and delivering impressions.</p>
+      </div>
+    `,
+  };
+}
+
+export function templateAdLive(
+  email: string,
+  adName: string,
+  slotId: number,
+  endsAt?: string | null,
+) {
+  const safeName = escapeHtml(adName);
+  const expiry = endsAt
+    ? `<p style="color:#a1a1aa;font-size:13px">Your placement runs until ${escapeHtml(new Date(endsAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }))}.</p>`
+    : "";
+  return {
+    to: email,
+    subject: "Your ad is live! Erobabe",
+    text: `Your ad is live! Erobabe\n\n${adName} is now live in slot ${slotId}. View it at ${SITE_URL}.`,
+    html: `
+      <div style="background:#0a0a0c;color:#f5f5f7;font-family:Inter,Arial,sans-serif;padding:32px">
+        <div style="max-width:560px;margin:0 auto;border:1px solid #242429;border-radius:16px;padding:28px;background:#151518">
+          <p style="color:#f51655;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase">erobabe advertising</p>
+          <h1 style="color:#f5f5f7;font-size:25px;margin:12px 0">Your ad is live! Erobabe</h1>
+          <p style="color:#a1a1aa;font-size:14px;line-height:1.6"><strong style="color:#f5f5f7">${safeName}</strong> has been approved and is now live in ad slot ${slotId}.</p>
+          ${expiry}
+          <a href="${SITE_URL}" style="display:inline-block;margin-top:14px;padding:12px 18px;border-radius:8px;background:#f51655;color:#ffffff;text-decoration:none;font-size:13px;font-weight:700">View your ad</a>
+          <p style="color:#71717a;font-size:11px;margin-top:26px">This is an automated message from erobabe.</p>
+        </div>
       </div>
     `,
   };

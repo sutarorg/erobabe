@@ -12,10 +12,8 @@ export const metadata: Metadata = {
 /**
  * `/admin/signin` — the administrator sign-in page.
  *
- * It is intentionally not part of `/auth/*`: the advertiser flow lives there,
- * offers self-service sign-up and password reset, and redirects into
- * `/advertiser`. Nothing here links back into it beyond one explicitly worded
- * note, and a successful sign-in is accepted only for an active admin profile.
+ * It is intentionally separate from the account-free public advertising
+ * checkout. A successful sign-in is accepted only for an active admin profile.
  *
  * `middleware.ts` keeps this path reachable while the rest of `/admin` requires
  * a session.

@@ -148,7 +148,7 @@ export default function Footer({
             {onAdvertise && (
               <li>
                 {useLinks ? (
-                  <Link href="/advertiser" prefetch className={linkClass}>
+                  <Link href="/checkout" prefetch className={linkClass}>
                     Advertise with us
                   </Link>
                 ) : (

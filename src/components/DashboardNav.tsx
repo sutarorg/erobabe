@@ -19,7 +19,7 @@ export function activeHref(path: string, items: NavLink[]) {
       [i.href, ...(i.aliases || [])].some(
         (h) =>
           path === h ||
-          (!["/admin", "/advertiser"].includes(h) && path.startsWith(`${h}/`)),
+          (h !== "/admin" && path.startsWith(`${h}/`)),
       ),
     )
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;

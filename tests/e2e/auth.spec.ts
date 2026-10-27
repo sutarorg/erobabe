@@ -9,12 +9,12 @@ test.describe("Authentication", () => {
     ).toHaveAttribute("href", "/");
   });
 
-  test("sign-up page loads", async ({ page }) => {
-    await page.goto("/auth/sign-up");
-    await expect(page.locator("h1")).toContainText(/create advertiser/i);
-    await expect(
-      page.getByRole("link", { name: /back to home/i }),
-    ).toHaveAttribute("href", "/");
+  test("guest advertising checkout loads without signing in", async ({ page }) => {
+    const response = await page.goto("/checkout?slot=1");
+    expect(response?.status()).toBe(200);
+    await expect(page.getByRole("heading", { name: /Your brand, in the spotlight/i })).toBeVisible();
+    await expect(page.getByAltText("Erobabe PayPal payment QR code")).toBeVisible();
+    await expect(page).toHaveURL(/\/checkout\?slot=1/);
   });
 
   test("unauthenticated access to /admin redirects to sign-in", async ({

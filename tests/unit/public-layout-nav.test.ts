@@ -32,7 +32,7 @@ describe("navForPath", () => {
     "/faq",
     "/content-removal",
     "/video/midnight-velvet",
-    "/advertiser",
+    "/checkout",
   ])("leaves the header un-highlighted on %s", (path) => {
     expect(navForPath(path)).toBeNull();
   });

@@ -4,7 +4,7 @@ let bundle: string;
 test.beforeAll(async () => {
   const result = await build({
     stdin: {
-      contents: `import React from 'react';import {createRoot} from 'react-dom/client';import AdminNav from './app/admin/(dashboard)/AdminNav';import AdvertiserNav from './app/advertiser/AdvertiserNav';import PortalSidebar from './src/components/PortalSidebar';window.fixturePath='/admin/videos/upload';const root=createRoot(document.getElementById('root'));window.draw=()=>root.render(<PortalSidebar portal={window.fixturePath.startsWith('/admin')?'Admin':'Advertiser'} email="fixture@example.com">{window.fixturePath.startsWith('/admin')?<AdminNav/>:<AdvertiserNav/>}</PortalSidebar>);window.draw();`,
+      contents: `import React from 'react';import {createRoot} from 'react-dom/client';import AdminNav from './app/admin/(dashboard)/AdminNav';import PortalSidebar from './src/components/PortalSidebar';window.fixturePath='/admin/videos/upload';const root=createRoot(document.getElementById('root'));window.draw=()=>root.render(<PortalSidebar portal="Admin" email="fixture@example.com"><AdminNav/></PortalSidebar>);window.draw();`,
       resolveDir: process.cwd(),
       loader: "tsx",
     },
@@ -82,21 +82,6 @@ test("production sidebar components: mobile drawer focus, groups, active route a
     .click();
   await desktop.getByRole("link", { name: "Users", exact: true }).click();
   await expect(page).toHaveURL(/\/admin\/users$/);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.evaluate(() => {
-    (window as any).fixturePath = "/advertiser/billing";
-    (window as any).draw();
-  });
-  await page
-    .getByRole("button", { name: "Open advertiser navigation" })
-    .click();
-  const advertiser = page.getByRole("dialog", { name: "Advertiser menu" });
-  await expect(
-    advertiser.getByRole("link", { name: "Billing", exact: true }),
-  ).toHaveAttribute("aria-current", "page");
-  await advertiser.getByRole("link", { name: "Profile", exact: true }).click();
-  await expect(page).toHaveURL(/\/advertiser\/profile$/);
-  await expect(advertiser).not.toBeVisible();
 });
 test("all real portal destinations protect unauthenticated requests", async ({
   request,
@@ -109,21 +94,11 @@ test("all real portal destinations protect unauthenticated requests", async ({
     "/admin/ad-slots",
     "/admin/advertisements",
     "/admin/campaigns",
-    "/admin/advertisers",
     "/admin/payments",
     "/admin/reports",
     "/admin/users",
     "/admin/logs",
     "/admin/system-health",
-    "/advertiser",
-    "/advertiser/slots",
-    "/advertiser/campaigns",
-    "/advertiser/analytics",
-    "/advertiser/billing",
-    "/advertiser/support",
-    "/advertiser/profile",
-    "/advertiser/payments",
-    "/advertiser/invoices",
   ]) {
     const response = await request.get(path, { maxRedirects: 0 });
     expect(response.status(), path).toBe(307);

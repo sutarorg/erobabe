@@ -3,7 +3,7 @@ import { publicPageMetadata } from "@/lib/metadata/page";
 import { SITE_URL } from "@/lib/site";
 import Link from "next/link";
 
-const EFFECTIVE_DATE = "October 15, 2026";
+const EFFECTIVE_DATE = "October 27, 2026";
 
 const SECTIONS: { number: string; title: string; paragraphs: string[] }[] = [
   {
@@ -11,7 +11,7 @@ const SECTIONS: { number: string; title: string; paragraphs: string[] }[] = [
     title: "Overview",
     paragraphs: [
       "erobabe is designed so adults can browse the public catalog without creating a viewer account. We collect only the minimum operational data required to deliver pages, count aggregate video views, and keep the service reliable.",
-      "erobabe does not own, produce, or claim ownership over any of the videos uploaded to the platform. All uploaded videos remain the property of their respective third-party creators, studios, or rights holders. This Privacy Policy explains how visitor data, advertiser account data, and personal privacy or removal requests regarding third-party uploaded videos are handled.",
+      "erobabe does not own, produce, or claim ownership over any of the videos uploaded to the platform. All uploaded videos remain the property of their respective third-party creators, studios, or rights holders. This Privacy Policy explains how visitor data, advertising submission data, and personal privacy or removal requests regarding third-party uploaded videos are handled.",
     ],
   },
   {
@@ -35,29 +35,29 @@ const SECTIONS: { number: string; title: string; paragraphs: string[] }[] = [
     title: "Cookies and local storage",
     paragraphs: [
       "For ordinary visitors we use local browser storage only to remember that you have confirmed you are 18+ so the age-verification prompt is not shown on every page load.",
-      "If you sign in as an advertiser, we set strictly necessary session cookies managed by our authentication provider to keep your portal session active and secure.",
+      "If a staff member signs in to the admin dashboard, we set strictly necessary session cookies managed by our authentication provider to keep that session active and secure. Guest advertisers do not need an account or session.",
     ],
   },
   {
     number: "05",
-    title: "Advertiser accounts and billing records",
+    title: "Advertising submissions and billing records",
     paragraphs: [
-      "When you register an advertiser account we store the email address, display name, and campaign assets you submit, along with invoice and payment status records returned by our cryptocurrency payment processor.",
-      "We do not receive or custody your private wallet keys. Blockchain transaction identifiers and settlement statuses are retained for accounting, fraud prevention, and support.",
+      "When you submit an advertisement, we store your contact name, email, optional company name, advertiser description, destination URL, creative, optional PayPal transaction ID, and our manual payment-review status. No advertiser account is created.",
+      "PayPal processes your payment under its own privacy terms. We do not receive your PayPal password or full financial account details. Order and review records are retained for accounting, fraud prevention, support, and fulfilment.",
     ],
   },
   {
     number: "06",
     title: "Infrastructure and service providers",
     paragraphs: [
-      "We rely on specialized infrastructure partners for database hosting, authentication, content delivery, video transcoding/streaming, and cryptocurrency payment processing. Each provider processes data only as needed to perform its service for erobabe.",
+      "We rely on specialized infrastructure partners for database hosting, staff authentication, content delivery, video transcoding/streaming, PayPal payment processing, and transactional email. Each provider processes data only as needed to perform its service for erobabe.",
     ],
   },
   {
     number: "07",
     title: "Data retention, removal & contact",
     paragraphs: [
-      "Age-gate confirmation is held only while the public site remains open and is not saved in browser storage; you will be asked again when you enter the site in a fresh page session. Advertisers may request updates or deletion of their account profile — subject to mandatory financial record-keeping — through the contact page.",
+      "Age-gate confirmation is held only while the public site remains open and is not saved in browser storage; you will be asked again when you enter the site in a fresh page session. Advertisers may request updates or deletion of their contact details — subject to mandatory financial record-keeping — through the contact page.",
       "To request immediate removal of any uploaded video on privacy, consent, or copyright grounds, use our Content Removal or DMCA Notice page.",
     ],
   },
@@ -78,7 +78,7 @@ export default function PrivacyPage() {
         </div>
         <p className="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">
           How erobabe handles browser data, third-party uploaded video privacy
-          requests, cookies, and advertiser account information.
+          requests, cookies, and advertising submission information.
         </p>
       </div>
 
@@ -126,4 +126,4 @@ export default function PrivacyPage() {
   );
 }
 
-export const metadata: Metadata = publicPageMetadata({ title: "Privacy Policy", description: "Learn how Erobabe handles browser storage, visitor data, account information, analytics, privacy requests, and content removal requests.", alternates: { canonical: `${SITE_URL}/privacy` } });
+export const metadata: Metadata = publicPageMetadata({ title: "Privacy Policy", description: "Learn how Erobabe handles browser storage, visitor data, advertising submissions, analytics, privacy requests, and content removal requests.", alternates: { canonical: `${SITE_URL}/privacy` } });

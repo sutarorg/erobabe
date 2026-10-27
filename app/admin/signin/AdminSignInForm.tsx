@@ -4,16 +4,13 @@ import { useEffect, useState, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Eye, EyeOff, ShieldAlert } from "lucide-react";
-import Link from "next/link";
 
 /**
  * Administrator sign-in.
  *
- * Deliberately separate from `/auth/sign-in`: that page is the advertiser
- * portal's front door, offers account creation and password reset, and lands a
- * successful advertiser in `/advertiser`. This one is staff-only — it accepts
- * an account only after the server-side profile says `role = admin` and
- * `status = active`, and it offers no self-service links.
+ * Deliberately separate from `/auth/sign-in`. This page is staff-only — it
+ * accepts an account only after the server-side profile says `role = admin`
+ * and `status = active`, and it offers no self-service account creation.
  */
 function AdminSignInCard() {
   const [email, setEmail] = useState("");
@@ -175,13 +172,7 @@ function AdminSignInCard() {
         </button>
       </form>
 
-      <p className="mt-4 text-[11px] text-ink-3">
-        Administrator accounts are issued by the site owner. Advertiser?{" "}
-        <Link href="/auth/sign-in" className="text-accent hover:underline">
-          Use the advertiser sign in
-        </Link>
-        .
-      </p>
+      <p className="mt-4 text-[11px] text-ink-3">Administrator accounts are issued by the site owner.</p>
     </div>
   );
 }

@@ -1,12 +1,12 @@
 # DEPLOYMENT.md — Erobabe Production Setup (Click-by-Click)
 
-Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWPayments, video publishing, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. Bunny Stream resumable device uploads are implemented; section D documents setup and remaining live acceptance.
+Deployment setup and operational checklist for Erobabe. It covers Supabase, guest PayPal advertising checkout, video publishing, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. Bunny Stream resumable device uploads are implemented; section D documents setup and remaining live acceptance.
 
 **Current launch evidence:** see PRODUCTION_READINESS.md and GO_LIVE_CHECKLIST.md. Repository checks are not account-policy approval. Follow the rollout addendum below before using historical setup steps.
 
 **Video-provider guidance audited**: October 14, 2026
 
-**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), NOWPayments, Resend, OpenRouter (NVIDIA Nemotron 3 Ultra, free route), Bunny Stream device uploads, Tailwind CSS 4.
+**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage + Edge Functions optional), PayPal QR checkout, Resend, OpenRouter (NVIDIA Nemotron 3 Ultra, free route), Bunny Stream device uploads, Tailwind CSS 4.
 
 ---
 
@@ -14,7 +14,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 
 ### Accounts needed
 - Supabase account (https://supabase.com)
-- NOWPayments account (https://nowpayments.io)
+- PayPal account that owns the destination encoded in the supplied advertising QR
 - Resend account (https://resend.com)
 - OpenRouter account for AI metadata (NVIDIA Nemotron 3 Ultra, free route) (https://openrouter.ai)
 - GitHub account with access to https://github.com/sutarorg/erobabe
@@ -33,7 +33,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
 2. **Hosting provider**: Vercel Hobby is limited to personal non-commercial use and its Acceptable Use Policy restricts objectionable content. Do NOT deploy commercial Erobabe to Vercel Hobby. Choose a host whose terms explicitly permit adult content and commercial use. Document approval.
 3. **Legal identity**: Operator must provide real legal name, business address, registration, contact emails, age-verification procedures. Do not publish fictional identity.
 4. **Age assurance**: Evaluate jurisdiction-specific requirements (e.g., UK, EU, US state laws). Frontend age gate alone is not robust assurance. Implement required verification integration where legally required.
-5. **NOWPayments approval and payout wallet**: Owner must confirm in writing that NOWPayments permits this lawful adult-entertainment business and its advertising use, then configure the payout wallet/addresses and enable the accepted coins (e.g., USDT on Ethereum/Tron/BSC/Solana, BTC, ETH, TRX, BNB, SOL).
+5. **PayPal destination and operating approval**: Owner must confirm that the PayPal account encoded in the supplied QR can lawfully receive advertising payments for this business. Keep the account and QR under operator control; staff verify each receipt manually before publishing an ad.
 
 ---
 
@@ -62,7 +62,6 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, NOWP
    - `https://erobabe.com/auth/callback` (implemented PKCE callback)
    - `https://erobabe.com/auth/callback?next=/auth/update-password`
    - `https://erobabe.com/auth/sign-in`
-   - `https://erobabe.com/advertiser`
    - `https://erobabe.com/admin`
    - `http://localhost:3000/*` for local dev
 4. Click **Save**
@@ -121,8 +120,7 @@ these operations. Do not create retired upload relay functions.
 ### 9. Configure server secrets on the application host
 
 Set `SUPABASE_SECRET_KEY` (or the legacy service-role alias), `RESEND_API_KEY`,
-`OPENROUTER_API_KEY` when using metadata AI, `NOWPAYMENTS_API_KEY`,
-`NOWPAYMENTS_IPN_SECRET`, `BUNNY_STREAM_LIBRARY_ID`, `BUNNY_STREAM_API_KEY`,
+`OPENROUTER_API_KEY` when using metadata AI, `BUNNY_STREAM_LIBRARY_ID`, `BUNNY_STREAM_API_KEY`,
 `CRON_SECRET` when using background auto-publish, and site
 URL settings on the **Next.js application host**. Supabase Edge Function secrets
 alone are not visible to Next.js. Keep every secret server-only; redeploy after
@@ -153,7 +151,7 @@ update public.profiles set role='admin' where email='admin@erobabe.com';
 
 ### 11. Verify database and authentication flows
 - Sign up as advertiser at `/auth/sign-up` — should receive verification email via Resend
-- Verify email, sign in — should land on `/advertiser`
+- Verify an existing user can sign in — public users land on `/`; staff use `/admin/signin`
 - Sign in as admin — should land on `/admin`
 - Try to access `/admin` as advertiser — should redirect to sign-in (middleware + RLS)
 - Try to query `payments` as anon via API — should be denied
@@ -161,218 +159,68 @@ update public.profiles set role='admin' where email='admin@erobabe.com';
 
 ---
 
-## C. NOWPayments Setup
+## C. Guest PayPal advertising checkout
 
-Everything in this section follows NOWPayments' official documentation
-(Payment API: https://nowpayments.io/api, IPN:
-https://nowpayments.io/help/what-is/what-is-ipn) and the code in
-`lib/nowpayments/`.
+The active billing flow is account-free and uses the supplied PayPal QR. There is
+no advertiser registration, advertiser dashboard, crypto checkout, payment IPN,
+or automatic payment confirmation. Historical campaign/payment tables and their
+migrations remain for audit compatibility only.
 
-How the pieces fit:
+### 1. Publish the authoritative QR
 
-- Checkout calls `POST https://api.nowpayments.io/v1/payment` with the
-  `x-api-key` header and sends the payer the returned `pay_address` and
-  `pay_amount`. The payment starts in the `waiting` status.
-- Every payment carries this deployment's IPN URL
-  (`https://YOUR_DOMAIN/api/nowpayments/ipn`). NOWPayments POSTs a signed
-  JSON notification there on every status change.
-- Only a verified `finished` status marks a payment paid. `confirmed` is an
-  intermediate provider state and never fulfills anything on its own.
+The operator-supplied source is:
+`https://drive.google.com/file/d/1g7ZcbfasWHlD3OClYRxCZy1-B9lHilAl/view?usp=sharing`
 
-> **Approval blocker (unresolved):** before accepting real payments, confirm in
-> writing that NOWPayments permits this lawful adult-entertainment business and
-> its advertising use under the account's terms. API access alone is not proof
-> of approval. Until that confirmation exists, payments are a launch blocker —
-> see `GO_LIVE_CHECKLIST.md`.
+The verified image is stored at `public/paypal-qr.png` and served as
+`/paypal-qr.png`. Confirm that this is the intended PayPal destination before
+deployment. If the destination changes, replace that public image deliberately;
+do not accept a QR URL or payment destination from a checkout visitor.
 
-### 1. Create or access a NOWPayments account
+### 2. Apply the advertising migration
 
-1. Go to https://nowpayments.io → **Sign Up** (or sign in).
-2. Complete the account verification the dashboard asks for (KYC/business
-   verification if required for your account type).
-3. If you run a store/merchant profile, create one for Erobabe. You need a
-   single profile — you do not need one per blockchain.
+Apply every migration in filename order, including
+`supabase/migrations/00000000000025_paypal_ad_orders.sql`. It creates the private
+`ad_orders` table, server-priced reservation and admin-review RPCs, restrictive
+RLS/grants, and the `ad-creatives` storage bucket. Do not substitute a client-side
+price or payment status.
 
-### 2. Obtain the API key
+Configure the normal Supabase server credentials and Resend credentials from
+`.env.example`. The PayPal QR flow has no PayPal API key, webhook secret, or
+payment-gateway environment variable.
 
-1. Sign in at https://nowpayments.io and open **Store Settings** (dashboard
-   menu).
-2. Find the **API key** section and generate/copy the key (dashboard labels it
-   the store API key / `x-api-key` value).
-3. Keep this value secret. It goes into `NOWPAYMENTS_API_KEY` (step 5) —
-   server-side only, never a `NEXT_PUBLIC_*` variable.
+### 3. Checkout and review behavior
 
-### 3. Obtain the IPN Secret Key
+1. A visitor clicks a vacant banner and goes directly to `/checkout?slot=<id>`.
+2. The visitor enters campaign/contact details and uploads a real JPG or PNG,
+   maximum 5 MB, with an exact 16:9 aspect ratio.
+3. The server validates the image bytes and dimensions, recalculates the price
+   from `ad_slots`, uploads the creative, and atomically reserves the slot.
+4. The visitor scans the QR in PayPal and optionally supplies the transaction ID.
+   Clicking **Submit** records an `in_review` order; it does not prove payment.
+5. An animated **In review** screen returns the visitor to the public site after
+   five seconds.
 
-1. In **Store Settings**, find the **IPN Secret Key** section and generate a
-   secret (the dashboard offers a generate/copy control).
-2. Copy it into `NOWPAYMENTS_IPN_SECRET` (step 5). Every incoming IPN is
-   rejected unless its `x-nowpayments-sig` header verifies against this
-   secret, so a missing or wrong value blocks all payment completions.
-3. If you ever regenerate the secret, update the hosting environment variable
-   at the same time and redeploy.
+### 4. Manual fulfilment
 
-### 4. Enable the payout/accepted coins
+1. Open **Admin → Ad Review** and inspect the banner, destination, amount, and
+   PayPal transaction reference.
+2. In the actual PayPal account, confirm the sender, amount, currency, and date.
+3. Choose **Confirm PayPal payment**. This only marks payment verified.
+4. After moderation, choose **Approve & make live**. The database starts the
+   purchased duration and the route sends the advertiser a Resend email with
+   subject **Your ad is live! Erobabe**.
+5. If Resend fails, the ad remains live and the admin action displays a warning;
+   fix `RESEND_API_KEY` / `RESEND_FROM_EMAIL` and record fulfilment manually.
 
-1. In **Store Settings**, open the coins/currencies section and enable every
-   asset the checkout offers (the app's fixed allowlist is `usdterc20`,
-   `usdttrc20`, `usdtbsc`, `usdtsol`, `btc`, `eth`, `trx`, `bnbbsc`, `sol` —
-   see Admin → System Health for the live availability check).
-2. Configure the payout wallet/address the dashboard asks for, so settled
-   funds have somewhere to go.
-3. Payment creation fails with a clear provider error (surfaced in checkout
-   and recorded on the payment) when a coin is not enabled — it never
-   silently substitutes another asset or network.
+### 5. Acceptance checks
 
-### 5. Configure the production IPN callback URL
-
-The application sends the callback URL with **every** payment
-(`ipn_callback_url`), so there is no per-chain dashboard entry to maintain.
-The URL is:
-
-```text
-https://YOUR_DOMAIN/api/nowpayments/ipn
-```
-
-On the current production deployment:
-
-```text
-https://erobabe.vercel.app/api/nowpayments/ipn
-```
-
-Rules:
-
-- It must be an absolute HTTPS URL ending in `/api/nowpayments/ipn`.
-- By default it is derived from `NEXT_PUBLIC_SITE_URL`. Set
-  `NOWPAYMENTS_IPN_CALLBACK_URL` only to pin a different absolute URL; an
-  invalid value is ignored with a warning in System Health.
-- If the NOWPayments dashboard also offers a store-level IPN/default callback
-  field, enter the same URL there for consistency.
-- The endpoint is public by design (NOWPayments calls it server-to-server)
-  and is excluded from the auth middleware. Reachability is necessary but not
-  sufficient — every notification must also carry a valid signature.
-
-### 6. Configure the matching Vercel environment variables
-
-Vercel → Project → **Settings** → **Environment Variables** (Production, and
-Preview if you test there):
-
-| Variable | Value |
-|---|---|
-| `NOWPAYMENTS_API_KEY` | API key from step 2 |
-| `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key from step 3 |
-| `NOWPAYMENTS_DEFAULT_PAY_CURRENCY` | `usdterc20` (must be one of the allowlist identifiers) |
-| `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional pin for the URL in step 5 |
-| `NEXT_PUBLIC_SITE_URL` | Canonical origin, e.g. `https://erobabe.vercel.app` |
-
-Redeploy after changing any of them. Then open Admin → System Health →
-**NOWPayments — API & IPN configuration** and confirm: API key configured,
-API reachable, IPN secret set, and the expected callback URL shown.
-
-### 7. What the application does with an IPN
-
-`/api/nowpayments/ipn` (POST) treats every notification as untrusted until:
-
-1. The `x-nowpayments-sig` header verifies: the body is parsed as JSON, its
-   top-level keys are sorted, and HMAC-SHA512 (hex) is computed with
-   `NOWPAYMENTS_IPN_SECRET`, compared in constant time. Missing, malformed,
-   or wrong signatures are rejected (401) and touch nothing.
-2. The `payment_id` / `order_id` (our invoice number) resolves to a real
-   payment row. Unknown references answer 200 as `unknown_payment` with an
-   audit row — never retried, never applied.
-3. The reported `pay_currency`, receiving address, and USD price match the
-   stored payment. Mismatches are rejected and audited.
-4. Terminal claims are corroborated with an authenticated
-   `GET https://api.nowpayments.io/v1/payment/{payment_id}`. A `finished`
-   claim the API does not confirm is recorded, never fulfilled.
-5. The paid crypto amount (`actually_paid`, else `pay_amount`) is compared to
-   the stored expected amount with integer math (2% tolerance). Under/over
-   payments become `underpaid`/`overpaid` for human review — campaigns never
-   activate on them.
-6. Processing is idempotent: a repeated final IPN answers `already_processed`
-   and cannot duplicate a confirmation, invoice payment, campaign activation,
-   or business event; stale intermediate IPNs never overwrite a terminal
-   state; a `refunded` IPN after completion moves the payment to `refunded`
-   and pauses its campaigns.
-7. HTTP semantics: 200 for processed/recorded notifications, 401 for bad
-   signatures, 400 for invalid or mismatched payloads, 503 when NOWPayments
-   (or the network) is transiently unreachable so the IPN is retried — and
-   500 on database failure without claiming success.
-
-Status mapping (internal `payments.status` keeps the lifecycle,
-`provider_status` keeps the raw value):
-
-| NOWPayments | Internal | Fulfills? |
-|---|---|---|
-| `waiting` | `awaiting_confirmation` | No |
-| `confirming`, `confirmed`, `sending` | `partially_confirmed` | No |
-| `partially_paid` | `underpaid` (manual review) | No |
-| `finished` | `confirmed` (only after verification) | Yes |
-| `failed` / `expired` | `failed` / `expired` | No |
-| `refunded` | `refunded` | No (pauses campaigns) |
-
-### 8. Test IPN reachability safely (no money, no payment records touched)
-
-1. Admin → System Health → **NOWPayments** → **Test IPN reachability**:
-   performs a real HTTPS GET of the IPN URL from the deployment and reports
-   the status code. NOWPayments retries notifications that do not answer 200.
-2. Or from any machine:
-
-   ```bash
-   curl -i https://erobabe.vercel.app/api/nowpayments/ipn
-   ```
-
-   Expect `HTTP/2 200` and
-   `{"status":"ok","message":"NOWPayments IPN endpoint is reachable"}`.
-3. Prove signatures are enforced (must NOT confirm anything):
-
-   ```bash
-   curl -i -X POST https://erobabe.vercel.app/api/nowpayments/ipn \
-     -H 'Content-Type: application/json' \
-     -d '{"payment_id":"123","payment_status":"finished"}'
-   ```
-
-   Expect HTTP 401 `{"status":"rejected",…}` and no new `payment_events` row.
-
-### 9. Process a genuine test payment end to end
-
-1. Sign in to the deployed site with a test advertiser account and create the
-   smallest checkout you are willing to pay for (the current minimum is one
-   $99 slot for one month — there is no fabricated sandbox amount).
-2. The checkout shows the exact crypto amount, asset, network, and receiving
-   address, and polls `/api/nowpayments/status` so the state updates without
-   a page refresh. Send exactly that amount from your own wallet on the
-   matching network; a different token or network will not confirm.
-3. Wait for NOWPayments to process the payment to `finished`.
-4. Expected result: NOWPayments POSTs the signed IPN → the route verifies the
-   signature, correlates the payment, corroborates with the payment API, and
-   verifies the amount → `payments.status = 'confirmed'` with `confirmed_at`
-   set, the invoice becomes `paid`, `payment_events` gains `ipn_received`,
-   `payment_verified`, and `confirmed`, and the campaign becomes `active`
-   (creative approved) or `pending_review`.
-5. Verify: Admin → System Health shows NOWPayments healthy, Admin → Logs
-   shows `payment_confirmed`, and the advertiser's campaign page shows the
-   activated campaign.
-6. Send the same final IPN again (NOWPayments retries, or replay the exact
-   signed body): expect `already_processed` and exactly one `confirmed` event.
-
-### 10. Diagnose missing IPNs, unconfirmed payments, and wrong values
-
-| Symptom | Where to look | What to do |
-|---|---|---|
-| System Health shows **Unreachable** | NOWPayments panel | `NOWPAYMENTS_API_KEY` missing/invalid or the API cannot be reached; the panel prints the message. |
-| System Health shows **IPN secret missing** | Same panel | Set `NOWPAYMENTS_IPN_SECRET` — every IPN is rejected until then. |
-| Payment stays `awaiting_confirmation` after a real payment | `payment_events` and `audit_logs` for that payment | `ipn_received` = NOWPayments reached us. `verification_pending` + HTTP 503 = the payment API was unreachable, NOWPayments retries. `verification_failed` / `nowpayments_ipn_unverified` = the API does not report that payment id. `amount_unverified` / `amount_mismatch` = amount evidence missing or mismatched (`underpaid`/`overpaid`). |
-| `unknown_payment` | `audit_logs.action = 'nowpayments_ipn_unknown_payment'` | The IPN matched no `payment_id`/`order_id` — usually a notification for another store or a stale replay. |
-| Signature rejections | Server logs (`NOWPayments IPN rejected`) | The IPN secret on the server does not match the dashboard value, or the body was altered in transit. |
-| Nothing arrives at all | NOWPayments dashboard payment page | NOWPayments never sent the IPN: check the payment exists, its status, and that the `ipn_callback_url` on it is this deployment's URL. Confirm reachability with step 8. |
-| Currency errors at checkout | Checkout error + payment `creation_failed` event | The `pay_currency` is not enabled for the account — enable the coin (step 4) or pick another asset. |
-
-Never mark a payment `confirmed` by hand unless you independently verified the
-payment in NOWPayments (`GET /v1/payment/{payment_id}` with the API key
-shows `finished` for that address and amount) — see "Rollback and recovery".
-
----
+- `/checkout?slot=1` returns 200 without a session and displays the local QR.
+- `/advertiser` and the old crypto billing API routes return 404.
+- A non-16:9 or disguised non-image upload is rejected before order creation.
+- Two visitors cannot reserve the same available slot concurrently.
+- An admin cannot make an order live before payment is manually verified.
+- A live order appears in public inventory and expires at its server-set `ends_at`.
+- A permitted test payment triggers the exact live-email subject in staging.
 
 ## D. Bunny Stream device uploads
 
@@ -821,10 +669,8 @@ prompt and validation), route: `/api/metadata/suggest`.
    - Go to **Webhooks** → **Add Webhook** → URL: `https://YOUR_DOMAIN/api/resend/webhook` (if you implement)
    - Resend docs: verify signatures via `svix` library — our code does not yet implement webhooks, but if you add, verify per current docs
 9. Test email flows:
-   - Sign up new advertiser — should receive verification email via Resend
    - Reset password — should receive reset email
-   - Create campaign — should receive submission confirmation (if you wire `sendEmail` in campaign creation)
-   - Payment confirmation — requires a real verified NOWPayments `finished` payment (see section C.9); an unsigned or hand-made IPN never confirms a payment, so use a genuine (smallest) payment or the automated tests instead
+   - Submit a guest ad, verify its payment manually, and make it live in staging — the advertiser should receive **Your ad is live! Erobabe**
    - Contact form — submit at `/contact`, check `support_tickets` table and email to support
    - Support ticket — similar
    - Content removal — submit at `/content-removal`, check `reports` table and ack email
@@ -869,7 +715,7 @@ prompt and validation), route: `/api/metadata/suggest`.
 **If using Fly.io:**
 ```bash
 fly launch --dockerfile Dockerfile (create Dockerfile for Next.js)
-fly secrets set NEXT_PUBLIC_SUPABASE_URL=... NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=... SUPABASE_SECRET_KEY=... NOWPAYMENTS_API_KEY=... NOWPAYMENTS_IPN_SECRET=... etc
+fly secrets set NEXT_PUBLIC_SUPABASE_URL=... NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=... SUPABASE_SECRET_KEY=... RESEND_API_KEY=... etc
 fly deploy
 ```
 
@@ -886,7 +732,7 @@ fly deploy
 3. **Verify HTTPS**: Hosting should auto-provision Let's Encrypt cert — check `https://YOUR_DOMAIN` loads with valid cert
 4. **Canonical domain**: Choose `https://erobabe.com` (no www) or `https://www.erobabe.com` — set `NEXT_PUBLIC_SITE_URL` to canonical, and configure redirect from non-canonical to canonical in hosting or Next.js config
 5. **Auth redirect URLs**: Update Supabase Auth URL Configuration to use production domain (see Supabase Setup step 3)
-6. **Callback endpoints**: `https://YOUR_DOMAIN/api/nowpayments/ipn` must be reachable via HTTPS and must answer HTTP 200 to a parameter-less GET (NOWPayments retries notifications that do not answer 200). It is public by design and excluded from the auth middleware, and every payment sends this URL as its `ipn_callback_url` — see section C.5.
+6. **Retired billing endpoints**: Old crypto checkout/IPN/status/reconciliation URLs must return 404. The PayPal QR flow has no callback endpoint; fulfilment is manually reviewed under **Admin → Ad Review**.
 7. **Sitemap**: `https://YOUR_DOMAIN/sitemap.xml` and `https://YOUR_DOMAIN/video-sitemap.xml` must be accessible
 
 ---
@@ -900,10 +746,6 @@ fly deploy
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Yes | Supabase Dashboard → Project Settings → API → Project URL | Hosting env, .env.local | dev, prod | `https://xxx.supabase.co` | Yes |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key (safe for browser with RLS) | Yes | Supabase Dashboard → API → Publishable key | Hosting env | dev, prod | Starts `sb_publishable_` | Yes |
 | `SUPABASE_SECRET_KEY` | Supabase secret key (service_role, bypasses RLS) — server only | No | Supabase Dashboard → API → Secret key | Hosting env secrets, Supabase Edge Functions secrets | prod | Never in client bundle, check server logs not exposed | Yes |
-| `NOWPAYMENTS_API_KEY` | NOWPayments API key (`x-api-key`) | No | NOWPayments Dashboard → Store Settings → API key | Hosting secrets | prod | Admin → System Health → NOWPayments panel shows API reachable; also used by `/api/nowpayments/create` and IPN corroboration | Yes |
-| `NOWPAYMENTS_IPN_CALLBACK_URL` | Optional pin for the IPN callback URL the app sends with every payment (must be an absolute URL ending in `/api/nowpayments/ipn`) | No | Your domain | Hosting env | prod (optional) | Admin → System Health shows `URL source`: `NOWPAYMENTS_IPN_CALLBACK_URL`; an invalid value is reported as a config warning and ignored | Yes |
-| `NOWPAYMENTS_DEFAULT_PAY_CURRENCY` | Default NOWPayments asset identifier | No | One of: usdterc20, usdttrc20, usdtbsc, usdtsol, btc, eth, trx, bnbbsc, sol | Hosting env | prod | Must be enabled in the NOWPayments dashboard; checkout validates every selection server-side | Yes |
-| `NOWPAYMENTS_IPN_SECRET` | IPN Secret Key for `x-nowpayments-sig` verification | No | NOWPayments Dashboard → Store Settings → IPN Secret Key | Hosting secrets | prod | Admin → System Health shows IPN secret set; every IPN is rejected without it | Yes |
 | `BUNNY_STREAM_LIBRARY_ID` | Selected Video Library ID | No | Stream → Library → API | Server env | uploads/playback | Section D | Yes |
 | `BUNNY_STREAM_API_KEY` | Selected Video Library API Key | No | Stream → Library → API | Hosting secrets | uploads | Section D staging upload test | Yes |
 | `CRON_SECRET` | Shared secret the publish scheduler presents to `/api/cron/bunny-publish` (auto-publish after encoding, without a browser) | No | Any long random string (`openssl rand -hex 32`) | Hosting secrets **and** the GitHub Actions secret of the same name | prod | Admin → System Health → "Background auto-publish" says "Scheduler can authenticate"; `curl -i -H "Authorization: Bearer $CRON_SECRET" https://your-domain/api/cron/bunny-publish` returns a JSON summary, not 401 | Yes |
@@ -916,7 +758,7 @@ fly deploy
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |
 
-**Security**: Never place `SUPABASE_SECRET_KEY`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET`, `BUNNY_STREAM_API_KEY`, `OPENROUTER_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
+**Security**: Never place `SUPABASE_SECRET_KEY`, `BUNNY_STREAM_API_KEY`, `OPENROUTER_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
 
 ---
 
@@ -935,13 +777,13 @@ npx playwright test
 ### Manual test cases
 
 **Authentication:**
-- [ ] Advertiser sign-up at `/auth/sign-up` → verification email received via Resend → verify → sign in → lands on `/advertiser`
+- [ ] Guest checkout at `/checkout?slot=1` loads without sign-in and never asks for an advertiser account
 - [ ] Sign in with wrong password → error shown
 - [ ] Sign out → session cleared, redirect to `/`
-- [ ] Access `/admin` as unauthenticated → redirect to sign-in
-- [ ] Access `/admin` as advertiser → redirect (403)
-- [ ] Access `/advertiser` data of another advertiser via direct API call → denied by RLS
-- [ ] Try to set `role=admin` from browser during sign-up → fails, role remains advertiser (check DB)
+- [ ] Access `/admin` as unauthenticated → redirect to staff sign-in
+- [ ] Access `/admin` as a non-admin → denied
+- [ ] `/advertiser` and `/auth/sign-up` return 404
+- [ ] Browser roles cannot read `ad_orders` or execute its service-only RPCs
 
 **Admin:**
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
@@ -960,42 +802,18 @@ npx playwright test
 - [ ] Logs at `/admin/logs` → shows real audit_logs
 - [ ] System health at `/admin/system-health` → shows real checks, Unknown if not configured, not hardcoded green
 
-**Advertiser:**
-- [ ] Slots at `/advertiser/slots` → shows 10 slots with real availability (checks active campaigns overlapping)
-- [ ] Try to reserve same slot overlapping period as another advertiser → 409 conflict (concurrency-safe)
-- [ ] Create campaign at `/advertiser/campaigns/new` → select one or multiple available slots, duration, destination URL, creative (JPG/PNG/GIF, ≤10 MB) → submit → one payment address returned for the selected slots
-- [ ] Payment request creation at `/api/nowpayments/create` → verifies session, trusted slot price, validates the asset/network against the server allowlist, prevents overlapping, creates the local payment + pending invoice, then creates the NOWPayments payment (`POST /v1/payment`) and returns address, crypto amount, asset, and network
-- [ ] Checkout UX: shows exact crypto amount, USD equivalent, asset, network, address, copy button, expiration, live status (polls `/api/nowpayments/status`, no page refresh needed), instructions for correct network
-- [ ] IPN reachability probe: `curl -i https://YOUR_DOMAIN/api/nowpayments/ipn` → HTTP 200 `{"status":"ok",…}` and no row written to `payments` / `payment_events`
-- [ ] Synthetic confirmation attempt (must NOT confirm): unsigned `POST /api/nowpayments/ipn` with `{"payment_id":"<real id>","payment_status":"finished"}` → HTTP 401, payment stays `awaiting_confirmation`, nothing written. Only a correctly signed IPN corroborated by `GET /v1/payment/{id}` as `finished` with a matching amount can move a payment to `confirmed`.
-- [ ] Provider-approved authorized staging test procedure (no live charge without separate explicit authorization): signed NOWPayments IPN arrives → payment `confirmed`, invoice paid, campaign `pending_review` or `active` if the creative is approved
-- [ ] Duplicate final IPN → `already_processed`, no duplicate ledger entries; exactly one `confirmed` event
-- [ ] Campaign approval: admin approves creative → campaign becomes active, appears on public site if slot active and schedule valid
-- [ ] Billing history at `/advertiser/payments` → real payments, no fake
-- [ ] Invoices at `/advertiser/invoices` → real invoices
-- [ ] Campaign expiration: after end_date, campaign should not show on public site
-- [ ] Profile at `/advertiser/profile` → real data, own only
-- [ ] Support ticket at `/advertiser/support` → persisted, email sent if Resend configured
-
-**NOWPayments IPN:**
-- [ ] Empty/parameter-less probe → 200 `{"status":"ok"}`, nothing written
-- [ ] Missing signature → 401, nothing written; malformed signature → 401
-- [ ] Tampered body with a stale signature → 401, payment untouched
-- [ ] Malformed JSON body → 401
-- [ ] Missing `NOWPAYMENTS_IPN_SECRET` on the server → 503 (fails closed), payment untouched
-- [ ] Unknown payment id/order reference → 200 `unknown_payment`, audit row written, not silently discarded
-- [ ] `finished` claim the payment API does not corroborate → recorded, never fulfilled
-- [ ] Intermediate statuses (`waiting`/`confirming`/`confirmed`/`sending`) → recorded as `awaiting_confirmation`/`partially_confirmed`, never paid — including provider `confirmed`
-- [ ] `partially_paid` → `underpaid` for manual review, campaigns not activated
-- [ ] Amount mismatch on a finished payment → `underpaid`/`overpaid`, not confirmed, audit row
-- [ ] Wrong order reference, pay currency, address, or USD price → rejected with the matching audit action
-- [ ] `failed`/`expired` → payment + invoice updated, pending campaigns cancelled
-- [ ] `refunded` after completion → payment `refunded`, invoice `refunded`, campaigns paused
-- [ ] Payment API unreachable during verification → HTTP 503 (NOWPayments retries), payment untouched
-- [ ] Repeated final IPN → `already_processed`, `confirmed` event exists exactly once
-- [ ] Out-of-order/stale intermediate after completion → ignored, terminal state kept
-- [ ] No API key, IPN secret, or wallet material appears in `payment_events`, `audit_logs`, or server logs
-- [ ] No API key, secret or wallet material appears in `payment_events`, `audit_logs` or server logs
+**Guest PayPal advertising:**
+- [ ] Click a vacant banner → direct `/checkout?slot=<id>` navigation, with no billing modal or account wall
+- [ ] Checkout is split between campaign/banner fields and the supplied PayPal QR
+- [ ] Real JPG/PNG, maximum 5 MB and exact 16:9 → accepted; disguised or other ratios → rejected
+- [ ] Client-supplied price/payment status is ignored; the RPC uses the slot price and creates `in_review` / `unverified`
+- [ ] Two submissions cannot reserve the same slot; an occupied slot reports unavailable
+- [ ] Submit → animated **In review** page → public homepage after five seconds
+- [ ] Admin verifies the receipt in the real PayPal account before **Confirm PayPal payment**
+- [ ] **Approve & make live** is blocked until payment verification, then starts the purchased duration
+- [ ] Going live sends **Your ad is live! Erobabe** through Resend; email failure is shown honestly and does not unpublish the ad
+- [ ] Live ads appear publicly and disappear after `ends_at`
+- [ ] Old advertiser, crypto checkout, IPN, status, and reconciliation routes return 404
 
 **Video hosting:**
 - [ ] Bunny device upload publishing, category/metadata/duplicate handling and required automatic thumbnails work with an active staging administrator
@@ -1008,8 +826,8 @@ npx playwright test
 - [ ] Resend domain verified (check Resend dashboard)
 - [ ] Auth verification email sent via Resend
 - [ ] Password reset email
-- [ ] Campaign submission confirmation (if wired)
-- [ ] Payment confirmation email (if wired)
+- [ ] Guest ad go-live email uses the exact subject **Your ad is live! Erobabe**
+- [ ] A Resend failure leaves the ad live and surfaces an admin warning
 - [ ] Support ticket notification
 - [ ] Removal request acknowledgement
 - [ ] Email delivery failure does not lose underlying request/payment/ticket — our code logs warning but persists
@@ -1024,8 +842,8 @@ npx playwright test
 - [ ] Sitemap XML valid: `https://YOUR_DOMAIN/sitemap.xml` — includes only eligible public URLs
 - [ ] Video sitemap entries match published DB records: `https://YOUR_DOMAIN/video-sitemap.xml` — includes thumbnail, title, description, player_loc, duration, publication_date
 - [ ] Removed/unpublished videos disappear from sitemap (publish then unpublish, check sitemap)
-- [ ] Private dashboard routes do not enter public sitemap (check sitemap does not contain /admin or /advertiser)
-- [ ] Robots rules do not block required public content — `robots.txt` allows `/video/` and thumbnails, disallows `/admin/`, `/advertiser/`, `/api/`
+- [ ] Private dashboard routes do not enter public sitemap (check sitemap does not contain `/admin`)
+- [ ] Robots rules allow public videos and thumbnails while disallowing `/admin/`, `/checkout`, and `/api/`
 - [ ] Missing video URLs return genuine 404 (not 200) — test `/video/nonexistent-slug`
 - [ ] Internal navigation uses crawlable `<a href>` links (check VideoCard uses `<a href="/video/...">`)
 - [ ] No placeholder videos or false SEO claims remain — search codebase for `pexels`, `mock`, `demo` in production
@@ -1041,24 +859,12 @@ npx playwright test
 2. Or revert migration via SQL: `drop table if exists ...` then re-apply previous migration
 3. Verify RLS policies still enabled
 
-**Payment callback issues:**
-1. Check `payment_events` for the payment (`ipn_received`, `verification_failed`, `verification_pending`, `amount_mismatch`, `payment_verified`, `confirmed`).
-2. Check `audit_logs` for `nowpayments_ipn_unknown_payment`, `nowpayments_ipn_unverified`,
-   `nowpayments_ipn_order_mismatch`, `nowpayments_ipn_currency_mismatch`,
-   `nowpayments_ipn_address_mismatch`, `nowpayments_ipn_price_mismatch`,
-   `nowpayments_ipn_amount_unverified`, `nowpayments_ipn_underpaid`, `nowpayments_ipn_overpaid`,
-   `nowpayments_ipn_partially_paid`.
-3. Use Admin → System Health → NOWPayments → **Test IPN reachability** to prove the URL answers 200.
-4. Only if NOWPayments itself reports the payment as `finished`
-   (`GET https://api.nowpayments.io/v1/payment/<payment_id>` with `NOWPAYMENTS_API_KEY`,
-   same address and amount),
-   reconcile manually:
-```sql
-update payments set status='confirmed', provider_status='finished', confirmed_at=now() where provider_payment_id='...';
-update invoices set status='paid', paid_at=now() where number='...';
-```
-   Record the reconciliation in `audit_logs` (action `payment_confirmed_manually`) — never
-   flip a payment to `confirmed` without that evidence.
+**Guest advertising fulfilment issues:**
+1. Inspect the `ad_orders` row and the actual PayPal receipt; never treat the visitor's Submit action or transaction-ID text as proof.
+2. Check `audit_logs` for `ad_order_verify_payment`, `ad_order_make_live`, or `ad_order_reject_ad` and confirm the acting admin.
+3. If the creative upload succeeded but reservation failed, remove the orphan object from `ad-creatives/orders/` after review.
+4. If the ad is live but email failed, fix Resend configuration and record the manual follow-up. Do not roll back a valid live placement solely because email delivery failed.
+5. Do not manually set `payment_status='verified'` or `status='live'`; use the admin RPC so slot occupancy, payment verification, schedule, and audit invariants hold.
 
 **Video hosting outage:**
 1. Check provider status page
@@ -1074,7 +880,7 @@ update invoices set status='paid', paid_at=now() where number='...';
 3. **Vercel Hobby**: Not suitable for commercial adult site. Hosting decision required — see `GO_LIVE_CHECKLIST.md`.
 4. **Age assurance**: Frontend gate alone not robust. Legal review required for jurisdiction-specific verification.
 5. **Legal identity**: Owner must provide real business details before publishing Terms/Privacy.
-5. **NOWPayments approval and wallet**: Owner must obtain written confirmation that NOWPayments permits this adult-entertainment business and its advertising use, then configure the payout wallet and enable the accepted coins.
+5. **PayPal destination**: Owner must confirm the QR resolves to the intended operational PayPal account and that the account may receive these advertising payments.
 6. **Resend domain**: Must verify DNS before emails deliver reliably.
 
 A successful build does NOT imply cleared for commercial launch.
@@ -1119,13 +925,13 @@ curl -i https://your-domain/api/cron/bunny-publish   # expect 401
 5. Set NEXT_PUBLIC_SITE_URL to the approved HTTPS domain. SITE_URL is not a runtime environment variable. Register `/auth/callback` and `/auth/callback?next=/auth/update-password` for both staging and production Auth redirect allowlists; test PKCE verification/recovery emails from a real inbox. Never use wildcard production redirects.
 6. Choose BUNNY_UPLOAD_MAX_BYTES to match operational/provider budget; server and browser validate declared size. Confirm provider-side enforcement of actual bytes separately. Signed TUS authorization currently lasts 24h; previously issued credentials cannot be instantly revoked merely by suspending the app account. Document provider/key-revocation incident procedure.
 7. Configure a dedicated random ANALYTICS_HASH_SECRET (server-only, preferably 32+ random bytes). The service credential is a fallback. The trusted reverse proxy **must overwrite x-real-ip**. Without a trusted client IP, fallback clients share an abuse budget. Bot/WAF and multi-instance acceptance are launch gates, not supplied by browser events. Schedule `select public.prune_measured_events();` daily under a service/DB operator identity: 7-day pseudonymous events, 2-day rate-key retention. Campaign totals remain after pruning. Impressions mean loaded creative >=50% visible for 1s in a foreground tab; watch-page views mean 5 foreground seconds, not proven playback. Counts are deduplicated (ad type/campaign/creative/visitor/hour; video/visitor/day) and not independently audited human traffic.
-8. Pending checkout recovery: **do not create a second provider request after a timeout**. The local invoice/order and claimed campaigns exist before the provider call. In Admin → Payments, locate that exact invoice in NOWPayments and enter its real provider payment ID under Recover missing provider reference. The server re-fetches and compares order/asset/fiat identity before binding, then runs normal verification. A late payment after hold expiry is recorded paid but its campaign stays cancelled, requiring a reviewed refund/rebooking decision. Failed/expired/refunded outcomes atomically update invoices/campaigns. Do not fix mismatches by manually setting `payments.status='confirmed'`.
+8. Guest checkout recovery: inspect the `ad_orders` row and the actual PayPal receipt before taking action. Do not create a duplicate order to retry moderation. Use **Admin → Ad Review** so verification, go-live, slot occupancy, and audit updates stay atomic. Historical provider recovery SQL remains only for legacy records and has no active application endpoint.
 9. The ad-creatives bucket is provisioned with image MIME/10MB limits. Browser object overwrite/deletion is denied; creative edits must submit new media for review. Pending assets in this public bucket are accessible by exact object URL; select/implement private premoderation storage if required by your content/data policy before accepting untrusted uploads. MIME declarations alone are not byte-level content scanning.
 10. Catalog deletion now creates a durable **media_retention** record (visible in System Health) in the same transaction. Review legal retention/backups, match provider/library/GUID to the deleted catalog record, and obtain two-person deletion approval. Retain or delete the exact remote object in the provider dashboard; verify provider outcome independently, then update that queue row to `retained` or `deleted` with `reviewed_at=now()` and record the change ticket in the operator audit. Never bulk-delete by title or erase the queue to hide billing inventory. No remote deletions were made in this audit.
 11. Roll back application code only with compatible schema permissions; do **not** restore permissive advertiser RLS to make old checkout code work. A failed migration transaction rolls back itself. For post-rollout issues, disable writes and use forward fixes; database restore is a separately approved disaster-recovery operation, tested on staging first.
 
 
-## October 15 payment-recovery follow-up — mandatory
+## Historical October 15 payment-recovery follow-up — legacy records only
 
 - Apply **00000000000018_payment_recovery.sql** after 14–17, in the same controlled maintenance window as the matching application. It replaces the four-argument `bind_nowpayment` with a five-argument version requiring the authenticated active admin ID. Old recovery handlers deliberately cannot bind through the removed signature; do not roll back the application alone and assume recovery is compatible.
 - The RPC row-locks the payment, validates bounded positive decimal amounts, rejects replacement identities/addresses/amounts, and atomically records the recovering actor in `payment_events` and `audit_logs`. Repeating the same valid reference is harmless, including after settlement. Recovery **does not itself mark a payment paid**.

@@ -14,7 +14,6 @@ import {
   Tag,
   UploadCloud,
   Users,
-  UsersRound,
 } from "lucide-react";
 import DashboardNav from "@/src/components/DashboardNav";
 const items = [
@@ -39,11 +38,10 @@ const items = [
       { href: "/admin/ad-slots", label: "Ad Slots", icon: PanelsTopLeft },
       {
         href: "/admin/advertisements",
-        label: "Ads & Creatives",
+        label: "Ad Review",
         icon: Megaphone,
       },
-      { href: "/admin/campaigns", label: "Campaigns", icon: Radio },
-      { href: "/admin/advertisers", label: "Advertisers", icon: UsersRound },
+      { href: "/admin/campaigns", label: "Legacy Campaigns", icon: Radio },
     ],
   },
   { href: "/admin/payments", label: "Payments", icon: CreditCard },

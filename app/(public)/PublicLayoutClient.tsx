@@ -8,6 +8,7 @@ import AgeGate from "@/src/components/AgeGate";
 import { useRouter, usePathname } from "next/navigation";
 
 interface ActiveCampaign {
+  campaign_id?: string;
   slot_id: number;
   creative: {
     id: string;
@@ -53,8 +54,8 @@ export default function PublicLayoutClient({
    *
    * The public pages deliberately skip the middleware session refresh so
    * navigation stays instant, so the header resolves the account itself: a
-   * signed-in advertiser (or admin) is offered their dashboard instead of a
-   * "Sign in" button. A missing or failing Supabase configuration is not an
+   * signed-in admin is offered the staff dashboard instead of a "Sign in"
+   * button. A missing or failing Supabase configuration is not an
    * error here — the header simply stays signed out.
    */
   useEffect(() => {
@@ -160,7 +161,7 @@ export default function PublicLayoutClient({
 
   return (
     <div className="grid h-screen grid-cols-1 bg-void text-ink min-[1000px]:grid-cols-[minmax(0,1fr)_minmax(0,3fr)_minmax(0,1fr)]">
-      <AdRail side="left" start={1} onAdvertise={() => router.push("/advertiser")} activeCampaigns={activeCampaigns} />
+      <AdRail side="left" start={1} activeCampaigns={activeCampaigns} />
 
       <main className="no-scrollbar @container relative h-screen min-h-0 min-w-0 overflow-y-auto bg-panel">
         <Header
@@ -183,12 +184,12 @@ export default function PublicLayoutClient({
         <Footer
           onNavigate={navigate}
           onOpenPage={(p) => router.push(p === "removal" ? "/content-removal" : `/${p}`)}
-          onAdvertise={() => router.push("/advertiser")}
+          onAdvertise={() => router.push("/checkout")}
           useLinks
         />
       </main>
 
-      <AdRail side="right" start={6} onAdvertise={() => router.push("/advertiser")} activeCampaigns={activeCampaigns} />
+      <AdRail side="right" start={6} activeCampaigns={activeCampaigns} />
       <AgeGate />
     </div>
   );

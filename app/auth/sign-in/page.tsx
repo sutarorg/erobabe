@@ -15,7 +15,7 @@ function SignInForm() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const next = searchParams.get("next") || "/advertiser";
+  const next = searchParams.get("next") || "/";
 
   const handleSignIn = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -32,7 +32,7 @@ function SignInForm() {
     if (profile?.role === "admin") {
       router.push(next.startsWith("/admin") ? next : "/admin");
     } else {
-      router.push(next.startsWith("/advertiser") ? next : "/advertiser");
+      router.push("/");
     }
   };
 
@@ -40,7 +40,7 @@ function SignInForm() {
     <div className="w-full max-w-sm rounded-xl border border-white/10 bg-pcard/90 p-6 shadow-[0_24px_90px_rgba(0,0,0,0.5)] backdrop-blur-xl">
       <img src="https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png" alt="erobabe" className="h-8 w-auto" />
       <h1 className="mt-4 text-[18px] font-semibold">Sign in</h1>
-      <p className="mt-1 text-[12px] text-ink-3">Access advertiser portal</p>
+      <p className="mt-1 text-[12px] text-ink-3">Sign in to your erobabe account</p>
 
       <form onSubmit={handleSignIn} className="mt-6 space-y-4">
         <label className="block">
@@ -84,8 +84,7 @@ function SignInForm() {
         </button>
       </form>
 
-      <div className="mt-4 flex justify-between text-[11px]">
-        <Link href="/auth/sign-up" className="text-accent hover:underline">Create advertiser account</Link>
+      <div className="mt-4 flex justify-end text-[11px]">
         <Link href="/auth/reset" className="text-ink-3 hover:text-ink">Forgot password?</Link>
       </div>
     </div>

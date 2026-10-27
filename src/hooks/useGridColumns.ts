@@ -1,9 +1,30 @@
 "use client";
 import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 
-/** Every video section is exactly four rows tall. */
+/** Desktop video sections are four rows tall; mobile sections are two. */
 export const GRID_ROWS = 4;
+export const MOBILE_GRID_ROWS = 2;
 export const MAX_GRID_COLUMNS = 4;
+
+/** Shared responsive row count for every fixed video shelf. */
+export function useResponsiveGridRows(): number {
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(query.matches);
+    update();
+    if (typeof query.addEventListener === "function") {
+      query.addEventListener("change", update);
+      return () => query.removeEventListener("change", update);
+    }
+    query.addListener(update);
+    return () => query.removeListener(update);
+  }, []);
+
+  return isMobile ? MOBILE_GRID_ROWS : GRID_ROWS;
+}
 
 /** Comfortable minimum card width and the grid's horizontal gap, in px. */
 const MIN_CARD_WIDTH = 168;

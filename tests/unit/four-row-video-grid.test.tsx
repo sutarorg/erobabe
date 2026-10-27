@@ -57,6 +57,22 @@ describe("four-row video sections", () => {
     expect(disconnect).toHaveBeenCalled();
   });
 
+  it("uses two rows on mobile, including after a container resize", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
+    width = 350;
+    const { container } = render(<FourRowVideoGrid>{cards()}</FourRowVideoGrid>);
+    expect(container.querySelector(".video-grid")).toHaveAttribute("data-grid-rows", "2");
+    expect(screen.getAllByRole("link")).toHaveLength(4);
+
+    act(() => { width = 600; onResize(); });
+    expect(screen.getAllByRole("link")).toHaveLength(6);
+    expect(container.querySelector(".video-grid")).toHaveAttribute("data-grid-rows", "2");
+  });
+
   it("does not duplicate cards when fewer videos are available", () => {
     render(<FourRowVideoGrid>{cards(3)}</FourRowVideoGrid>);
     expect(screen.getAllByRole("link")).toHaveLength(3);
