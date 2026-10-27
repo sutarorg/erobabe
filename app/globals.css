@@ -108,10 +108,12 @@ body {
 /* ------------------------------------------------------------------ */
 /* Video grids                                                         */
 /* ------------------------------------------------------------------ */
+/* Mobile-first: one video per row. A measured grid replaces this inline with
+   `grid-template-columns` as soon as the container can hold more columns. */
 .video-grid {
   display: grid;
   gap: 1.25rem 0.875rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @keyframes eb-fade {

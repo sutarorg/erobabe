@@ -31,9 +31,11 @@ export function isDamplipsMediaUrl(url: string): boolean {
 /**
  * A damplips post page (`/p/<id>/`) is an HTML document, not a video file.
  *
- * Some imports stored that page in `playable_url`; handing it to a `<video>`
- * element only ever produced "the video could not be loaded", so it is played
- * as an embed instead.
+ * Some imports stored that page in `playable_url`. Handing it straight to a
+ * `<video>` element only ever produced "the video could not be loaded", so the
+ * player sends it to the stream proxy instead: the proxy reads the page, takes
+ * the media URL the page itself advertises, and streams that. Either way the
+ * video plays in our own player, never inside damplips' page.
  */
 export function isDamplipsPostPage(url: string): boolean {
   try {
@@ -45,14 +47,17 @@ export function isDamplipsPostPage(url: string): boolean {
 }
 
 /**
- * Same-origin URL that streams a damplips file through our route.
+ * Same-origin URL that streams a media destination through our route.
  *
  * damplips signs/referer-checks its media, so the browser asks our proxy and
  * the proxy asks damplips with the origin the file expects.
  */
-export function damplipsProxyUrl(url: string): string {
+export function streamProxyUrl(url: string): string {
   return `/api/videos/stream?src=${encodeURIComponent(url)}`;
 }
+
+/** Kept as the name the rest of the player and its tests use. */
+export const damplipsProxyUrl = streamProxyUrl;
 
 function safeUrl(raw: string | null | undefined, allowedProtocols: RegExp): URL | null {
   if (!raw) return null;
@@ -97,14 +102,18 @@ export function selectPlaybackSource(
   const direct = safeUrl(playableUrl, /^https?:$/);
   if (direct) {
     if (isRetiredMediaHost(direct)) return { kind: "unsupported" };
-    // A post page saved as a "file" is an embed, not a source for `<video>`.
-    if (isDamplipsPostPage(direct.toString())) return { kind: "embed", url: direct.toString() };
+    // A post page stored as a "file" is resolved to real media by the stream
+    // proxy, so it is still a direct source for our own player.
     return { kind: "direct", url: direct.toString() };
   }
 
   const embed = safeUrl(embedUrl, /^https?:$/);
   if (embed && !isRetiredMediaHost(embed)) {
-    if (isDamplipsMediaUrl(embed.toString())) return { kind: "embed", url: embed.toString() };
+    // damplips never allows its pages to be framed, and its post pages are
+    // resolvable to a real file: play those in our player through the proxy.
+    if (isDamplipsMediaUrl(embed.toString())) {
+      return { kind: "direct", url: embed.toString() };
+    }
     if (isApprovedNonDamplipsEmbed(embed)) return { kind: "embed", url: embed.toString() };
     return { kind: "unsupported" };
   }

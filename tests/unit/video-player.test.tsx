@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import VideoPlayer, { playbackCandidates } from "@/src/components/VideoPlayer";
 
@@ -46,22 +47,21 @@ describe("video player", () => {
     expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
   });
 
-  it("frames a damplips embed page in the restrictive sandbox", () => {
+  it("plays a damplips post page in our own player instead of framing it", () => {
+    // damplips refuses to be framed and its post page is not media; the proxy
+    // resolves the page to the file it advertises, so the visitor stays here.
+    const post = "https://www.damplips.com/p/67284/";
     const { container } = render(
-      <VideoPlayer
-        {...props}
-        provider="damplips"
-        embedUrl="https://www.damplips.com/p/67284/"
-      />,
+      <VideoPlayer {...props} provider="damplips" embedUrl={post} />,
     );
-    const frame = container.querySelector("iframe")!;
-    expect(frame).toHaveAttribute("src", "https://www.damplips.com/p/67284/");
-    expect(frame).toHaveAttribute(
-      "sandbox",
-      "allow-scripts allow-same-origin allow-forms allow-presentation",
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("video")).toHaveAttribute(
+      "src",
+      `/api/videos/stream?src=${encodeURIComponent(post)}`,
     );
-    expect(frame).toHaveAttribute("allowfullscreen");
-    expect(container.querySelector("video")).toBeNull();
+    expect(playbackCandidates(post)).toEqual([
+      `/api/videos/stream?src=${encodeURIComponent(post)}`,
+    ]);
   });
 
   it("shows a message instead of a player for retired sources", () => {
@@ -207,6 +207,43 @@ describe("video player", () => {
     fireEvent.error(container.querySelector("video")!);
     fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
     expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
+  });
+
+  it("retries a source the element cannot decode as an HLS playlist", async () => {
+    // Playlists are not always named `.m3u8`. When the element says the source
+    // is undecodable, hls.js gets a turn at the very same URL before the
+    // destination is abandoned.
+    const { container } = render(
+      <VideoPlayer {...props} playableUrl="https://cdn.example.com/playlist" />,
+    );
+    const video = container.querySelector("video")!;
+    Object.defineProperty(video, "error", { value: { code: 4 }, configurable: true });
+
+    fireEvent.error(video);
+
+    const retried = container.querySelector("video")!;
+    expect(retried).not.toBe(video);
+    // hls.js feeds the element a MediaSource, so it carries no src of its own.
+    expect(retried).not.toHaveAttribute("src");
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // jsdom has no Media Source Extensions, so nothing can play this source and
+    // the visitor is told once everything has been tried.
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Retry playback" })).toBeInTheDocument();
+  });
+
+  it("does not spend an HLS attempt on a plain network failure", () => {
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+    const video = container.querySelector("video")!;
+    Object.defineProperty(video, "error", { value: { code: 2 }, configurable: true });
+
+    fireEvent.error(video);
+
+    // Straight to the next destination, still with a src.
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
   });
 
   it("offers exactly one destination for a non-damplips file", () => {

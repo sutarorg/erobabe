@@ -39,7 +39,7 @@ export default function PaginatedLatestFeed({ initialVideos, initialCursor }: { 
   }, [load, done, error]);
 
   return <>
-    <div className="mt-6 grid grid-cols-2 gap-4 @md:grid-cols-3 @lg:grid-cols-4">
+    <div className="mt-6 grid grid-cols-1 gap-4 @md:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4">
       {videos.map((video) => <PublicVideoCard key={video.id} video={video} />)}
     </div>
     <div ref={sentinel} className="flex min-h-16 flex-col items-center justify-center py-5 text-center text-[12px] text-ink-3">

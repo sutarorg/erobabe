@@ -117,6 +117,117 @@ describe("GET /api/videos/stream", () => {
     expect(body).toContain(proxied("https://video.damplips.com/videos/67284/segment-2.ts"));
   });
 
+  it("proxies a playlist segment that lives on a media CDN, with a signature", async () => {
+    // damplips playlists routinely name their segments on a CDN host. Leaving
+    // that URI bare would make the browser fetch it directly and fail on CORS
+    // or hotlink protection — the "video could not be loaded" bug.
+    const playlistUrl = "https://video.damplips.com/videos/67284/index.m3u8";
+    const cdnSegment = "https://media-cdn.example.net/67284/seg-1.ts";
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        ["#EXTM3U", "#EXTINF:10.0,", cdnSegment, "#EXT-X-ENDLIST"].join("\n"),
+        { status: 200, headers: { "content-type": "application/vnd.apple.mpegurl" } },
+      ),
+    );
+
+    const body = await (
+      await GET(new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(playlistUrl)}`))
+    ).text();
+
+    expect(body).not.toContain(`\n${cdnSegment}`);
+    const line = body.split("\n").find((entry) => entry.includes("media-cdn.example.net"));
+    expect(line).toBeDefined();
+    const segmentRequest = new URL(line!, "https://erobabe.test");
+    expect(segmentRequest.pathname).toBe("/api/videos/stream");
+    expect(segmentRequest.searchParams.get("src")).toBe(cdnSegment);
+    expect(segmentRequest.searchParams.get("t")).toBeTruthy();
+  });
+
+  it("serves a signed CDN segment, and refuses the same URL without its signature", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(["#EXTM3U", "https://media-cdn.example.net/67284/seg-2.ts"].join("\n"), {
+        status: 200,
+        headers: { "content-type": "application/vnd.apple.mpegurl" },
+      }),
+    );
+    const playlistUrl = "https://video.damplips.com/videos/67285/index.m3u8";
+    const body = await (
+      await GET(new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(playlistUrl)}`))
+    ).text();
+    const line = body.split("\n").find((entry) => entry.startsWith("/api/videos/stream"))!;
+
+    const signed = await GET(new NextRequest(`https://erobabe.test${line}`, { headers: { range: "bytes=0-3" } }));
+    expect(signed.status).toBe(206);
+
+    const unsigned = await GET(
+      new NextRequest(
+        `https://erobabe.test/api/videos/stream?src=${encodeURIComponent("https://media-cdn.example.net/67284/seg-2.ts")}`,
+      ),
+    );
+    expect(unsigned.status).toBe(403);
+  });
+
+  it("refuses a signature minted for a different URL", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(["#EXTM3U", "https://media-cdn.example.net/67284/seg-3.ts"].join("\n"), {
+        status: 200,
+        headers: { "content-type": "application/vnd.apple.mpegurl" },
+      }),
+    );
+    const playlistUrl = "https://video.damplips.com/videos/67286/index.m3u8";
+    const body = await (
+      await GET(new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(playlistUrl)}`))
+    ).text();
+    const token = new URL(body.split("\n").find((entry) => entry.startsWith("/api/videos/stream"))!, "https://erobabe.test")
+      .searchParams.get("t")!;
+
+    const hijacked = await GET(
+      new NextRequest(
+        `https://erobabe.test/api/videos/stream?src=${encodeURIComponent("https://media-cdn.example.net/other.ts")}&t=${encodeURIComponent(token)}`,
+      ),
+    );
+    expect(hijacked.status).toBe(403);
+  });
+
+  it("resolves a damplips post page into the media file it advertises", async () => {
+    // A row whose `playable_url` is the HTML post page still plays in our own
+    // player: the proxy reads the page and streams the file it names.
+    const postPage = "https://www.damplips.com/p/67300/";
+    const file = "https://video.damplips.com/videos/67300.mp4";
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        '<!DOCTYPE html><html><head><meta property="og:video" content="' + file + '" /></head><body></body></html>',
+        { status: 200, headers: { "content-type": "text/html; charset=utf-8" } },
+      ),
+    );
+    fetchMock.mockResolvedValueOnce(mediaResponse());
+
+    const response = await GET(
+      new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(postPage)}`),
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-type")).toBe("video/mp4");
+    expect(String(fetchMock.mock.calls[1][0])).toBe(file);
+    // The page itself was never handed to the player.
+    expect(await response.text()).not.toContain("<!DOCTYPE");
+  });
+
+  it("reports a post page that publishes no playable file", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("<!DOCTYPE html><html><body>removed</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    const response = await GET(
+      new NextRequest(
+        `https://erobabe.test/api/videos/stream?src=${encodeURIComponent("https://www.damplips.com/p/67301/")}`,
+      ),
+    );
+    expect(response.status).toBe(502);
+  });
+
   it("refuses a request without a src", async () => {
     const response = await GET(new NextRequest("https://erobabe.test/api/videos/stream"));
     expect(response.status).toBe(400);
