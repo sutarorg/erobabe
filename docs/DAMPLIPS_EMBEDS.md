@@ -182,11 +182,67 @@ Tailwind-driven listings use) a shelf is a single column, above it 2–4 whole
 columns fit. The class-driven listings use
 `grid-cols-1 @md:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4`, so measured
 shelves and class-driven pages switch together. A caller-supplied `columnCount`
-(Up Next) is a **cap**, never a way to force two cards into a phone. The watch
-player uses `preload="auto"` for immediate native buffering, and its recommendation
-sections stream independently behind a fallback so they do not hold up the player.
-The browser still chooses how much media to buffer; `auto` can use more data than
-metadata-only loading, which is the deliberate tradeoff for fast playback.
+(Up Next) is a **cap**, never a way to force two cards into a phone.
+
+Shelf sizing lives in `lib/public/shelf.ts` so the server queries and the
+client grids use the same numbers:
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `MOBILE_SHELF_LIMIT` | 10 | videos a phone shows in one recommendation/latest/featured shelf |
+| `SHELF_VIDEO_LIMIT` | 16 | videos a wide panel can show — four rows of four — and the size every feed request asks for |
+| `UP_NEXT_VIDEO_LIMIT` | 8 | cards (and impressions) for the decorative two-column Up Next shelf |
+
+Asking for `SHELF_VIDEO_LIMIT` means a desktop shelf is never padded with a
+partial row, while a phone still renders exactly the first ten cards. The
+homepage requests **featured** and **recommended** at that limit, and any shelf
+that comes back short is topped up from the public catalog: newest published
+videos first, then the most-viewed ones (`getPopularVideos`), deduplicated by
+slug. A shelf therefore fills up even when the hero carousel and Latest have
+already claimed every recently published row, and it never repeats a card within
+one shelf. A search result page uses the same catalog but its own layout.
+
+## Player buffering
+
+- The player is the first thing the watch page renders. A direct file is
+  server-rendered as `<video src=… preload="auto">`, so the browser's preload
+  scanner starts fetching media while the document is still parsing — before
+  React hydrates and without waiting for recommendations.
+- A playlist (`.m3u8`, or a file the browser cannot decode) starts on `hls.js`,
+  but a browser that can play HLS itself — Safari and every iOS browser, where
+  Media Source Extensions do not exist — is detected with `canPlayType` before
+  the `hls.js` chunk is imported. The element then streams the playlist
+  directly, which is both the first byte and the only working path on iOS.
+- The watch page emits a `preconnect` for a directly contacted media host (the
+  damplips stream proxy is same-origin, so it needs none), a `preconnect` for an
+  embed host, and a high-priority `preload` of the poster whenever a poster is
+  shown. An embed is mounted with `loading="eager"`; no poster is fetched for it.
+- The browser still chooses how much media to buffer; `auto` can use more data
+  than metadata-only loading, which is the deliberate tradeoff for fast
+  playback.
+
+## Streaming recommendations
+
+The watch page fetches its video row once (`cache()` around the query, shared
+with `generateMetadata`), streams the player and metadata, and then streams each
+recommendation shelf in **its own `Suspense` boundary**: More like this,
+Recommended for you / Discover videos, Most Liked, and Top Categories. A slow
+ranking query therefore delays only its own skeleton (labelled
+`Loading <shelf>`), never the player or the other shelves. Every feed request
+asks for `SHELF_VIDEO_LIMIT`; More like this starts from the current category and
+asks the ranked feed only when that category is too small to fill a shelf.
+
+## Latest feed batching
+
+`src/components/LatestVideoFeed.tsx` pages `/api/videos/feed` with the
+timestamp/id cursor and loads **two shelves per request**: `columns × rows × 2`,
+never less than two phone screens (`LATEST_FEED_MIN_BATCH`, 20) and never more
+than the route accepts (24). The first request is sent before the grid has been
+measured, so the minimum keeps a phone from needing a second request after its
+first screenful. The IntersectionObserver sentinel uses a `2400px` root margin —
+the next batch is requested about two screens before it is seen — and duplicate
+rows are dropped as batches arrive. A spinner marks the fetch; the manual
+retry button appears only after a failure.
 
 ## Operational notes
 

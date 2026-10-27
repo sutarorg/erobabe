@@ -8,10 +8,21 @@ import { useEffect, useLayoutEffect, useState, type CSSProperties, type RefObjec
  */
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
-/** Desktop video sections are four rows tall; mobile sections show ten videos. */
-export const GRID_ROWS = 4;
-export const MOBILE_GRID_ROWS = 10;
-export const MAX_GRID_COLUMNS = 4;
+// Sizing constants live in `lib/public/shelf.ts` so server pages can size their
+// queries with the same numbers this hook renders with.
+export {
+  GRID_ROWS,
+  MOBILE_GRID_ROWS,
+  MAX_GRID_COLUMNS,
+  MOBILE_SHELF_LIMIT,
+  SHELF_VIDEO_LIMIT,
+  UP_NEXT_VIDEO_LIMIT,
+} from "@/lib/public/shelf";
+import {
+  GRID_ROWS,
+  MAX_GRID_COLUMNS,
+  MOBILE_GRID_ROWS,
+} from "@/lib/public/shelf";
 
 /**
  * Below this container width a video section is a single column.

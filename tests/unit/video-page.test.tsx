@@ -1,6 +1,9 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { Children, isValidElement } from "react";
+import { getRecommendationFeed } from "@/lib/recommendations/service";
+import { SHELF_VIDEO_LIMIT } from "@/lib/public/shelf";
 
 const DAY = 86_400_000;
 
@@ -10,8 +13,12 @@ const VIDEO_ROW = {
   title: "Midnight Velvet",
   description: "A hand-picked premium scene.",
   thumbnail_url: "https://cdn.example.com/thumb.jpg",
-  playable_url: null,
+  playable_url: "https://cdn.example.com/media.mp4",
   embed_url: null,
+  provider: "damplips",
+  provider_file_id: "67284",
+  source_name: "damplips",
+  source_url: "https://www.damplips.com/p/67284/",
   duration_seconds: 512,
   quality: "4K",
   view_count: 12_480,
@@ -44,6 +51,37 @@ vi.mock("@/lib/supabase/server", () => ({
 
 vi.mock("@/lib/public/catalog", () => ({ getPublicCategories: async () => [] }));
 
+/**
+ * One feed item per surface. Built by a hoisted helper because `vi.mock` runs
+ * above the fixtures in this file.
+ */
+const feedFactory = vi.hoisted(() => (surface: string) => ({
+  videos: [
+    {
+      id: `${surface}-1`,
+      slug: `${surface}-1`,
+      title: `${surface} video`,
+      description: null,
+      thumbnail_url: null,
+      duration_seconds: null,
+      view_count: 0,
+      published_at: null,
+      quality: null,
+      category_label: null,
+      category_slug: null,
+    },
+  ],
+  cursor: null,
+  personalized: false,
+  correlationId: `${surface}-correlation`,
+  algorithmVersion: "erobabe-rec-v1",
+}));
+
+vi.mock("@/lib/recommendations/service", () => ({
+  latestRecommendations: vi.fn(async () => ({ videos: [], cursor: null })),
+  getRecommendationFeed: vi.fn(async ({ surface }: { surface: string }) => feedFactory(surface)),
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
   notFound: () => {
@@ -66,6 +104,27 @@ async function renderSuggestions() {
   });
   return renderToStaticMarkup(section);
 }
+
+/** Titles of the Suspense boundaries a page tree streams in. */
+function suspenseFallbackTitles(node: unknown, titles: string[] = []): string[] {
+  if (!isValidElement(node)) return titles;
+  const element = node as { type?: unknown; props?: Record<string, any> };
+  if (element.type === Symbol.for("react.suspense")) {
+    const title = element.props?.fallback?.props?.title;
+    if (typeof title === "string") titles.push(title);
+  }
+  Children.forEach(element.props?.children, (child) =>
+    suspenseFallbackTitles(child, titles),
+  );
+  return titles;
+}
+
+beforeEach(() => {
+  vi.mocked(getRecommendationFeed).mockReset();
+  vi.mocked(getRecommendationFeed).mockImplementation(
+    async ({ surface }: { surface: string }) => feedFactory(surface) as any,
+  );
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -130,6 +189,71 @@ describe("/video/[slug] watch page", () => {
     ]);
     expect(mobileCards.at(-1)?.getAttribute("href")).toBe("/categories");
     expect(html).not.toContain("overflow-x-auto");
+  });
+
+  it("renders the buffering player before any recommendation shelf", async () => {
+    const html = await renderPage();
+    const player = html.indexOf("<video");
+    expect(player).toBeGreaterThan(-1);
+    // Native buffering starts from the server-rendered markup.
+    expect(html).toContain('preload="auto"');
+    // Each shelf is streamed behind its own skeleton, and all of them come
+    // after the player.
+    for (const shelf of ["More like this", "Recommended for you", "Most Liked", "Top Categories"]) {
+      expect(html).toContain(`aria-label=\"Loading ${shelf}\"`);
+      expect(html.indexOf(`Loading ${shelf}`)).toBeGreaterThan(player);
+    }
+  });
+
+  it("streams every watch-page shelf behind its own Suspense boundary", async () => {
+    const element = await (VideoPage as any)({
+      params: Promise.resolve({ slug: "midnight-velvet" }),
+    });
+    expect(suspenseFallbackTitles(element)).toEqual([
+      "More like this",
+      "Recommended for you",
+      "Most Liked",
+      "Top Categories",
+    ]);
+  });
+
+  it("lets one shelf render while another feed is still loading", async () => {
+    vi.mocked(getRecommendationFeed).mockImplementation(
+      async ({ surface }: { surface: string }) =>
+        (surface === "recommended"
+          ? new Promise(() => undefined)
+          : feedFactory(surface)) as any,
+    );
+
+    // The Recommended feed never resolves; Most Liked still renders alone.
+    const section = await watchPage.MostLiked({
+      video: { ...VIDEO_ROW, id: "vid-1", category_id: "category-1" },
+    });
+    const html = renderToStaticMarkup(section);
+    expect(html).toContain("Most Liked");
+    expect(html).not.toContain("Discover videos");
+    expect(getRecommendationFeed).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: "most_liked", limit: SHELF_VIDEO_LIMIT }),
+    );
+  });
+
+  it("asks every watch-page feed for a full wide shelf", async () => {
+    await renderSuggestions();
+    const calls = vi.mocked(getRecommendationFeed).mock.calls.map((call) => call[0]);
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          surface: "recommended",
+          currentVideoId: "vid-1",
+          limit: SHELF_VIDEO_LIMIT,
+        }),
+        expect.objectContaining({
+          surface: "most_liked",
+          currentVideoId: "vid-1",
+          limit: SHELF_VIDEO_LIMIT,
+        }),
+      ]),
+    );
   });
 
   it("renders Like and Share buttons", async () => {
