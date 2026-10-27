@@ -50,7 +50,7 @@ function eligibleQuery(db: Db, select = "*") {
   let query: any = db.from("videos").select(select).eq("requires_reupload", false);
   for (const [column, value] of ELIGIBLE) query = query.eq(column, value);
   // Publicly discoverable rows need an actual playback identity, not merely metadata.
-  query = query.or("playable_url.not.is.null,embed_url.not.is.null,and(provider.eq.bunny,provider_file_id.not.is.null,bunny_library_id.not.is.null)");
+  query = query.or("playable_url.not.is.null,embed_url.not.is.null");
   return query;
 }
 
@@ -76,7 +76,7 @@ function mapCandidate(row: any): RecommendationCandidate & PublicVideo & { reaso
   };
 }
 
-const VIDEO_SELECT = "id,slug,title,description,thumbnail_url,duration_seconds,quality,view_count,like_count,published_at,category_id,playable_url,embed_url,provider,provider_file_id,bunny_library_id,category:categories(label,slug)";
+const VIDEO_SELECT = "id,slug,title,description,thumbnail_url,duration_seconds,quality,view_count,like_count,published_at,category_id,playable_url,embed_url,provider,provider_file_id,category:categories(label,slug)";
 
 async function querySource(db: Db, build: (query: any) => any): Promise<any[]> {
   try {

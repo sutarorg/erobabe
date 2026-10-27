@@ -1,5 +1,10 @@
 # Erobabe production audit — 2026-10-14
 
+> **Historical document (superseded 2026-10-27).** Video uploads and Bunny
+> Stream are retired. This file is kept for provenance; read
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
+> `npm run import:damplips`, `/api/videos/stream`).
+
 ## Scope and release decision
 
 **Release held.** This is implementation plus local verification, not a declaration that all acceptance criteria are complete. Fetched `origin/main` before edits: `fe46b33460d83a86cf9af44a251284067ce86b05`, unchanged from the supplied baseline. Work remains on `arena/0a9f0b83-erobabe`.

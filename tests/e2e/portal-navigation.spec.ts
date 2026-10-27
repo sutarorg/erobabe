@@ -4,7 +4,7 @@ let bundle: string;
 test.beforeAll(async () => {
   const result = await build({
     stdin: {
-      contents: `import React from 'react';import {createRoot} from 'react-dom/client';import AdminNav from './app/admin/(dashboard)/AdminNav';import PortalSidebar from './src/components/PortalSidebar';window.fixturePath='/admin/videos/upload';const root=createRoot(document.getElementById('root'));window.draw=()=>root.render(<PortalSidebar portal="Admin" email="fixture@example.com"><AdminNav/></PortalSidebar>);window.draw();`,
+      contents: `import React from 'react';import {createRoot} from 'react-dom/client';import AdminNav from './app/admin/(dashboard)/AdminNav';import PortalSidebar from './src/components/PortalSidebar';window.fixturePath='/admin/videos';const root=createRoot(document.getElementById('root'));window.draw=()=>root.render(<PortalSidebar portal="Admin" email="fixture@example.com"><AdminNav/></PortalSidebar>);window.draw();`,
       resolveDir: process.cwd(),
       loader: "tsx",
     },
@@ -89,7 +89,6 @@ test("all real portal destinations protect unauthenticated requests", async ({
   for (const path of [
     "/admin",
     "/admin/videos",
-    "/admin/videos/upload",
     "/admin/categories",
     "/admin/ad-slots",
     "/admin/advertisements",

@@ -12,13 +12,14 @@
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts",
     "test:e2e": "playwright test",
-    "db:generate": "echo 'Run supabase migrations via CLI or dashboard'"
+    "db:generate": "echo 'Run supabase migrations via CLI or dashboard'",
+    "import:damplips": "esbuild scripts/import-damplips.ts --bundle --platform=node --format=esm --packages=external --log-level=warning --outfile=.cache/import-damplips.mjs && node .cache/import-damplips.mjs"
   },
   "dependencies": {
-    "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.4",
     "clsx": "2.1.1",
+    "hls.js": "^1.5.17",
     "lucide-react": "^0.468.0",
     "next": "^15.5.28",
     "react": "19.2.6",
@@ -26,7 +27,6 @@
     "resend": "^4.0.1",
     "server-only": "^0.0.1",
     "tailwind-merge": "3.4.0",
-    "tus-js-client": "^4.3.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {

@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Play, RotateCcw } from "lucide-react";
-import Script from "next/script";
-import { selectPlaybackSource } from "@/lib/video/playback";
+import { damplipsProxyUrl, isDamplipsMediaUrl, selectPlaybackSource } from "@/lib/video/playback";
 import { ALGORITHM_VERSION } from "@/lib/recommendations/ranking";
 
 type Props = {
@@ -13,13 +12,9 @@ type Props = {
   playableUrl?: string | null;
   embedUrl?: string | null;
   provider?: string | null;
-  libraryId?: string | null;
-  videoId?: string | null;
 };
 
 type PlaybackEvent = "playback_start" | "progress_25" | "progress_50" | "progress_75" | "playback_complete" | "playback_error";
-type BunnyPlayerApi = { on: (event: string, callback: (data?: any) => void) => void };
-declare global { interface Window { playerjs?: { Player: new (frame: HTMLIFrameElement) => BunnyPlayerApi } } }
 
 function eventUuid() {
   if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
@@ -47,24 +42,77 @@ function usePlaybackEvents(videoId: string) {
 /** Give a visitor a beat with the poster before buffering starts on its own. */
 const BUFFER_AHEAD_DELAY_MS = 1_200;
 
+/**
+ * The native media element, with HLS support.
+ *
+ * A direct mp4 plays as-is. Damplips HLS playlists play natively where the
+ * browser supports them (Safari) and through `hls.js` everywhere else.
+ */
 function NativePlayer({
   url,
   title,
   poster,
+  isHls,
   onTrack,
 }: {
   url: string;
   title: string;
   poster?: string | null;
+  isHls: boolean;
   onTrack: (type: PlaybackEvent) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ahead = useRef(false);
+  const [nativeHls, setNativeHls] = useState(false);
   const [preload, setPreload] = useState<"metadata" | "auto">("metadata");
   const [attempt, setAttempt] = useState(0);
   const [started, setStarted] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!isHls) {
+      setNativeHls(false);
+      return;
+    }
+    try {
+      const probe = document.createElement("video");
+      setNativeHls(Boolean(probe.canPlayType("application/vnd.apple.mpegurl")));
+    } catch {
+      setNativeHls(false);
+    }
+  }, [isHls]);
+
+  // HLS in browsers without native support.
+  useEffect(() => {
+    if (!isHls || nativeHls) return;
+    const video = videoRef.current;
+    if (!video) return;
+    let destroyed = false;
+    let instance: { destroy: () => void } | null = null;
+    void (async () => {
+      try {
+        const { default: Hls } = await import("hls.js");
+        if (destroyed || !Hls.isSupported()) return;
+        const hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+        instance = hls;
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, (_event: unknown, data: { fatal?: boolean }) => {
+          if (!data?.fatal) return;
+          setWaiting(false);
+          setFailed(true);
+          onTrack("playback_error");
+        });
+      } catch {
+        setFailed(true);
+      }
+    })();
+    return () => {
+      destroyed = true;
+      instance?.destroy();
+    };
+  }, [url, isHls, nativeHls, attempt, onTrack]);
 
   const bufferAhead = useCallback(() => {
     if (!ahead.current) {
@@ -81,10 +129,10 @@ function NativePlayer({
   // Setting `preload` does not restart the media element's resource selection
   // on its own; `load()` is what actually applies the buffering hint.
   useEffect(() => {
-    if (preload !== "auto" || started) return;
+    if (preload !== "auto" || started || (isHls && !nativeHls)) return;
     const video = videoRef.current;
     if (video && typeof video.load === "function") video.load();
-  }, [preload, started]);
+  }, [preload, started, isHls, nativeHls]);
 
   const start = () => {
     bufferAhead();
@@ -123,7 +171,7 @@ function NativePlayer({
       <video
         key={`${url}:${attempt}`}
         ref={videoRef}
-        src={url}
+        src={isHls && !nativeHls ? undefined : url}
         aria-label={title}
         controls={started}
         preload={preload}
@@ -211,122 +259,48 @@ function NativePlayer({
   );
 }
 
-/** How long the Bunny embed gets to load before the visitor is offered a retry. */
-const BUNNY_LOAD_TIMEOUT_MS = 20_000;
-
-/**
- * Bunny Stream player.
- *
- * The Bunny iframe is user-controlled: autoplay is off by default and can be
- * enabled with the accessible setting beneath the player. Playback events are
- * observed only through Bunny's documented Player.js postMessage API.
- */
-function BunnyPlayer({ url, title, onTrack, autoplay }: { url: string; title: string; onTrack: (type: PlaybackEvent) => void; autoplay: boolean }) {
-  const frame = useRef<HTMLIFrameElement | null>(null);
-  const [scriptReady, setScriptReady] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    if (!scriptReady || !frame.current || !window.playerjs?.Player) return;
-    let player: BunnyPlayerApi;
-    try { player = new window.playerjs.Player(frame.current); } catch { return; }
-    player.on("ready", () => {
-      player.on("play", () => onTrack("playback_start"));
-      player.on("timeupdate", (data) => {
-        const seconds = Number(data?.seconds);
-        const duration = Number(data?.duration);
-        if (!Number.isFinite(seconds) || !Number.isFinite(duration) || duration <= 0) return;
-        const progress = seconds / duration;
-        if (progress >= 0.25) onTrack("progress_25");
-        if (progress >= 0.5) onTrack("progress_50");
-        if (progress >= 0.75) onTrack("progress_75");
-      });
-      player.on("ended", () => onTrack("playback_complete"));
-      player.on("error", () => onTrack("playback_error"));
-    });
-  }, [scriptReady, attempt, onTrack]);
-
-  useEffect(() => {
-    if (loaded || failed) return;
-    const timer = window.setTimeout(() => setFailed(true), BUNNY_LOAD_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [loaded, failed, attempt]);
-
-  if (failed) {
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-black p-4 text-center text-sm text-white">
-        <p role="alert">
-          Player unavailable. Check your connection or try again.
-        </p>
-        <button
-          type="button"
-          onClick={() => {
-            setFailed(false);
-            setLoaded(false);
-            setAttempt((value) => value + 1);
-          }}
-          className="inline-flex items-center gap-2 rounded-lg bg-white/15 px-4 py-2 font-medium hover:bg-white/25"
-        >
-          <RotateCcw className="h-4 w-4" aria-hidden />
-          Retry playback
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <Script src="https://assets.mediadelivery.net/playerjs/playerjs-latest.min.js" strategy="afterInteractive" onReady={() => setScriptReady(true)} />
-      <iframe
-        key={attempt}
-        ref={frame}
-        src={`${url}?autoplay=${autoplay ? "true" : "false"}&responsive=true`}
-        title={title}
-        allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-        allowFullScreen
-        referrerPolicy="strict-origin-when-cross-origin"
-        className="h-full w-full border-0"
-        onLoad={() => setLoaded(true)}
-        onError={() => { setFailed(true); onTrack("playback_error"); }}
-      />
-    </>
-  );
-}
+const HLS_PATTERN = /\.m3u8(?:[?#]|$)/i;
 
 export default function VideoPlayer(props: Props) {
   const onTrack = usePlaybackEvents(props.id);
-  const [bunnyAutoplay, setBunnyAutoplay] = useState(true);
-  useEffect(() => {
-    try { setBunnyAutoplay(true); } catch { setBunnyAutoplay(true); }
-  }, []);
-  const source = selectPlaybackSource(
-    props.playableUrl,
-    props.embedUrl,
-    props.provider,
-    props.libraryId,
-    props.videoId,
-  );
+  const source = selectPlaybackSource(props.playableUrl, props.embedUrl, props.provider);
   const key = "url" in source ? `${props.id}:${source.url}` : props.id;
 
   return (
-    <>
-      <div className="relative mt-3 aspect-video overflow-hidden rounded-xl border border-line bg-black">
-        {source.kind === "direct" ? (
-          <NativePlayer key={key} url={source.url} title={props.title} poster={props.poster} onTrack={onTrack} />
-        ) : source.kind === "embed" && props.provider === "bunny" ? (
-          <BunnyPlayer key={`${key}:${bunnyAutoplay}`} url={source.url} title={props.title} onTrack={onTrack} autoplay={bunnyAutoplay} />
-        ) : source.kind === "embed" ? (
-          <iframe key={key} src={source.url} title={props.title} className="h-full w-full" allow="autoplay; encrypted-media; picture-in-picture; fullscreen" sandbox="allow-scripts allow-same-origin allow-forms allow-presentation" allowFullScreen loading="lazy" referrerPolicy="strict-origin-when-cross-origin" />
-        ) : (
-          <>
-            {props.poster && <img src={props.poster} alt="" className="h-full w-full object-cover opacity-55" />}
-            <div className="absolute inset-0 flex items-center justify-center"><p className="rounded-lg bg-black/70 px-4 py-2 text-[13px] text-white">{source.kind === "unsupported" ? "This legacy video provider is no longer supported." : "Video processing — check back soon"}</p></div>
-          </>
-        )}
-      </div>
-
-    </>
+    <div className="relative mt-3 aspect-video overflow-hidden rounded-xl border border-line bg-black">
+      {source.kind === "direct" ? (
+        <NativePlayer
+          key={key}
+          url={isDamplipsMediaUrl(source.url) ? damplipsProxyUrl(source.url) : source.url}
+          isHls={HLS_PATTERN.test(source.url)}
+          title={props.title}
+          poster={props.poster}
+          onTrack={onTrack}
+        />
+      ) : source.kind === "embed" ? (
+        <iframe
+          key={key}
+          src={source.url}
+          title={props.title}
+          className="h-full w-full"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+          allowFullScreen
+          loading="lazy"
+          referrerPolicy="strict-origin-when-cross-origin"
+        />
+      ) : (
+        <>
+          {props.poster && <img src={props.poster} alt="" className="h-full w-full object-cover opacity-55" />}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <p className="rounded-lg bg-black/70 px-4 py-2 text-[13px] text-white">
+              {source.kind === "unsupported"
+                ? "This video source is no longer supported."
+                : "This video is not available yet — check back soon."}
+            </p>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

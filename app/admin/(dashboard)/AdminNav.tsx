@@ -12,7 +12,6 @@ import {
   ScrollText,
   Settings,
   Tag,
-  UploadCloud,
   Users,
 } from "lucide-react";
 import DashboardNav from "@/src/components/DashboardNav";
@@ -23,11 +22,6 @@ const items = [
     icon: Clapperboard,
     children: [
       { href: "/admin/videos", label: "Videos", icon: Film },
-      {
-        href: "/admin/videos/upload",
-        label: "Upload Videos",
-        icon: UploadCloud,
-      },
       { href: "/admin/categories", label: "Categories", icon: Tag },
     ],
   },

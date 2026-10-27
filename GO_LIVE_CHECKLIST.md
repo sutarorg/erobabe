@@ -1,5 +1,10 @@
 # Erobabe launch gates — 2026-10-15
 
+> **Historical document (superseded 2026-10-27).** Video uploads and Bunny
+> Stream are retired. This file is kept for provenance; read
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
+> `npm run import:damplips`, `/api/videos/stream`).
+
 **Release: HOLD.** PASS means verified in the named environment only. BLOCKED requires credentials/approval/external action; NOT TESTED means no valid acceptance evidence. Do not infer production PASS from local tests. Final command evidence: `PRODUCTION_READINESS.md`.
 
 | Gate | Status | Required action / evidence |

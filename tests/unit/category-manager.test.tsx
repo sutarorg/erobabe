@@ -87,7 +87,7 @@ describe("CategoryManager — thumbnails", () => {
 
     await waitFor(() => {
       expect(mockPostJson).toHaveBeenCalledWith(
-        "/api/videos/storage-token",
+        "/api/admin/uploads/thumbnail",
         expect.objectContaining({ kind: "thumbnail", fileName: "card.png", mimeType: "image/png" })
       );
     });

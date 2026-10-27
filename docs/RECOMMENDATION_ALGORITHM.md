@@ -1,5 +1,10 @@
 # Erobabe recommendation algorithm
 
+> **Historical document (superseded 2026-10-27).** Video uploads and Bunny
+> Stream are retired. This file is kept for provenance; read
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
+> `npm run import:damplips`, `/api/videos/stream`).
+
 **Current version:** `erobabe-rec-v1` · **Scope:** production public catalog · **Weights:** initial engineering hypotheses, not fitted or research-optimal. See `RECOMMENDATION_RESEARCH.md` and `RECOMMENDATION_AUDIT.md`.
 
 ## Pipeline

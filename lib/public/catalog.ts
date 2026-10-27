@@ -90,7 +90,10 @@ function publishedQuery(
     .eq("status", "published")
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
-    .eq("moderation_status", "approved");
+    .eq("moderation_status", "approved")
+    // Every published video is an embed or a direct file; a row with neither
+    // (a half-finished import) must never reach a card.
+    .or("playable_url.not.is.null,embed_url.not.is.null");
 }
 
 async function loadPublishedVideos(limit: number): Promise<PublicVideo[]> {
@@ -124,7 +127,10 @@ async function countPublicVideos(
     .eq("status", "published")
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
-    .eq("moderation_status", "approved");
+    .eq("moderation_status", "approved")
+    // Every published video is an embed or a direct file; a row with neither
+    // (a half-finished import) must never reach a card.
+    .or("playable_url.not.is.null,embed_url.not.is.null");
 
   return count;
 }

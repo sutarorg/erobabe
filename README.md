@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Next.js application under production-readiness review with Supabase backend, guest PayPal advertising checkout, Bunny Stream resumable device uploads, Resend email, AI metadata (NVIDIA Nemotron 3 Ultra free route via OpenRouter), and SEO optimization.
+Next.js application under production-readiness review with Supabase backend, guest PayPal advertising checkout, a video catalog embedded from damplips.com, Resend email, AI metadata (NVIDIA Nemotron 3 Ultra free route via OpenRouter), and SEO optimization.
 
 ## Quick Start
 
@@ -32,46 +32,37 @@ Open http://localhost:3000
 - PayPal QR checkout with manual staff payment verification
 - Resend (transactional email)
 - OpenRouter API, NVIDIA Nemotron 3 Ultra (free route; server-generated video metadata)
-- Bunny Stream direct pre-signed TUS uploads (`tus-js-client`)
+- damplips.com embeds (HLS/mp4 playback through a same-origin proxy, `hls.js`)
 - Tailwind CSS 4
 
-## Video Uploads
+## Video Catalog — damplips embeds
 
-`/admin/videos/upload` accepts multiple local videos through drag-and-drop or
-**Choose videos**. Bytes go directly to Bunny Stream's TUS endpoint, never through
-Next.js, Vercel functions or Supabase Storage. The optional `BUNNY_UPLOAD_MAX_BYTES` sets an operator upload budget; without it there is no application-level video
-size cap, and four files upload in parallel with per-file progress. Bunny encoding
-runs asynchronously: each accepted upload appears immediately in `/admin/videos`
-with status **Encoding**, while upload workers continue to the next files. Closing
-the tab does not stop it — a scheduled sweep (`/api/cron/bunny-publish`, armed by
-`CRON_SECRET` plus the `Publish finished uploads` GitHub Actions workflow) reads
-Bunny's status server-side and publishes
-each video as soon as encoding finishes, with no browser involved. Cancellation
-pauses transfer; reselecting the same source
-recovers its server session and resumable upload identity.
+There are no uploads any more. `app/admin/(dashboard)/videos/upload`, the Bunny
+Stream adapter, its API routes and the publish-sweep cron were removed, and
+migration `00000000000026_damplips_embeds.sql` drops the upload tables and the
+Bunny library column.
 
-Ten actual frames throughout each clip are scored for detail, contrast, colour,
-exposure and composition. The best frame becomes a restrained, sharpened 1280×720
-JPEG stored via a signed upload to `video-thumbnails`. Thumbnail failure is
-recoverable and prevents publication. Optional consent-gated OpenRouter vision
-ranking is disabled by default and always falls back to local scoring.
+The catalog is filled from damplips.com. For each fixed category the importer
+reads damplips' listing pages and post pages and stores the title, poster,
+duration, source page and the media destination the page serves:
 
-Publication requires Bunny's documented Finished status (4), a verified stored
-thumbnail, atomic session/video/job completion, and explicit rights/moderation approval. Playback uses the validated
-stored library ID/GUID at `iframe.mediadelivery.net`. Existing direct-media playback
-and administrative tools remain; retired hosted records are unpublished and marked
-**requiring re-upload**, with metadata preserved. No media migration is claimed.
+```bash
+npm run import:damplips -- --categories=all --per-category=110   # 100+ per category
+npm run import:damplips -- --categories=hardcore --dry-run      # resolve only
+```
 
-AI titles and descriptions come from OpenRouter only — never composed offline.
-One request drafts several titles at a time and all waiting queue entries share
-one retry loop, so a batch upload neither exhausts the request budget nor stalls
-on rate limits; a provider outage simply keeps retrying until the model answers.
+The same job is available in the dashboard at **Admin → Videos → Sync from
+damplips** (one request per category, with per-category progress). It is
+idempotent: a post already in the catalog is skipped, so a category can be
+topped up by re-running it. Playback goes through `/api/videos/stream`, which
+only proxies damplips https URLs and adds the referer the files expect; HLS
+playlists play through `hls.js` where the browser has no native support.
 
-Apply the forward migrations `00000000000012_bunny_stream_uploads.sql` and
-`00000000000013_bunny_background_encoding.sql` after existing migrations; do not
-edit applied history. See [deployment section D](DEPLOYMENT.md#d-bunny-stream-device-uploads)
-for credentials, content policy, recovery and a genuine staging upload test.
-**Automated mocks/build are not live Bunny acceptance evidence.**
+Imported rows are written as published and public with `rights_status =
+'cleared'` so the category is immediately visible. Use `--rights=pending` (or
+the dashboard's Rights selector) to stage imports as private drafts, and use the
+existing DMCA / content-removal pages as the takedown path for embedded content.
+See `docs/DAMPLIPS_EMBEDS.md` for the full behaviour and limits.
 
 ## Homepage carousel
 
