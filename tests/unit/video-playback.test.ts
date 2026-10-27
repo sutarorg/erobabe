@@ -30,11 +30,12 @@ describe("validated stored playback", () => {
     expect(isDamplipsMediaUrl("https://damplips.example.com/a.mp4")).toBe(false);
   });
 
-  it("plays a post page stored as a file as an embed instead of a broken video", () => {
-    // Some imported rows kept the HTML post page in `playable_url`; a <video>
-    // element can never play it, so it is framed instead.
+  it("keeps a post page stored as a file in our own player, for the proxy to resolve", () => {
+    // Some imported rows kept the HTML post page in `playable_url`. It is still
+    // a direct source: the stream proxy reads the page and streams the media
+    // URL it advertises, so damplips' page is never framed.
     expect(selectPlaybackSource("https://www.damplips.com/p/67284/", null, "damplips")).toEqual({
-      kind: "embed",
+      kind: "direct",
       url: "https://www.damplips.com/p/67284/",
     });
     expect(isDamplipsPostPage("https://www.damplips.com/p/67284/")).toBe(true);
@@ -42,10 +43,10 @@ describe("validated stored playback", () => {
     expect(isDamplipsPostPage("https://www.damplips.com/p/67284/related")).toBe(false);
   });
 
-  it("accepts a damplips embed page", () => {
+  it("turns a damplips embed page into a direct source our player can resolve", () => {
     expect(
       selectPlaybackSource(null, "https://www.damplips.com/p/67284/", "damplips"),
-    ).toEqual({ kind: "embed", url: "https://www.damplips.com/p/67284/" });
+    ).toEqual({ kind: "direct", url: "https://www.damplips.com/p/67284/" });
   });
 
   it.each([

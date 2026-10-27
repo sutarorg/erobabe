@@ -29,6 +29,15 @@ export function isHlsUrl(url: string): boolean {
   return HLS_PATH.test(url);
 }
 
+/** An HTML document — a post page, not media. */
+const HTML_CONTENT_TYPE = /^(text\/html|application\/xhtml\+xml)$/i;
+
+export function isHtmlContentType(contentType: string | null | undefined): boolean {
+  if (!contentType) return false;
+  const value = contentType.split(";")[0]?.trim() || "";
+  return HTML_CONTENT_TYPE.test(value);
+}
+
 /** `URI="…"` carries keys, maps, renditions and nested variant playlists. */
 const URI_ATTRIBUTE = /(\bURI\s*=\s*")([^"]*)(")/gi;
 

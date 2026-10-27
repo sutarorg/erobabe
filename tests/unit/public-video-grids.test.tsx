@@ -68,7 +68,9 @@ describe("public listing grids and video cards", () => {
     "shows four columns, views with an icon, and relative publication time without category on card on %s",
     async (_path, page) => {
       const html = renderToStaticMarkup(await page());
-      expect(html).toContain("@lg:grid-cols-4");
+      // One video per row on a phone, four columns only once the panel is wide.
+      expect(html).toContain("grid-cols-1");
+      expect(html).toContain("@2xl:grid-cols-4");
       expect(html).not.toContain("lg:grid-cols-5");
       expect(html).toContain("1,234 views");
       expect(html).toContain("2 days ago");
@@ -116,7 +118,8 @@ describe("public listing grids and video cards", () => {
     const html = renderToStaticMarkup(
       await home.default({ searchParams: Promise.resolve({ q: "First" }) }),
     );
-    expect(html).toContain("@lg:grid-cols-4");
+    expect(html).toContain("grid-cols-1");
+    expect(html).toContain("@2xl:grid-cols-4");
     expect(html).not.toContain("grid-cols-5");
   });
 

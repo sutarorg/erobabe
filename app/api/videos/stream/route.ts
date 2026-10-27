@@ -1,18 +1,30 @@
 import { NextRequest } from "next/server";
-import { damplipsProxyUrl, isDamplipsMediaUrl } from "@/lib/video/playback";
-import { isHlsContentType, isHlsUrl, rewriteHlsPlaylist } from "@/lib/video/hls";
+import { isDamplipsMediaUrl } from "@/lib/video/playback";
+import { isHlsContentType, isHlsUrl, isHtmlContentType, rewriteHlsPlaylist } from "@/lib/video/hls";
+import { proxiedMediaUrl } from "@/lib/video/media-proxy";
+import { verifyMediaToken } from "@/lib/video/media-token";
+import { parseMedia } from "@/lib/damplips/parse";
 
 /**
- * Same-origin playback proxy for damplips media.
+ * Same-origin playback proxy.
  *
- * damplips serves its files from its own host and expects a damplips referer,
- * so the browser asks this route and this route asks damplips with the headers
- * the file expects. Only damplips https URLs start a request, so the route
- * cannot be used as an open proxy. Bytes are streamed, never stored.
+ * The browser never talks to damplips directly. It asks this route, and this
+ * route asks the media host with the headers the file expects (damplips
+ * referer-checks and hotlink-protects its files). Three kinds of destination
+ * arrive here:
  *
- * HLS playlists are rewritten here (see `lib/video/hls.ts`): the player only
- * ever talks to this route, so segments cannot be blocked by CORS and relative
- * segment paths cannot resolve against the wrong base.
+ *  1. A damplips media file — streamed through, `Range` and all.
+ *  2. A damplips **post page** — an HTML document. The page is read, the media
+ *     URL it advertises is extracted with the same parser the importer uses,
+ *     and that file is streamed instead. This is why a row whose
+ *     `playable_url` is a page still plays in our own player.
+ *  3. An HLS playlist — rewritten so every segment, key and nested rendition is
+ *     fetched through this route rather than straight from damplips.
+ *
+ * Segments of a damplips playlist often live on a media CDN outside
+ * damplips.com. Those URIs are proxied with a short-lived signature minted by
+ * `proxiedMediaUrl`, so a real playlist plays end to end while the endpoint
+ * stays closed as an open proxy. Bytes are streamed, never stored.
  */
 
 export const runtime = "nodejs";
@@ -32,6 +44,14 @@ const PASS_THROUGH_HEADERS = [
   "etag",
   "last-modified",
 ];
+
+/** A post page is HTML; a hostile one must not be allowed to exhaust memory. */
+const MAX_PAGE_BYTES = 512 * 1024;
+/** A page that points at another page that points at another… is a loop. */
+const MAX_PAGE_HOPS = 2;
+/** Post-page → media resolution is cached: a `<video>` makes many requests. */
+const RESOLVED_TTL_MS = 5 * 60 * 1000;
+const RESOLVED_LIMIT = 250;
 
 function badRequest(message: string, status = 400) {
   return new Response(message, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -68,7 +88,11 @@ function isAllowedHop(url: URL): boolean {
 
 type SourceResult = { url: URL } | { error: string; status: number };
 
-function parseSource(raw: string): SourceResult {
+/**
+ * damplips media needs no proof. Anything else must present a signature the
+ * playlist rewriter minted for exactly that URL.
+ */
+function parseSource(raw: string, token: string | null): SourceResult {
   let target: URL;
   try {
     target = new URL(raw);
@@ -84,10 +108,13 @@ function parseSource(raw: string): SourceResult {
   if (target.protocol !== "https:") {
     return { error: "src must be an https URL", status: 400 };
   }
-  if (!isDamplipsMediaUrl(target.toString()) || isPrivateHost(target.hostname)) {
-    return { error: "Only damplips media can be streamed here", status: 403 };
+  if (isPrivateHost(target.hostname)) {
+    return { error: "src must be a public host", status: 403 };
   }
-  return { url: target };
+  const resolved = target.toString();
+  if (isDamplipsMediaUrl(resolved)) return { url: target };
+  if (verifyMediaToken(resolved, token)) return { url: target };
+  return { error: "Only damplips media can be streamed here", status: 403 };
 }
 
 /**
@@ -151,13 +178,67 @@ async function fetchUpstream(target: URL, headers: Record<string, string>): Prom
   return badRequest("Too many redirects", 502);
 }
 
+/** Reads at most `MAX_PAGE_BYTES` of a document, then drops the connection. */
+async function readCapped(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return response.text();
+  const decoder = new TextDecoder();
+  let text = "";
+  let size = 0;
+  try {
+    while (size < MAX_PAGE_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+    }
+  } catch {
+    /* Keep whatever was read; a truncated page may still name its media. */
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+  return text + decoder.decode();
+}
+
+const resolutions = new Map<string, { url: string; at: number }>();
+
+function rememberResolution(from: string, to: string) {
+  const now = Date.now();
+  for (const [key, value] of resolutions) {
+    if (now - value.at > RESOLVED_TTL_MS) resolutions.delete(key);
+  }
+  if (resolutions.size >= RESOLVED_LIMIT) {
+    const oldest = resolutions.keys().next().value;
+    if (oldest) resolutions.delete(oldest);
+  }
+  resolutions.set(from, { url: to, at: now });
+}
+
+function rememberedResolution(from: string): URL | null {
+  const hit = resolutions.get(from);
+  if (!hit) return null;
+  if (Date.now() - hit.at > RESOLVED_TTL_MS) {
+    resolutions.delete(from);
+    return null;
+  }
+  try {
+    return new URL(hit.url);
+  } catch {
+    return null;
+  }
+}
+
+/** Only this route may be handed a foreign host, and only when it signed it. */
+function rewriteCallback(absolute: string): string | null {
+  return proxiedMediaUrl(absolute);
+}
+
 async function proxy(req: NextRequest): Promise<Response> {
   const raw = req.nextUrl.searchParams.get("src");
   if (!raw) return badRequest("A src parameter is required");
 
-  const parsed = parseSource(raw);
+  const parsed = parseSource(raw, req.nextUrl.searchParams.get("t"));
   if ("error" in parsed) return badRequest(parsed.error, parsed.status);
-  const target = parsed.url;
 
   const headers: Record<string, string> = {
     "user-agent": USER_AGENT,
@@ -170,53 +251,104 @@ async function proxy(req: NextRequest): Promise<Response> {
   const range = req.headers.get("range");
   if (range) headers.range = range;
 
-  const result = await fetchUpstream(target, headers);
-  if (result instanceof Response) return result;
+  const requestedUrl = parsed.url;
+  const cached = rememberedResolution(requestedUrl.toString());
+  let current = cached ?? requestedUrl;
+  let usingCache = cached !== null;
 
-  const { response: upstream, url: upstreamUrl } = result;
-  if (!upstream.ok) {
-    return badRequest(`The media host responded ${upstream.status}`, 502);
-  }
-
-  const contentType = upstream.headers.get("content-type");
-  const playlist = isHlsContentType(contentType) || isHlsUrl(upstreamUrl.toString());
-
-  if (playlist) {
-    // A playlist is text: read it, point every URI back at this route, and hand
-    // the player a document it can resolve without touching damplips directly.
-    let manifest: string;
-    try {
-      manifest = await upstream.text();
-    } catch {
-      return badRequest("The media playlist could not be read", 502);
+  for (let hop = 0; hop <= MAX_PAGE_HOPS; hop += 1) {
+    const result = await fetchUpstream(current, headers);
+    if (result instanceof Response) {
+      // A remembered media URL can rot. Drop it and read the page again
+      // instead of failing playback for the rest of the cache window.
+      if (usingCache) {
+        resolutions.delete(requestedUrl.toString());
+        usingCache = false;
+        current = requestedUrl;
+        continue;
+      }
+      return result;
     }
-    const rewritten = rewriteHlsPlaylist(manifest, upstreamUrl.toString(), (absolute) =>
-      isDamplipsMediaUrl(absolute) ? damplipsProxyUrl(absolute) : null,
-    );
-    return new Response(req.method === "HEAD" ? null : rewritten, {
-      status: 200,
-      headers: {
-        "content-type": "application/vnd.apple.mpegurl",
-        "cache-control": "public, max-age=30",
-        "x-content-type-options": "nosniff",
-      },
+
+    const { response: upstream, url: upstreamUrl } = result;
+    if (!upstream.ok) {
+      if (usingCache) {
+        resolutions.delete(requestedUrl.toString());
+        usingCache = false;
+        current = requestedUrl;
+        continue;
+      }
+      return badRequest(`The media host responded ${upstream.status}`, 502);
+    }
+    usingCache = false;
+
+    // A post page: read it, take the media destination it advertises, and go
+    // back around. This is the difference between a framed damplips page and a
+    // video that plays in our own player.
+    if (isHtmlContentType(upstream.headers.get("content-type"))) {
+      const html = await readCapped(upstream);
+      const media = parseMedia(html, upstreamUrl.toString());
+      if (!media || media.kind !== "direct") {
+        return badRequest("The source page did not publish a playable file", 502);
+      }
+      let next: URL;
+      try {
+        next = new URL(media.url, upstreamUrl);
+      } catch {
+        return badRequest("The source page published an unusable media URL", 502);
+      }
+      if (next.protocol === "http:") next.protocol = "https:";
+      if (!isAllowedHop(next)) {
+        return badRequest("The source page pointed at an unusable host", 502);
+      }
+      if (next.toString() === upstreamUrl.toString()) {
+        return badRequest("The source page pointed at itself", 502);
+      }
+      rememberResolution(requestedUrl.toString(), next.toString());
+      current = next;
+      continue;
+    }
+
+    const contentType = upstream.headers.get("content-type");
+    const playlist = isHlsContentType(contentType) || isHlsUrl(upstreamUrl.toString());
+
+    if (playlist) {
+      // A playlist is text: read it, point every URI back at this route, and
+      // hand the player a document it can resolve without touching damplips.
+      let manifest: string;
+      try {
+        manifest = await upstream.text();
+      } catch {
+        return badRequest("The media playlist could not be read", 502);
+      }
+      const rewritten = rewriteHlsPlaylist(manifest, upstreamUrl.toString(), rewriteCallback);
+      return new Response(req.method === "HEAD" ? null : rewritten, {
+        status: 200,
+        headers: {
+          "content-type": "application/vnd.apple.mpegurl",
+          "cache-control": "public, max-age=30",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
+
+    if (!upstream.body) return badRequest("The media host returned no body", 502);
+
+    const responseHeaders = new Headers();
+    for (const name of PASS_THROUGH_HEADERS) {
+      const value = upstream.headers.get(name);
+      if (value) responseHeaders.set(name, value);
+    }
+    if (!responseHeaders.has("accept-ranges")) responseHeaders.set("accept-ranges", "bytes");
+    responseHeaders.set("cache-control", "public, max-age=600");
+
+    return new Response(req.method === "HEAD" ? null : upstream.body, {
+      status: upstream.status,
+      headers: responseHeaders,
     });
   }
 
-  if (!upstream.body) return badRequest("The media host returned no body", 502);
-
-  const responseHeaders = new Headers();
-  for (const name of PASS_THROUGH_HEADERS) {
-    const value = upstream.headers.get(name);
-    if (value) responseHeaders.set(name, value);
-  }
-  if (!responseHeaders.has("accept-ranges")) responseHeaders.set("accept-ranges", "bytes");
-  responseHeaders.set("cache-control", "public, max-age=600");
-
-  return new Response(req.method === "HEAD" ? null : upstream.body, {
-    status: upstream.status,
-    headers: responseHeaders,
-  });
+  return badRequest("The source page kept pointing at another page", 502);
 }
 
 export async function GET(req: NextRequest) {

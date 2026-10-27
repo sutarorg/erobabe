@@ -1,15 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createHarness, jsonRequest, multipartRequest, ADMIN_ID } from "./helpers/video-route-harness";
+import { createHarness, jsonRequest } from "./helpers/video-route-harness";
 import type { FakeDb } from "./helpers/fake-supabase";
 
 /**
- * Tests for the two routes the retired upload pipeline left behind:
+ * Tests for `/api/admin/damplips/import` — the admin-triggered catalog fill.
  *
- * - `/api/admin/uploads/thumbnail` — the only upload target the app still
- *   issues, and images only.
- * - `/api/admin/damplips/import` — admin-triggered catalog fill.
- *
- * Both are admin-only, and the video importer never receives an upload.
+ * The retired upload pipeline's `/api/admin/uploads/thumbnail` route is gone,
+ * so only the importer route is covered here. It is admin-only, and it never
+ * receives an upload.
  */
 
 const harnessState = vi.hoisted(() => ({ service: null as any, auth: null as any }));
@@ -49,7 +47,6 @@ vi.mock("@/lib/damplips/client", async (importOriginal) => {
 
 vi.mock("@/lib/public/revalidate", () => ({ revalidatePublicTag: vi.fn() }));
 
-import { POST as uploadThumbnail } from "@/app/api/admin/uploads/thumbnail/route";
 import { POST as importDamplips } from "@/app/api/admin/damplips/import/route";
 
 const HARDCORE = { id: "cat-hardcore", label: "Hardcore", slug: "hardcore" };
@@ -64,82 +61,6 @@ function setup(overrides: Partial<FakeDb> = {}) {
 beforeEach(() => {
   importCategory.mockReset();
   setup();
-});
-
-describe("POST /api/admin/uploads/thumbnail", () => {
-  it("issues a signed image upload for the signed-in admin", async () => {
-    const response = await uploadThumbnail(
-      jsonRequest("/api/admin/uploads/thumbnail", {
-        kind: "thumbnail",
-        fileName: "card.jpg",
-        fileSize: 1024,
-        mimeType: "image/jpeg",
-      }),
-    );
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.kind).toBe("thumbnail");
-    expect(body.uploadUrl).toContain("signed://");
-    expect(body.storagePath.startsWith(`${ADMIN_ID}/`)).toBe(true);
-    expect(body.publicUrl).toContain("video-thumbnails");
-  });
-
-  it("refuses video uploads", async () => {
-    const asVideoKind = await uploadThumbnail(
-      jsonRequest("/api/admin/uploads/thumbnail", {
-        kind: "video",
-        fileName: "clip.mp4",
-        fileSize: 1024,
-        mimeType: "video/mp4",
-      }),
-    );
-    expect(asVideoKind.status).toBe(400);
-
-    const asVideoMime = await uploadThumbnail(
-      jsonRequest("/api/admin/uploads/thumbnail", {
-        kind: "thumbnail",
-        fileName: "clip.mp4",
-        fileSize: 1024,
-        mimeType: "video/mp4",
-      }),
-    );
-    expect(asVideoMime.status).toBe(415);
-    expect((await asVideoMime.json()).error).toMatch(/only images/i);
-  });
-
-  it("refuses a multipart body instead of accepting bytes", async () => {
-    const response = await uploadThumbnail(multipartRequest("/api/admin/uploads/thumbnail"));
-    expect(response.status).toBe(415);
-  });
-
-  it("validates the requested metadata", async () => {
-    const noName = await uploadThumbnail(
-      jsonRequest("/api/admin/uploads/thumbnail", { fileName: "", fileSize: 10, mimeType: "image/png" }),
-    );
-    expect(noName.status).toBe(400);
-
-    const tooLarge = await uploadThumbnail(
-      jsonRequest("/api/admin/uploads/thumbnail", {
-        fileName: "huge.jpg",
-        fileSize: 11 * 1024 * 1024,
-        mimeType: "image/jpeg",
-      }),
-    );
-    expect(tooLarge.status).toBeGreaterThanOrEqual(400);
-    expect((await tooLarge.json()).error).toMatch(/10 MB/);
-  });
-
-  it("rejects a request with no admin session", async () => {
-    harnessState.auth = { auth: { getUser: async () => ({ data: { user: null } }) }, from: harnessState.auth.from };
-    const response = await uploadThumbnail(
-      jsonRequest("/api/admin/uploads/thumbnail", {
-        fileName: "card.jpg",
-        fileSize: 1024,
-        mimeType: "image/jpeg",
-      }),
-    );
-    expect(response.status).toBeGreaterThanOrEqual(401);
-  });
 });
 
 describe("POST /api/admin/damplips/import", () => {

@@ -7,7 +7,7 @@ import RecommendationShelf from "@/src/components/RecommendationShelf";
 import { getPublicCategories } from "@/lib/public/catalog";
 import ViewTracker from "@/src/components/ViewTracker";
 import { createClient } from "@/lib/supabase/server";
-import { selectPlaybackSource } from "@/lib/video/playback";
+import { isDamplipsMediaUrl, selectPlaybackSource } from "@/lib/video/playback";
 import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
 import VideoActions from "@/src/components/VideoActions";
 import VideoPlayer from "@/src/components/VideoPlayer";
@@ -130,7 +130,9 @@ export default async function VideoPage({
     video.provider,
   );
   let mediaOrigin: string | null = null;
-  if (playbackSource.kind === "direct") {
+  if (playbackSource.kind === "direct" && !isDamplipsMediaUrl(playbackSource.url)) {
+    // A damplips file is fetched by our proxy, not by the browser, so there is
+    // no connection to open; any other direct host is contacted directly.
     try {
       mediaOrigin = new URL(playbackSource.url).origin;
     } catch {

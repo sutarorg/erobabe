@@ -112,17 +112,27 @@ success. When damplips renames a slug, update this file; no other code changes.
 `selectPlaybackSource` (`lib/video/playback.ts`) is the only gate between a row
 and a player:
 
-- **direct** — `playable_url` is an http(s) file (mp4/webm/HLS). Retired provider
-  hosts (`streamtape`, `tapecontent`, `mediadelivery.net`) and retired provider
-  values (`bunny`, `ufoload`, `uqload`, `filekosh`) are rejected as `unsupported`.
-- **embed** — `embed_url` on a damplips host, or a YouTube/Vimeo player URL.
-  Nothing else is mounted in an iframe.
+- **direct** — `playable_url` is an http(s) file (mp4/webm/HLS) **or a damplips
+  post page**. A post page stored as a "file" is resolved to real media by the
+  proxy below, so it plays in our own player instead of being framed. Retired
+  provider hosts (`streamtape`, `tapecontent`, `mediadelivery.net`) and retired
+  provider values (`bunny`, `ufoload`, `uqload`, `filekosh`) are rejected as
+  `unsupported`.
+- **embed** — a YouTube/Vimeo player URL only. Nothing else is mounted in an
+  iframe, and no damplips page is ever framed: damplips does not allow it, and
+  every damplips row has a direct destination the proxy can resolve.
 
 Damplips files are played through `/api/videos/stream?src=…`, a small proxy that:
 
-- only starts a request for a public `https://*.damplips.com` URL (no open
-  proxy, no loopback/link-local/private hosts); a plain-`http` damplips link is
-  upgraded to https,
+- accepts a public `https://*.damplips.com` URL, **or** any public https host
+  that carries a valid short-lived signature (see HLS below) — never loopback,
+  link-local or private hosts, and never a bare foreign URL, so it is not an
+  open proxy; a plain-`http` link is upgraded to https,
+- **resolves a post page**: when the destination answers with HTML, the page is
+  read (capped at 512 KB), the media URL it advertises is extracted with the
+  same parser the importer uses, and that file is streamed instead. The
+  resolution is cached for five minutes, because a `<video>` element issues
+  many requests for one file,
 - sends a browser user-agent plus `Referer: https://www.damplips.com/` and
   `Origin`, retries without `Origin` and then without either header when the
   host answers 401/403/451 (hotlink protection is configured differently on
@@ -138,13 +148,41 @@ HLS (`.m3u8`) is the reason the proxy also *rewrites*: a playlist is a document
 whose segment, key, init-map and rendition URIs are fetched separately by the
 player. Those requests would otherwise go straight to damplips (blocked by CORS)
 or be resolved against `/api/videos/stream` (404). `lib/video/hls.ts` rewrites
-every URI to a proxy URL, so the player never talks to damplips itself. Playlists
-play natively in Safari and through `hls.js` everywhere else.
+**every** URI to a proxy URL, so the player never talks to damplips itself.
+
+Segments of a damplips playlist frequently live on a media CDN outside
+`damplips.com`. Those URIs used to be left alone, which is what made HLS videos
+fail with "the video could not be loaded" while plain mp4s played. They are now
+proxied too, and stamped with a signature over that exact URL
+(`lib/video/media-token.ts`, 6-hour lifetime). The route verifies the signature
+before fetching a foreign host, so a genuine playlist plays end to end without
+the endpoint becoming an open proxy. Set `MEDIA_PROXY_SECRET` to a dedicated
+random string; without it the key falls back to the Supabase service key, and in
+local development to the configured site URL.
+
+Playlists play natively in Safari and through `hls.js` everywhere else. Because
+a playlist is not always named `.m3u8`, and a file is not always what its URL
+claims, the player tries the **other** strategy at the same address before it
+gives up on a destination: `MEDIA_ERR_DECODE` / `MEDIA_ERR_SRC_NOT_SUPPORTED`
+sends the source to `hls.js`, and an hls.js fatal error sends it back to the
+plain element. A network failure is never retried in the other strategy, so a
+dead destination still fails over quickly.
 
 In the browser, the player tries the proxy first and, if that destination fails,
 the direct file (with no referer, which hotlink protection usually allows) before
-showing an error. A damplips **post page** stored in `playable_url` is framed as
-an embed instead of being fed to a `<video>` element.
+showing an error. A damplips **post page** is never framed — it has no direct
+fallback, only the proxy can turn it into media.
+
+## Grid layout
+
+Every video section on the public site is **one video per row on a phone**.
+`src/hooks/useGridColumns.ts` measures the grid element: below 448px of
+container width (the same 28rem `@md` container-query breakpoint the
+Tailwind-driven listings use) a shelf is a single column, above it 2–4 whole
+columns fit. The class-driven listings use
+`grid-cols-1 @md:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4`, so measured
+shelves and class-driven pages switch together. A caller-supplied `columnCount`
+(Up Next) is a **cap**, never a way to force two cards into a phone.
 
 ## Operational notes
 
