@@ -1,11 +1,11 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Megaphone } from "lucide-react";
 
 interface AdSlotProps {
   index: number;
   campaignId?: string;
-  onAdvertise?: () => void;
   creative?: {
     id?: string;
     image_url?: string;
@@ -31,7 +31,6 @@ function isSafeUrl(url: string): boolean {
  */
 export default function AdSlot({
   index,
-  onAdvertise,
   creative,
   campaignId,
 }: AdSlotProps) {
@@ -125,9 +124,9 @@ export default function AdSlot({
   }
 
   return (
-    <button
-      type="button"
-      onClick={onAdvertise}
+    <Link
+      href={`/checkout?slot=${index}`}
+      prefetch
       className="ad-slot group relative flex flex-col items-center justify-center gap-1.5 rounded-lg border border-accent/35 bg-card transition-colors duration-200 hover:border-accent/70 hover:bg-card-hover"
       aria-label={`Advertise in slot ${index} — 16:9 placement`}
     >
@@ -142,6 +141,6 @@ export default function AdSlot({
         Advertise
       </span>
       <span className="text-[10px] text-ink-3">View pricing</span>
-    </button>
+    </Link>
   );
 }

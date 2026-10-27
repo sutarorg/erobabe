@@ -24,7 +24,7 @@ const NAV_ITEMS: { key: NavKey; label: string }[] = [
 /** The signed-in account shown in the right-hand cluster. */
 export type HeaderUser = {
   name: string;
-  /** `admin` gets the admin dashboard, anything else the advertiser portal. */
+  /** Only staff accounts have a dashboard. */
   role?: string | null;
 };
 
@@ -43,7 +43,7 @@ interface HeaderProps {
   menuOpen: boolean;
   onMenuOpenChange: (open: boolean) => void;
   user: HeaderUser | null;
-  /** Where “Dashboard” goes. Defaults by role: /admin or /advertiser. */
+  /** Optional explicit staff-dashboard destination. */
   dashboardHref?: string;
   onSignInClick: () => void;
   onSignOut: () => void;
@@ -51,9 +51,9 @@ interface HeaderProps {
   useLinks?: boolean;
 }
 
-/** Where a signed-in account's dashboard lives. */
-export function dashboardHrefFor(user: HeaderUser | null): string {
-  return user?.role === "admin" ? "/admin" : "/advertiser";
+/** Advertising is account-free; only admins have a dashboard. */
+export function dashboardHrefFor(user: HeaderUser | null): string | null {
+  return user?.role === "admin" ? "/admin" : null;
 }
 
 export default function Header({
@@ -215,14 +215,16 @@ export default function Header({
           <div className={cn("flex items-center gap-2", searchOpen && "max-sm:hidden")}>
           {user ? (
             <>
-              <Link
-                href={dashboardTo}
-                prefetch
-                className="flex h-8 items-center gap-1.5 rounded-md border border-line bg-transparent px-2.5 text-[13px] font-medium text-ink transition-colors hover:border-zinc-600 hover:bg-card @sm:px-3"
-              >
-                <LayoutDashboard className="h-3.5 w-3.5 text-ink-2" aria-hidden />
-                Dashboard
-              </Link>
+              {dashboardTo && (
+                <Link
+                  href={dashboardTo}
+                  prefetch
+                  className="flex h-8 items-center gap-1.5 rounded-md border border-line bg-transparent px-2.5 text-[13px] font-medium text-ink transition-colors hover:border-zinc-600 hover:bg-card @sm:px-3"
+                >
+                  <LayoutDashboard className="h-3.5 w-3.5 text-ink-2" aria-hidden />
+                  Dashboard
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={onSignOut}

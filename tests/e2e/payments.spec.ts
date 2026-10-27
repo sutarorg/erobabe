@@ -1,50 +1,16 @@
 import { test, expect } from "@playwright/test";
 
-/**
- * Public-surface tests for the NOWPayments and AI metadata routes.
- *
- * These assert reachability and access control only — no real payment, no AI
- * request, no credentials required:
- *  - the IPN endpoint answers probes but rejects unsigned notifications;
- *  - checkout, status, and suggestion endpoints require authentication;
- *  - the retired Bcon/Groq routes are gone.
- */
-test.describe("NOWPayments public surface", () => {
-  test("IPN endpoint answers a parameter-less probe", async ({ request }) => {
-    const res = await request.get("/api/nowpayments/ipn");
+/** Reachability/access-control checks only; no real payment or AI request. */
+test.describe("PayPal advertising public surface", () => {
+  test("guest checkout is reachable without an account", async ({ request }) => {
+    const res = await request.get("/checkout?slot=1");
     expect(res.status()).toBe(200);
-    const json = await res.json();
-    expect(json.status).toBe("ok");
+    expect(await res.text()).toContain("Your brand, in the spotlight");
   });
 
-  test("unsigned IPN is rejected without confirming anything", async ({ request }) => {
-    const res = await request.post("/api/nowpayments/ipn", {
-      data: { payment_id: "123", payment_status: "finished" },
-    });
-    // 401 with the secret configured, 503 without it — either way, rejected.
-    expect([401, 503]).toContain(res.status());
-    const json = await res.json();
-    expect(json.status).toBe("rejected");
-  });
-
-  test("tampered IPN signature is rejected", async ({ request }) => {
-    const res = await request.post("/api/nowpayments/ipn", {
-      headers: { "x-nowpayments-sig": "ab".repeat(64) },
-      data: { payment_id: "123", payment_status: "finished" },
-    });
-    expect([401, 503]).toContain(res.status());
-  });
-
-  test("checkout requires authentication", async ({ request }) => {
-    const res = await request.post("/api/nowpayments/create", {
-      data: { campaignIds: ["11111111-1111-1111-8111-111111111111"] },
-    });
-    expect(res.status()).toBe(401);
-  });
-
-  test("payment status requires authentication", async ({ request }) => {
-    const res = await request.get("/api/nowpayments/status?paymentId=11111111-1111-1111-8111-111111111111");
-    expect(res.status()).toBe(401);
+  test("an empty submission is rejected without creating an order", async ({ request }) => {
+    const res = await request.post("/api/ads/submit", { multipart: {} });
+    expect(res.status()).toBe(400);
   });
 });
 
@@ -62,7 +28,15 @@ test.describe("AI metadata suggestion surface", () => {
   });
 });
 
-test.describe("Retired provider routes", () => {
+test.describe("Retired billing and provider routes", () => {
+  test("old crypto billing APIs are gone", async ({ request }) => {
+    expect((await request.post("/api/nowpayments/create", { data: {} })).status()).toBe(404);
+    expect((await request.get("/api/nowpayments/ipn")).status()).toBe(404);
+    expect((await request.get("/api/nowpayments/status")).status()).toBe(404);
+    expect((await request.get("/api/admin/nowpayments")).status()).toBe(404);
+    expect((await request.post("/api/admin/payments/reconcile", { data: {} })).status()).toBe(404);
+  });
+
   test("Bcon and Groq routes are gone", async ({ request }) => {
     expect((await request.post("/api/bcon/create", { data: {} })).status()).toBe(404);
     expect((await request.get("/api/bcon/callback")).status()).toBe(404);

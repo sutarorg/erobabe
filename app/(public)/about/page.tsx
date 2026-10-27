@@ -59,7 +59,7 @@ export default async function AboutPage() {
 
       <div className="mt-8 flex gap-3">
         <Link href="/contact" className="inline-flex h-9 items-center rounded-md border border-line bg-card px-4 text-[13px] font-medium hover:bg-card-hover">Contact us</Link>
-        <Link href="/advertiser" className="inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-soft">Advertise</Link>
+        <Link href="/checkout" className="inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white hover:bg-accent-soft">Advertise</Link>
       </div>
     </div>
   );

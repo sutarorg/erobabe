@@ -3,12 +3,13 @@ import { Loader2, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PublicVideo } from "@/lib/public/catalog";
 import type { FeedCursor } from "@/lib/public/watch-feed";
-import { gridStyle, useContainerColumns } from "../hooks/useGridColumns";
+import { gridStyle, useContainerColumns, useResponsiveGridRows } from "../hooks/useGridColumns";
 import PublicVideoCard from "./PublicVideoCard";
 export default function LatestVideoFeed({ videoId }: { videoId: string }) {
   const grid = useRef<HTMLDivElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const columns = useContainerColumns(grid);
+  const rowBatch = useResponsiveGridRows();
   const [videos, setVideos] = useState<PublicVideo[]>([]);
   const cursor = useRef<FeedCursor | null>(null);
   const lock = useRef(false);
@@ -19,7 +20,7 @@ export default function LatestVideoFeed({ videoId }: { videoId: string }) {
     if (lock.current || done) return;
     lock.current = true; setBusy(true); setError("");
     try {
-      const params = new URLSearchParams({ exclude: videoId, limit: String(columns * 4) });
+      const params = new URLSearchParams({ exclude: videoId, limit: String(columns * rowBatch) });
       if (cursor.current) { params.set("date", cursor.current.date); params.set("id", cursor.current.id); }
       const res = await fetch(`/api/videos/feed?${params}`);
       const data = await res.json(); if (!res.ok) throw new Error(data.error);
@@ -27,7 +28,7 @@ export default function LatestVideoFeed({ videoId }: { videoId: string }) {
       cursor.current = data.cursor; setDone(!data.cursor);
     } catch { setError("Unable to load videos. Try again."); }
     finally { lock.current = false; setBusy(false); }
-  }, [videoId, columns, done]);
+  }, [videoId, columns, done, rowBatch]);
   useEffect(() => {
     if (done || error || !sentinel.current) return;
     if (typeof IntersectionObserver === "undefined") { if (!videos.length) void load(); return; }

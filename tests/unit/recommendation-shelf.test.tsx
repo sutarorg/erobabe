@@ -27,7 +27,6 @@ describe("recommendation shelf layout", () => {
       .querySelector('[aria-label="Up Next"] [data-grid-rows="4"]') as HTMLElement;
 
     expect(grid).toBeTruthy();
-    expect(grid.className).toContain("grid-cols-2");
     expect(grid.className).not.toContain("grid-cols-1");
     expect(grid.style.gridTemplateColumns).toBe("repeat(2, minmax(0, 1fr))");
     expect(grid.children).toHaveLength(8);

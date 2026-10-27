@@ -3,7 +3,7 @@ import { publicPageMetadata } from "@/lib/metadata/page";
 import { SITE_URL } from "@/lib/site";
 import Link from "next/link";
 
-const EFFECTIVE_DATE = "October 15, 2026";
+const EFFECTIVE_DATE = "October 27, 2026";
 
 const SECTIONS: { number: string; title: string; paragraphs: string[] }[] = [
   {
@@ -40,10 +40,10 @@ const SECTIONS: { number: string; title: string; paragraphs: string[] }[] = [
   },
   {
     number: "05",
-    title: "Advertiser accounts and sponsored placements",
+    title: "Advertising and sponsored placements",
     paragraphs: [
-      "Creating an account on erobabe is offered solely for purchasing and managing display advertising campaigns. Advertiser balances and cryptocurrency invoice settlements are governed by the terms presented at checkout and are non-transferable between accounts.",
-      "All creative assets and destination URLs must comply with applicable law and our placement guidelines. We reserve the right to reject, pause, or remove any campaign at our discretion.",
+      "Advertising checkout is account-free. You must provide accurate contact and business information, upload a 16:9 creative, and pay the exact USD amount shown using the provided PayPal QR. Submitting the checkout form records your order as in review; it does not mean payment has been verified or that the ad has been accepted.",
+      "Our team manually verifies PayPal payment and reviews every creative and destination before making an ad live. All assets and URLs must comply with applicable law and our placement guidelines. We reserve the right to reject, pause, or remove any advertisement at our discretion.",
     ],
   },
   {
@@ -79,7 +79,7 @@ export default function TermsPage() {
         </div>
         <p className="mt-1.5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-3">
           The rules and conditions that govern browsing erobabe, third-party
-          uploaded video disclaimers, and operating an advertiser account.
+          uploaded video disclaimers, and submitting an advertisement.
         </p>
       </div>
 

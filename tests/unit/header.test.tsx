@@ -77,19 +77,12 @@ describe("public header navigation", () => {
     expect(screen.queryByRole("link", { name: /dashboard/i })).toBeNull();
   });
 
-  it("shows Dashboard instead of Sign in for a signed-in advertiser", () => {
+  it("does not offer a removed advertiser dashboard to non-staff accounts", () => {
     renderHeader({
-      user: { name: "advertiser@example.com", role: "advertiser" },
+      user: { name: "member@example.com", role: "advertiser" },
     });
     expect(screen.queryByRole("link", { name: /sign in/i })).toBeNull();
-
-    const dashboard = screen.getByRole("link", { name: /dashboard/i });
-    expect(dashboard.getAttribute("href")).toBe("/advertiser");
-    expect(dashboard.className).toContain("border");
-    expect(dashboard.className).toContain("border-line");
-    expect(dashboard.className).toContain("bg-transparent");
-    expect(dashboard.className).not.toContain("bg-accent");
-    // Signing out must still be one click away.
+    expect(screen.queryByRole("link", { name: /dashboard/i })).toBeNull();
     expect(screen.getByRole("button", { name: /sign out/i })).toBeTruthy();
   });
 
@@ -102,13 +95,11 @@ describe("public header navigation", () => {
 });
 
 describe("dashboardHrefFor", () => {
-  it("routes by role and defaults to the advertiser portal", () => {
+  it("routes staff to admin and returns no dashboard for guests or members", () => {
     expect(dashboardHrefFor({ name: "a", role: "admin" })).toBe("/admin");
-    expect(dashboardHrefFor({ name: "a", role: "advertiser" })).toBe(
-      "/advertiser",
-    );
-    expect(dashboardHrefFor({ name: "a" })).toBe("/advertiser");
-    expect(dashboardHrefFor(null)).toBe("/advertiser");
+    expect(dashboardHrefFor({ name: "a", role: "advertiser" })).toBeNull();
+    expect(dashboardHrefFor({ name: "a" })).toBeNull();
+    expect(dashboardHrefFor(null)).toBeNull();
   });
 });
 

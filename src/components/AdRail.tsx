@@ -16,7 +16,6 @@ interface AdRailProps {
   side: "left" | "right";
   start: number;
   count?: number;
-  onAdvertise?: () => void;
   activeCampaigns?: ActiveCampaign[];
 }
 
@@ -29,7 +28,6 @@ export default function AdRail({
   side,
   start,
   count = 5,
-  onAdvertise,
   activeCampaigns = [],
 }: AdRailProps) {
   const slots = Array.from({ length: count }, (_, i) => start + i);
@@ -50,7 +48,6 @@ export default function AdRail({
         <AdSlot
           key={`${n}:${activeCampaigns.find((c) => c.slot_id === n)?.creative?.id || "vacant"}`}
           index={n}
-          onAdvertise={onAdvertise}
           campaignId={activeCampaigns.find((c) => c.slot_id === n)?.campaign_id}
           creative={getCreativeForSlot(n)}
         />

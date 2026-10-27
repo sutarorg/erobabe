@@ -34,7 +34,8 @@ export type PublicCategory = {
 };
 
 export type PublicAd = {
-  campaign_id: string;
+  /** Legacy campaigns have analytics IDs; guest PayPal orders do not. */
+  campaign_id?: string;
   slot_id: number;
   creative: {
     id: string;
@@ -169,26 +170,61 @@ async function loadCategories(): Promise<PublicCategory[]> {
 async function loadActiveAds(): Promise<PublicAd[]> {
   const supabase = tryCreateServiceClient();
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("eligible_ads")
-    .select(
-      "campaign_id, slot_id, creative_id, title, image_url, destination_url",
-    );
-  if (error) {
-    console.error("Ad inventory unavailable", error.code);
-    return [];
+
+  const [legacyResult, orderResult] = await Promise.all([
+    supabase
+      .from("eligible_ads")
+      .select("campaign_id, slot_id, creative_id, title, image_url, destination_url"),
+    supabase
+      .from("ad_orders")
+      .select("id, slot_id, ad_name, image_url, destination_url")
+      .eq("status", "live")
+      .eq("payment_status", "verified")
+      .lte("starts_at", new Date().toISOString())
+      .gt("ends_at", new Date().toISOString()),
+  ]);
+
+  const bySlot = new Map<number, PublicAd>();
+  if (legacyResult.error) {
+    console.error("Legacy ad inventory unavailable", legacyResult.error.code);
+  } else {
+    for (const row of legacyResult.data || []) {
+      bySlot.set(Number(row.slot_id), {
+        campaign_id: row.campaign_id,
+        slot_id: Number(row.slot_id),
+        creative: {
+          id: row.creative_id,
+          title: row.title,
+          image_url: row.image_url,
+          destination_url: row.destination_url,
+          status: "approved",
+        },
+      });
+    }
   }
-  return (data || []).map((row: any) => ({
-    campaign_id: row.campaign_id,
-    slot_id: row.slot_id,
-    creative: {
-      id: row.creative_id,
-      title: row.title,
-      image_url: row.image_url,
-      destination_url: row.destination_url,
-      status: "approved",
-    },
-  }));
+
+  if (orderResult.error) {
+    // Migration 25 may not be applied during a rolling deployment. Historical
+    // ads can still render; all other errors are logged without exposing PII.
+    if (!["42P01", "PGRST205"].includes(orderResult.error.code)) {
+      console.error("PayPal ad inventory unavailable", orderResult.error.code);
+    }
+  } else {
+    for (const row of orderResult.data || []) {
+      bySlot.set(Number(row.slot_id), {
+        slot_id: Number(row.slot_id),
+        creative: {
+          id: row.id,
+          title: row.ad_name,
+          image_url: row.image_url,
+          destination_url: row.destination_url,
+          status: "approved",
+        },
+      });
+    }
+  }
+
+  return [...bySlot.values()];
 }
 
 /**

@@ -2,7 +2,7 @@
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Video } from "../data/content";
-import { GRID_ROWS, gridStyle, useContainerColumns } from "../hooks/useGridColumns";
+import { GRID_ROWS, gridStyle, useContainerColumns, useResponsiveGridRows } from "../hooks/useGridColumns";
 import VideoCard from "./VideoCard";
 
 interface InfiniteVideoGridProps {
@@ -40,6 +40,7 @@ export default function InfiniteVideoGrid({
 }: InfiniteVideoGridProps) {
   const gridRef = useRef<HTMLDivElement>(null);
   const columns = useContainerColumns(gridRef);
+  const rowBatch = useResponsiveGridRows();
   const [rows, setRows] = useState(GRID_ROWS);
   const [loading, setLoading] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -49,6 +50,9 @@ export default function InfiniteVideoGrid({
   const count = Math.min(rows, maxRows) * columns;
 
   useEffect(() => () => window.clearTimeout(timerRef.current), []);
+  useEffect(() => {
+    setRows((current) => Math.min(current, rowBatch));
+  }, [rowBatch]);
 
   useEffect(() => {
     const node = sentinelRef.current;
@@ -60,7 +64,7 @@ export default function InfiniteVideoGrid({
         setLoading(true);
         // Simulated latency so the skeletons are perceivable, like a real feed.
         timerRef.current = window.setTimeout(() => {
-          setRows((r) => Math.min(maxRows, r + GRID_ROWS));
+          setRows((r) => Math.min(maxRows, r + rowBatch));
           setLoading(false);
         }, 550);
       },
@@ -69,7 +73,7 @@ export default function InfiniteVideoGrid({
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, [loading, done, maxRows]);
+  }, [loading, done, maxRows, rowBatch]);
 
   // Cycle the pool so the feed keeps producing fresh-looking rows.
   const items = Array.from({ length: count }, (_, i) => ({

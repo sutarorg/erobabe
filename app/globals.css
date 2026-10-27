@@ -134,6 +134,39 @@ body {
 
 .eb-drawer { animation: eb-slide-in 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
+/* PayPal checkout review confirmation */
+@keyframes review-card-in {
+  from { opacity: 0; transform: translateY(18px) scale(0.975); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes review-check-in {
+  0% { opacity: 0; transform: scale(0.45) rotate(-12deg); }
+  65% { transform: scale(1.08) rotate(2deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+@keyframes review-pulse {
+  0% { opacity: 0.7; transform: scale(0.8); }
+  75%, 100% { opacity: 0; transform: scale(1.65); }
+}
+@keyframes review-orbit {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.8; }
+}
+@keyframes review-progress {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.review-card { animation: review-card-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.review-check { animation: review-check-in 0.65s 0.15s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.review-pulse { animation: review-pulse 2s ease-out infinite; }
+.review-orbit { animation: review-orbit 2.4s ease-in-out infinite; }
+.review-orbit-delay { animation-delay: -1.2s; }
+.review-progress { animation: review-progress 5s linear forwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .review-card, .review-check, .review-pulse, .review-orbit { animation: none; }
+}
+
 input::placeholder {
   color: var(--color-ink-3);
   opacity: 1;

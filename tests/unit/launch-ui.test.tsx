@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import AdminNav from "@/app/admin/(dashboard)/AdminNav";
-import AdvertiserNav from "@/app/advertiser/AdvertiserNav";
 import { homeSections } from "@/lib/public/selection";
 import type { PublicVideo } from "@/lib/public/catalog";
 import { activeHref } from "@/src/components/DashboardNav";
@@ -29,32 +28,14 @@ describe("production portal navigation", () => {
       "false",
     );
   });
-  it("has exactly six advertiser primary links, with Billing active for legacy invoice URL", () => {
-    path = "/advertiser/invoices";
-    render(<AdvertiserNav />);
-    expect(screen.getAllByRole("link").map((a) => a.textContent)).toEqual([
-      "Overview",
-      "Book Ad Space",
-      "My Campaigns",
-      "Analytics",
-      "Billing",
-      "Help & Support",
-    ]);
-    expect(screen.getByRole("link", { name: "Billing" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-  });
-  it("does not select prefix collisions or Overview for profile", () => {
+  it("does not select prefix collisions or the admin dashboard for nested routes", () => {
     const links = [
-      { href: "/advertiser", label: "Overview", icon: Film },
-      { href: "/advertiser/campaigns", label: "Campaigns", icon: Film },
+      { href: "/admin", label: "Overview", icon: Film },
+      { href: "/admin/campaigns", label: "Campaigns", icon: Film },
     ];
-    expect(activeHref("/advertiser/campaigns/new", links)).toBe(
-      "/advertiser/campaigns",
-    );
-    expect(activeHref("/advertiser/campaigns-archive", links)).toBeUndefined();
-    expect(activeHref("/advertiser/profile", links)).toBeUndefined();
+    expect(activeHref("/admin/campaigns/new", links)).toBe("/admin/campaigns");
+    expect(activeHref("/admin/campaigns-archive", links)).toBeUndefined();
+    expect(activeHref("/admin/profile", links)).toBeUndefined();
   });
 });
 describe("distinct home sections", () => {

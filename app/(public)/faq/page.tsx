@@ -8,11 +8,11 @@ export const metadata: Metadata = publicPageMetadata({
 });
 
 const FAQS = [
-  { q: "Do I need an account to watch?", a: "No. The public library is free to browse after the 18+ age gate. Accounts are only required for advertisers." },
-  { q: "How does advertising work?", a: "Pick any available slot, reserve it for USD $99 per 30 days, upload a 16:9 creative (1200×675 recommended). Creatives are reviewed before going live. Payments are via cryptocurrency through NOWPayments." },
+  { q: "Do I need an account to watch?", a: "No. The public library is free to browse after the 18+ age gate. Advertising checkout is account-free too." },
+  { q: "How does advertising work?", a: "Click any available ad banner, complete the guest checkout, and upload a 16:9 creative (1200×675 recommended). Pay with the PayPal QR, then submit your ad for review. Our team manually verifies the payment and creative before making it live." },
   { q: "Does erobabe own the uploaded videos?", a: "No. erobabe does not own, produce, or claim copyright over any of the videos uploaded to the platform. All videos remain the property of their respective third-party creators, studios, or copyright owners." },
   { q: "How do I request removal or file a DMCA notice?", a: "Use the Content Removal or DMCA Notice page with the video URL and reason. Valid takedown and removal requests are processed promptly within 24–48 hours." },
-  { q: "What payment methods?", a: "USDT on Ethereum (ERC-20) via NOWPayments. You receive a payment QR code, address, and payable amount at checkout. Campaigns activate once payment is confirmed." },
+  { q: "What payment methods?", a: "PayPal. Scan the QR shown at checkout and send the exact USD amount. After our admin manually confirms your payment and approves the ad, you’ll receive a ‘Your ad is live! Erobabe’ email." },
 ];
 
 export default function FAQPage() {

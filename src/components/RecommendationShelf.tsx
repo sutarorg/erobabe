@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import type { PublicVideo } from "@/lib/public/catalog";
 import { ALGORITHM_VERSION, type RecommendationSurface } from "@/lib/recommendations/ranking";
 import PublicVideoCard from "./PublicVideoCard";
+import FourRowVideoGrid from "./FourRowVideoGrid";
 
 type Item = PublicVideo & { category_id?: string | null; like_count?: number; reason?: string; score?: number };
 type Props = { title: string; videos: Item[]; surface: RecommendationSurface; correlationId?: string; algorithmVersion?: string; trackEvents?: boolean };
@@ -43,16 +44,13 @@ export default function RecommendationShelf({ title, videos, surface, correlatio
   }, [videos, surface, correlationId, algorithmVersion, trackEvents]);
 
   const isUpNext = surface === "up_next";
-  const gridClass = isUpNext
-    ? "video-grid mt-3.5 grid grid-cols-2 gap-4"
-    : "video-grid mt-3.5 grid grid-cols-4 gap-4";
   const displayVideos = isUpNext ? videos.slice(0, 8) : videos;
 
   return (
     <section className="mt-8 border-t border-line pt-5" aria-label={title}>
       <h2 className="text-[15px] font-semibold">{title}</h2>
       {videos.length ? (
-        <div className={gridClass} data-grid-rows="4" style={{ gridTemplateColumns: isUpNext ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))' }}>
+        <FourRowVideoGrid className="video-grid mt-3.5 gap-4" columnCount={isUpNext ? 2 : undefined}>
           {displayVideos.map((video) => (
             <div key={video.id} className="min-w-0">
               <PublicVideoCard video={video} onClick={() => {
@@ -61,7 +59,7 @@ export default function RecommendationShelf({ title, videos, surface, correlatio
               }} />
             </div>
           ))}
-        </div>
+        </FourRowVideoGrid>
       ) : (
         <p className="mt-3 text-sm text-ink-3">No videos available right now. Browse categories or try again later.</p>
       )}

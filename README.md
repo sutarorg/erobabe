@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Next.js application under production-readiness review with Supabase backend, NOWPayments crypto payments, Bunny Stream resumable device uploads, Resend email, AI metadata (NVIDIA Nemotron 3 Ultra free route via OpenRouter), and SEO optimization.
+Next.js application under production-readiness review with Supabase backend, guest PayPal advertising checkout, Bunny Stream resumable device uploads, Resend email, AI metadata (NVIDIA Nemotron 3 Ultra free route via OpenRouter), and SEO optimization.
 
 ## Quick Start
 
@@ -29,7 +29,7 @@ Open http://localhost:3000
 
 - Next.js 15 App Router
 - Supabase (Auth, Postgres, Storage, RLS)
-- NOWPayments (crypto payments)
+- PayPal QR checkout with manual staff payment verification
 - Resend (transactional email)
 - OpenRouter API, NVIDIA Nemotron 3 Ultra (free route; server-generated video metadata)
 - Bunny Stream direct pre-signed TUS uploads (`tus-js-client`)
@@ -87,13 +87,29 @@ unusable, the listing text is shortened to the same budget instead — the slot 
 always saved, and the row says which happened. `lib/metadata/carousel-copy.ts`
 holds the word budget, so every path (AI prompt, API, public card) agrees.
 
+## Advertising checkout
+
+Clicking a vacant banner opens `/checkout?slot=<id>` directly; no advertiser account,
+billing modal, or dashboard is involved. The split checkout collects campaign/contact
+details and a 16:9 JPG or PNG banner (maximum 5 MB), and displays the PayPal QR from
+`public/paypal-qr.png`. Prices are recalculated from `ad_slots` on the server. Submitting
+creates an `in_review` order and shows an animated review screen before returning to the
+public site after five seconds. A client payment assertion never verifies payment.
+
+Staff inspect the creative and destination in **Admin → Ad Review**, manually confirm the
+payment in their PayPal account, then choose **Approve & make live**. Going live triggers
+the Resend email with subject **Your ad is live! Erobabe**. Apply migration
+`00000000000025_paypal_ad_orders.sql` before using the flow. Historical campaign/payment
+rows remain for audit, but the old NOWPayments checkout, IPN, status, and reconciliation
+APIs and the advertiser portal have been removed.
+
 ## Routes
 
 Public: `/`, `/categories`, `/category/[slug]`, `/latest`, `/popular`, `/video/[slug]`, `/about`, `/terms`, `/privacy`, `/contact`, `/faq`, `/content-removal`
 
-Advertiser: `/advertiser`, `/advertiser/slots`, `/advertiser/campaigns`, `/advertiser/campaigns/new`, `/advertiser/payments`, `/advertiser/invoices`, `/advertiser/analytics`, `/advertiser/profile`, `/advertiser/support`
+Guest advertising: `/checkout`, `/checkout/review`, `POST /api/ads/submit`
 
-Admin: `/admin`, `/admin/videos`, `/admin/videos/upload`, `/admin/categories`, `/admin/advertisements`, `/admin/ad-slots`, `/admin/advertisers`, `/admin/campaigns`, `/admin/payments`, `/admin/reports`, `/admin/users`, `/admin/logs`, `/admin/system-health`
+Admin: `/admin`, `/admin/videos`, `/admin/videos/upload`, `/admin/categories`, `/admin/advertisements`, `/admin/ad-slots`, `/admin/campaigns`, `/admin/payments`, `/admin/reports`, `/admin/users`, `/admin/logs`, `/admin/system-health`
 
 SEO: `/sitemap.xml`, `/video-sitemap.xml`, `/robots.txt`
 
@@ -111,7 +127,7 @@ npm run test:e2e
 See `GO_LIVE_CHECKLIST.md`. The current blockers are:
 
 - **Hosting** must permit adult/commercial content (Vercel Hobby does not).
-- **Legal identity, age assurance, NOWPayments approval, Resend domain verification.**
+- **Legal identity, age assurance, an operational PayPal destination for the published QR, and Resend domain verification.**
 
 ## Brand
 

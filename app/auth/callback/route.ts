@@ -5,7 +5,7 @@ export async function GET(req: NextRequest) {
   const next =
     req.nextUrl.searchParams.get("next") === "/auth/update-password"
       ? "/auth/update-password"
-      : "/advertiser";
+      : "/";
   if (code) {
     const db = await createClient();
     const { error } = await db.auth.exchangeCodeForSession(code);
