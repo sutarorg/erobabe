@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { GET, HEAD, isPrivateHost } from "@/app/api/videos/stream/route";
+import { clearPageMediaCache } from "@/lib/video/page-media";
 
 /**
  * `/api/videos/stream` is the only path through which damplips bytes reach a
@@ -31,6 +32,8 @@ function mediaResponse(init: ResponseInit & { headers?: Record<string, string> }
 }
 
 beforeEach(() => {
+  // Post-page resolutions are cached for half an hour; each test starts clean.
+  clearPageMediaCache();
   fetchMock = vi.fn(async () => mediaResponse());
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -348,6 +351,123 @@ describe("GET /api/videos/stream", () => {
     const response = await HEAD(new NextRequest(PROXY, { method: "HEAD" }));
     expect(response.status).toBe(206);
     expect(await response.text()).toBe("");
+  });
+});
+
+describe("fast playback", () => {
+  /**
+   * A post page whose head names its file but whose body never finishes. A
+   * reader that waits for the whole document (ad scripts, promos, comments)
+   * would hold the player here; the proxy must return as soon as the head
+   * yields the file.
+   */
+  function endlessPostPage(file: string) {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            `<!DOCTYPE html><html><head><meta property="og:title" content="A post">` +
+              `<meta property="og:video" content="${file}"></head><body>`,
+          ),
+        );
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    return {
+      response: new Response(stream, { status: 200, headers: { "content-type": "text/html" } }),
+      wasCancelled: () => cancelled,
+    };
+  }
+
+  it("starts streaming a post page's file without reading the whole page", async () => {
+    const postPage = "https://www.damplips.com/p/67400/";
+    const file = "https://video.damplips.com/videos/67400.mp4";
+    const page = endlessPostPage(file);
+    fetchMock.mockResolvedValueOnce(page.response);
+    fetchMock.mockResolvedValueOnce(mediaResponse());
+
+    const response = await GET(
+      new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(postPage)}`),
+    );
+
+    expect(response.status).toBe(206);
+    expect(String(fetchMock.mock.calls[1][0])).toBe(file);
+    expect(page.wasCancelled()).toBe(true);
+  });
+
+  it("remembers the page → file answer so later byte ranges skip the page", async () => {
+    const postPage = "https://www.damplips.com/p/67401/";
+    const file = "https://video.damplips.com/videos/67401.mp4";
+    fetchMock.mockResolvedValueOnce(
+      new Response(`<html><head><meta property="og:video" content="${file}"></head></html>`, {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+    );
+    fetchMock.mockResolvedValue(mediaResponse());
+
+    await GET(new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(postPage)}`));
+    await GET(
+      new NextRequest(`https://erobabe.test/api/videos/stream?src=${encodeURIComponent(postPage)}`, {
+        headers: { range: "bytes=1000-2000" },
+      }),
+    );
+
+    // One page read, then straight to the file for every following request.
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === postPage)).toHaveLength(1);
+    expect(String(fetchMock.mock.calls.at(-1)![0])).toBe(file);
+  });
+
+  it("lets the browser reuse its copy instead of re-downloading", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(null, { status: 304, headers: { etag: '"v1"', "last-modified": "Wed, 21 Oct 2026 07:28:00 GMT" } }),
+    );
+
+    const response = await GET(
+      new NextRequest(PROXY, { headers: { range: "bytes=0-3", "if-none-match": '"v1"' } }),
+    );
+
+    expect(response.status).toBe(304);
+    expect(response.headers.get("etag")).toBe('"v1"');
+    expect(await response.text()).toBe("");
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["if-none-match"]).toBe('"v1"');
+  });
+
+  it("forwards if-range so a seek resumes instead of restarting the download", async () => {
+    await GET(
+      new NextRequest(PROXY, {
+        headers: { range: "bytes=500-999", "if-range": '"v1"' },
+      }),
+    );
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>)["if-range"]).toBe('"v1"');
+  });
+
+  it("marks media cacheable at the edge so a popular video is not one function per range", async () => {
+    const response = await GET(new NextRequest(PROXY, { headers: { range: "bytes=0-3" } }));
+    const cacheControl = response.headers.get("cache-control") || "";
+    expect(cacheControl).toContain("s-maxage=");
+    expect(cacheControl).toContain("public");
+  });
+
+  it("keeps a playlist's cache window short", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("#EXTM3U\n#EXT-X-ENDLIST\n", {
+        status: 200,
+        headers: { "content-type": "application/vnd.apple.mpegurl" },
+      }),
+    );
+    const response = await GET(
+      new NextRequest(
+        `https://erobabe.test/api/videos/stream?src=${encodeURIComponent("https://video.damplips.com/v/67402/index.m3u8")}`,
+      ),
+    );
+    expect(response.headers.get("cache-control")).toContain("max-age=30");
   });
 });
 

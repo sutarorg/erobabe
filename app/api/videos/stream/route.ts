@@ -3,7 +3,12 @@ import { isDamplipsMediaUrl } from "@/lib/video/playback";
 import { isHlsContentType, isHlsUrl, isHtmlContentType, rewriteHlsPlaylist } from "@/lib/video/hls";
 import { proxiedMediaUrl } from "@/lib/video/media-proxy";
 import { verifyMediaToken } from "@/lib/video/media-token";
-import { parseMedia } from "@/lib/damplips/parse";
+import {
+  forgetPageMedia,
+  readPageMedia,
+  recallPageMedia,
+  rememberPageMedia,
+} from "@/lib/video/page-media";
 
 /**
  * Same-origin playback proxy.
@@ -45,13 +50,21 @@ const PASS_THROUGH_HEADERS = [
   "last-modified",
 ];
 
-/** A post page is HTML; a hostile one must not be allowed to exhaust memory. */
-const MAX_PAGE_BYTES = 512 * 1024;
+/**
+ * Media is immutable enough to cache hard: the URL identifies one file, and a
+ * browser or edge that already holds the bytes should never ask us again. This
+ * is what makes a repeat play start instantly, and what lets a CDN absorb the
+ * traffic of a popular video instead of every range request hitting a function.
+ */
+const MEDIA_CACHE_CONTROL = "public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400";
+/** A playlist changes when the packager rolls it; keep its window short. */
+const PLAYLIST_CACHE_CONTROL = "public, max-age=30, s-maxage=60";
+
+/** Request headers that let an upstream answer "you already have this". */
+const CONDITIONAL_HEADERS = ["if-none-match", "if-range", "if-modified-since"];
+
 /** A page that points at another page that points at another… is a loop. */
 const MAX_PAGE_HOPS = 2;
-/** Post-page → media resolution is cached: a `<video>` makes many requests. */
-const RESOLVED_TTL_MS = 5 * 60 * 1000;
-const RESOLVED_LIMIT = 250;
 
 function badRequest(message: string, status = 400) {
   return new Response(message, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -178,56 +191,6 @@ async function fetchUpstream(target: URL, headers: Record<string, string>): Prom
   return badRequest("Too many redirects", 502);
 }
 
-/** Reads at most `MAX_PAGE_BYTES` of a document, then drops the connection. */
-async function readCapped(response: Response): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) return response.text();
-  const decoder = new TextDecoder();
-  let text = "";
-  let size = 0;
-  try {
-    while (size < MAX_PAGE_BYTES) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      text += decoder.decode(value, { stream: true });
-    }
-  } catch {
-    /* Keep whatever was read; a truncated page may still name its media. */
-  } finally {
-    void reader.cancel().catch(() => undefined);
-  }
-  return text + decoder.decode();
-}
-
-const resolutions = new Map<string, { url: string; at: number }>();
-
-function rememberResolution(from: string, to: string) {
-  const now = Date.now();
-  for (const [key, value] of resolutions) {
-    if (now - value.at > RESOLVED_TTL_MS) resolutions.delete(key);
-  }
-  if (resolutions.size >= RESOLVED_LIMIT) {
-    const oldest = resolutions.keys().next().value;
-    if (oldest) resolutions.delete(oldest);
-  }
-  resolutions.set(from, { url: to, at: now });
-}
-
-function rememberedResolution(from: string): URL | null {
-  const hit = resolutions.get(from);
-  if (!hit) return null;
-  if (Date.now() - hit.at > RESOLVED_TTL_MS) {
-    resolutions.delete(from);
-    return null;
-  }
-  try {
-    return new URL(hit.url);
-  } catch {
-    return null;
-  }
-}
-
 /** Only this route may be handed a foreign host, and only when it signed it. */
 function rewriteCallback(absolute: string): string | null {
   return proxiedMediaUrl(absolute);
@@ -250,10 +213,14 @@ async function proxy(req: NextRequest): Promise<Response> {
   };
   const range = req.headers.get("range");
   if (range) headers.range = range;
+  for (const name of CONDITIONAL_HEADERS) {
+    const value = req.headers.get(name);
+    if (value) headers[name] = value;
+  }
 
   const requestedUrl = parsed.url;
-  const cached = rememberedResolution(requestedUrl.toString());
-  let current = cached ?? requestedUrl;
+  const cached = recallPageMedia(requestedUrl.toString());
+  let current = cached ? new URL(cached) : requestedUrl;
   let usingCache = cached !== null;
 
   for (let hop = 0; hop <= MAX_PAGE_HOPS; hop += 1) {
@@ -262,7 +229,7 @@ async function proxy(req: NextRequest): Promise<Response> {
       // A remembered media URL can rot. Drop it and read the page again
       // instead of failing playback for the rest of the cache window.
       if (usingCache) {
-        resolutions.delete(requestedUrl.toString());
+        forgetPageMedia(requestedUrl.toString());
         usingCache = false;
         current = requestedUrl;
         continue;
@@ -271,9 +238,21 @@ async function proxy(req: NextRequest): Promise<Response> {
     }
 
     const { response: upstream, url: upstreamUrl } = result;
+    // The browser already holds this byte range: hand back the validators and
+    // let it reuse its copy instead of re-downloading the file.
+    if (upstream.status === 304) {
+      void upstream.body?.cancel().catch(() => undefined);
+      const notModified = new Headers();
+      for (const name of ["etag", "last-modified"]) {
+        const value = upstream.headers.get(name);
+        if (value) notModified.set(name, value);
+      }
+      notModified.set("cache-control", MEDIA_CACHE_CONTROL);
+      return new Response(null, { status: 304, headers: notModified });
+    }
     if (!upstream.ok) {
       if (usingCache) {
-        resolutions.delete(requestedUrl.toString());
+        forgetPageMedia(requestedUrl.toString());
         usingCache = false;
         current = requestedUrl;
         continue;
@@ -286,14 +265,14 @@ async function proxy(req: NextRequest): Promise<Response> {
     // back around. This is the difference between a framed damplips page and a
     // video that plays in our own player.
     if (isHtmlContentType(upstream.headers.get("content-type"))) {
-      const html = await readCapped(upstream);
-      const media = parseMedia(html, upstreamUrl.toString());
-      if (!media || media.kind !== "direct") {
+      // Reads only up to the media tag and cancels the rest of the page.
+      const media = await readPageMedia(upstream, upstreamUrl.toString());
+      if (!media) {
         return badRequest("The source page did not publish a playable file", 502);
       }
       let next: URL;
       try {
-        next = new URL(media.url, upstreamUrl);
+        next = new URL(media, upstreamUrl);
       } catch {
         return badRequest("The source page published an unusable media URL", 502);
       }
@@ -304,7 +283,7 @@ async function proxy(req: NextRequest): Promise<Response> {
       if (next.toString() === upstreamUrl.toString()) {
         return badRequest("The source page pointed at itself", 502);
       }
-      rememberResolution(requestedUrl.toString(), next.toString());
+      rememberPageMedia(requestedUrl.toString(), next.toString());
       current = next;
       continue;
     }
@@ -326,7 +305,7 @@ async function proxy(req: NextRequest): Promise<Response> {
         status: 200,
         headers: {
           "content-type": "application/vnd.apple.mpegurl",
-          "cache-control": "public, max-age=30",
+          "cache-control": PLAYLIST_CACHE_CONTROL,
           "x-content-type-options": "nosniff",
         },
       });
@@ -340,7 +319,7 @@ async function proxy(req: NextRequest): Promise<Response> {
       if (value) responseHeaders.set(name, value);
     }
     if (!responseHeaders.has("accept-ranges")) responseHeaders.set("accept-ranges", "bytes");
-    responseHeaders.set("cache-control", "public, max-age=600");
+    responseHeaders.set("cache-control", MEDIA_CACHE_CONTROL);
 
     return new Response(req.method === "HEAD" ? null : upstream.body, {
       status: upstream.status,
