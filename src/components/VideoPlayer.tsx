@@ -195,6 +195,9 @@ function NativePlayer({
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: false,
+          // Start pulling the first fragment while the manifest is still being
+          // parsed: the difference between "Preparing video…" and a frame.
+          startFragPrefetch: true,
           // A transient failure from our own proxy should be retried inside
           // hls.js rather than ending playback.
           manifestLoadingMaxRetry: 3,

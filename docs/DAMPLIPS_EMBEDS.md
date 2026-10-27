@@ -244,6 +244,27 @@ the next batch is requested about two screens before it is seen — and duplicat
 rows are dropped as batches arrive. A spinner marks the fetch; the manual
 retry button appears only after a failure.
 
+## Playback latency
+
+Playback has to feel instant, so the path from page to first frame is short by
+construction:
+
+| Cost | What removes it |
+| --- | --- |
+| Discovering the file behind a stored post page | The watch page resolves it **on the server** before rendering, so the `<video src>` in the HTML is already the media file (bounded to 1.2 s; past that the proxy resolves it instead). |
+| Reading a 400 KB, ad-heavy page for a 60-byte tag | The page is read chunk by chunk and abandoned the moment a media URL appears — usually a few KB — and the connection is cancelled, not drained. |
+| Paying that cost again for every byte range | Resolutions are cached in-process for 30 minutes (500 entries) and concurrent lookups are collapsed into one request. |
+| Re-downloading the file on the next visit | Media responses carry `public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400`, so a browser or CDN copy is reused. Playlists stay short-lived (`max-age=30`). |
+| Re-downloading after a reload | `If-None-Match` / `If-Modified-Since` are forwarded and a `304` is passed straight back; `If-Range` is forwarded so a seek resumes. |
+| A cold connection to the poster host | The watch page emits `preconnect` + `dns-prefetch` for the poster host and `preload` for the poster, plus `preconnect` for any direct media host. |
+| Waiting for a JavaScript chunk before buffering | The `<video>` ships with `preload="auto"` and its `src` in the server HTML; Safari/iOS stream playlists natively, and `hls.js` is only loaded where it is actually needed (`startFragPrefetch` on). |
+| A slow shelf starving the player | Every recommendation shelf streams inside its own `Suspense` boundary, below the player. |
+
+The one thing the proxy cannot remove is its own hop: bytes travel
+damplips → proxy → browser. Deploying the app in a region close to damplips'
+CDN is the single biggest remaining lever, and the edge cache headers above let
+a CDN absorb repeat traffic instead of hitting a function per range request.
+
 ## Operational notes
 
 - **Source credit.** The watch page does not display a "Source: damplips.com"

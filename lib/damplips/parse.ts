@@ -258,9 +258,12 @@ export function parseDuration(value: unknown): number | null {
 
 function collectMediaCandidates(html: string, pageUrl: string): DamplipsMedia[] {
   const candidates: DamplipsMedia[] = [];
-  const push = (kind: "direct" | "embed", raw: string | null | undefined) => {
+  const push = (declared: "direct" | "embed", raw: string | null | undefined) => {
     const url = toSafeUrl(raw ?? "", pageUrl);
     if (!url) return;
+    // A URL that names a player path is an embed whatever attribute it came
+    // from: `og:video:url` is sometimes the framed player, not a file.
+    const kind: "direct" | "embed" = /\/(?:embed|player|e)\/[^/]/i.test(url) ? "embed" : declared;
     const host = hostOf(url, pageUrl);
     if (isBlockedHost(host)) return;
     if (kind === "direct" && !MEDIA_EXTENSION.test(url) && !/\/videos?\//i.test(url)) {

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Children, isValidElement } from "react";
 import { getRecommendationFeed } from "@/lib/recommendations/service";
+import { clearPageMediaCache } from "@/lib/video/page-media";
 import { SHELF_VIDEO_LIMIT } from "@/lib/public/shelf";
 
 const DAY = 86_400_000;
@@ -45,8 +46,11 @@ function fakeSupabase(row: Record<string, any>) {
   return { from: () => builder };
 }
 
+/** The row the fake client returns; individual tests swap it out. */
+const rowState = vi.hoisted(() => ({ row: null as null | Record<string, any> }));
+
 vi.mock("@/lib/supabase/server", () => ({
-  createClient: async () => fakeSupabase(VIDEO_ROW),
+  createClient: async () => fakeSupabase(rowState.row as Record<string, any>),
 }));
 
 vi.mock("@/lib/public/catalog", () => ({ getPublicCategories: async () => [] }));
@@ -120,6 +124,9 @@ function suspenseFallbackTitles(node: unknown, titles: string[] = []): string[] 
 }
 
 beforeEach(() => {
+  rowState.row = VIDEO_ROW;
+  // Post-page → file answers are cached in-process for half an hour.
+  clearPageMediaCache();
   vi.mocked(getRecommendationFeed).mockReset();
   vi.mocked(getRecommendationFeed).mockImplementation(
     async ({ surface }: { surface: string }) => feedFactory(surface) as any,
@@ -279,6 +286,49 @@ describe("/video/[slug] watch page", () => {
       expect(card.getAttribute("href")).toMatch(/^\/video\//);
       expect(card.querySelector("img")).toBeTruthy();
     }
+  });
+
+  it("renders the media file directly when the row stores a damplips post page", async () => {
+    // The stored URL is an HTML page; resolving it on the server means the
+    // first byte of video is requested while the document is still parsing.
+    rowState.row = {
+      ...VIDEO_ROW,
+      playable_url: "https://www.damplips.com/p/67284/",
+      embed_url: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response('<html><head><meta property="og:video" content="https://video.damplips.com/videos/67284.mp4"></head></html>', {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      ),
+    );
+
+    const html = await renderPage();
+    const src = new DOMParser().parseFromString(html, "text/html").querySelector("video")?.getAttribute("src") || "";
+
+    // The player was handed the file (through the proxy), never the page.
+    expect(decodeURIComponent(src)).toContain("https://video.damplips.com/videos/67284.mp4");
+    expect(decodeURIComponent(src)).not.toContain("/p/67284/");
+  });
+
+  it("opens the poster connection before the video is requested", async () => {
+    const html = await renderPage();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const hints = Array.from(doc.querySelectorAll("link[rel='preconnect']")).map((link) =>
+      link.getAttribute("href"),
+    );
+    expect(hints).toContain("https://cdn.example.com");
+    expect(doc.querySelector("link[rel='preload'][as='image']")).toBeTruthy();
+  });
+
+  it("does not resolve a post page for an ordinary media file", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await renderPage();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
