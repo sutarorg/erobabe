@@ -239,6 +239,21 @@ describe("video player", () => {
     expect(playbackCandidates(damplipsFile)).toEqual([damplipsProxy, damplipsFile]);
   });
 
+  it("streams an HLS playlist with the element itself when the browser can, so buffering starts at once", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockReturnValue("probably");
+    const playlist = "https://cdn.example.com/master.m3u8";
+    const { container } = render(
+      <VideoPlayer {...props} playableUrl={playlist} />,
+    );
+
+    // No hls.js chunk to wait for: the same server-rendered element gets the
+    // playlist address and buffers immediately.
+    await waitFor(() =>
+      expect(container.querySelector("video")).toHaveAttribute("src", playlist),
+    );
+    expect(container.querySelector("video")).toHaveAttribute("preload", "auto");
+  });
+
   it("keeps trusted historical players in their restrictive sandbox", () => {
     const { container } = render(
       <VideoPlayer

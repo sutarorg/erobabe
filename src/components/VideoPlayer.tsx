@@ -49,6 +49,20 @@ function usePlaybackEvents(videoId: string) {
 }
 
 /**
+ * True when the element can play an HLS playlist itself.
+ *
+ * Safari and every iOS browser can, and there the element streams a playlist
+ * without Media Source Extensions. Detecting that before importing `hls.js`
+ * means such a browser starts buffering from the server-rendered `src`
+ * immediately, instead of waiting for a JavaScript chunk (and then discovering
+ * `Hls.isSupported()` is false on iOS anyway).
+ */
+export function playsHlsNatively(element: HTMLVideoElement | null): boolean {
+  if (!element || typeof element.canPlayType !== "function") return false;
+  return Boolean(element.canPlayType("application/vnd.apple.mpegurl"));
+}
+
+/**
  * Every destination worth trying for one catalog row, best first.
  *
  * damplips media is asked for through the same-origin proxy, which supplies the
@@ -155,6 +169,14 @@ function NativePlayer({
     if (strategy !== "hls") return;
     const video = videoRef.current;
     if (!video) return;
+
+    // First attempt, and the browser plays playlists by itself: hand the
+    // playlist to the element now so buffering starts without hls.js.
+    if (attempt === 0 && !triedAlternative && playsHlsNatively(video)) {
+      setStrategy("native");
+      return;
+    }
+
     let destroyed = false;
     let instance: { destroy: () => void } | null = null;
     recoveries.current = 0;
@@ -218,7 +240,7 @@ function NativePlayer({
       destroyed = true;
       instance?.destroy();
     };
-  }, [url, strategy, attempt, handleFailure]);
+  }, [url, strategy, attempt, triedAlternative, handleFailure]);
 
 
   /** The first moment playback can really begin, whatever the strategy. */

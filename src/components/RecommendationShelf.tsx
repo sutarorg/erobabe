@@ -4,6 +4,7 @@ import type { PublicVideo } from "@/lib/public/catalog";
 import { ALGORITHM_VERSION, type RecommendationSurface } from "@/lib/recommendations/ranking";
 import PublicVideoCard from "./PublicVideoCard";
 import FourRowVideoGrid from "./FourRowVideoGrid";
+import { UP_NEXT_VIDEO_LIMIT } from "@/lib/public/shelf";
 
 type Item = PublicVideo & { category_id?: string | null; like_count?: number; reason?: string; score?: number };
 type Props = { title: string; videos: Item[]; surface: RecommendationSurface; correlationId?: string; algorithmVersion?: string; trackEvents?: boolean };
@@ -27,7 +28,8 @@ export default function RecommendationShelf({ title, videos, surface, correlatio
     if (!videos.length) return;
     sent.current = true;
     lastCorrelation.current = currentCorrelation;
-    const impressionVideos = surface === "up_next" ? videos.slice(0, 8) : videos;
+    const impressionVideos =
+      surface === "up_next" ? videos.slice(0, UP_NEXT_VIDEO_LIMIT) : videos;
     const events = impressionVideos.map((video, position) => ({
       videoId: video.id,
       type: "impression" as const,
@@ -44,7 +46,7 @@ export default function RecommendationShelf({ title, videos, surface, correlatio
   }, [videos, surface, correlationId, algorithmVersion, trackEvents]);
 
   const isUpNext = surface === "up_next";
-  const displayVideos = isUpNext ? videos.slice(0, 8) : videos;
+  const displayVideos = isUpNext ? videos.slice(0, UP_NEXT_VIDEO_LIMIT) : videos;
 
   return (
     <section className="mt-8 border-t border-line pt-5" aria-label={title}>

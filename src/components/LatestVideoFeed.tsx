@@ -3,6 +3,10 @@ import { Loader2, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PublicVideo } from "@/lib/public/catalog";
 import type { FeedCursor } from "@/lib/public/watch-feed";
+import {
+  LATEST_FEED_ROOT_MARGIN,
+  latestFeedBatchSize,
+} from "@/lib/public/shelf";
 import { gridStyle, useContainerColumns, useResponsiveGridRows } from "../hooks/useGridColumns";
 import PublicVideoCard from "./PublicVideoCard";
 export default function LatestVideoFeed({ videoId }: { videoId: string }) {
@@ -20,9 +24,12 @@ export default function LatestVideoFeed({ videoId }: { videoId: string }) {
     if (lock.current || done) return;
     lock.current = true; setBusy(true); setError("");
     try {
-      // Start the next batch before the sentinel is close, and never make a
-      // narrow/mobile feed wait for single-card requests.
-      const params = new URLSearchParams({ exclude: videoId, limit: String(Math.max(10, columns * rowBatch)) });
+      // Two shelves per request, requested while the sentinel is still two
+      // screens away, so a fast scroll never waits for a batch to start.
+      const params = new URLSearchParams({
+        exclude: videoId,
+        limit: String(latestFeedBatchSize(columns, rowBatch)),
+      });
       if (cursor.current) { params.set("date", cursor.current.date); params.set("id", cursor.current.id); }
       const res = await fetch(`/api/videos/feed?${params}`);
       const data = await res.json(); if (!res.ok) throw new Error(data.error);
@@ -36,7 +43,7 @@ export default function LatestVideoFeed({ videoId }: { videoId: string }) {
     if (typeof IntersectionObserver === "undefined") { if (!videos.length) void load(); return; }
     const observer = new IntersectionObserver(entries => {
       if (entries.some(e => e.isIntersecting)) void load();
-    }, { rootMargin: "1200px 0px" });
+    }, { rootMargin: LATEST_FEED_ROOT_MARGIN });
     observer.observe(sentinel.current);
     return () => observer.disconnect();
   }, [load, done, error, videos.length]);
