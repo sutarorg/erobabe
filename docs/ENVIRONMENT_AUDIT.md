@@ -1,5 +1,10 @@
 # Environment inventory — 2026-10-16
 
+> **Historical document (superseded 2026-10-27).** Video uploads and Bunny
+> Stream are retired. This file is kept for provenance; read
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
+> `npm run import:damplips`, `/api/videos/stream`).
+
 No real credentials were read, written or verified. `.env.example` contains placeholders only. Required below means required for that workflow, not proof that its production account is approved.
 
 | Variable(s) | Consumer | Requirement / validation and failure |

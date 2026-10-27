@@ -1,5 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import Link from "next/link";
+import { MIN_VIDEOS_PER_CATEGORY, categoryCounts, type ImportService } from "@/lib/damplips/importer";
+import DamplipsImportPanel from "./DamplipsImportPanel";
 import VideoManager, {
   type AdminCategory,
   type AdminVideo,
@@ -11,7 +13,7 @@ export default async function AdminVideosPage() {
     supabase
       .from("videos")
       .select(
-        "id, slug, title, status, visibility, provider, requires_reupload, thumbnail_url, playable_url, embed_url, view_count, created_at, carousel_position, carousel_title, carousel_description, category_id, provider_progress, provider_error, category:categories(label)",
+        "id, slug, title, status, visibility, provider, requires_reupload, thumbnail_url, playable_url, embed_url, source_url, view_count, created_at, carousel_position, carousel_title, carousel_description, category_id, category:categories(label)",
       )
       .order("created_at", { ascending: false })
       .limit(1000),
@@ -33,6 +35,7 @@ export default async function AdminVideosPage() {
       thumbnail_url: video.thumbnail_url || null,
       playable_url: video.playable_url || null,
       embed_url: video.embed_url || null,
+      source_url: video.source_url || null,
       view_count: Number(video.view_count) || 0,
       created_at: String(video.created_at || new Date().toISOString()),
       category_id: video.category_id ? String(video.category_id) : null,
@@ -46,13 +49,6 @@ export default async function AdminVideosPage() {
       carousel_description: video.carousel_description
         ? String(video.carousel_description)
         : null,
-      provider_progress:
-        video.provider_progress == null
-          ? null
-          : Number(video.provider_progress),
-      provider_error: video.provider_error
-        ? String(video.provider_error)
-        : null,
     };
   });
 
@@ -63,6 +59,13 @@ export default async function AdminVideosPage() {
     }),
   );
 
+  let counts: Awaited<ReturnType<typeof categoryCounts>> = [];
+  try {
+    counts = await categoryCounts(supabase as unknown as ImportService);
+  } catch {
+    counts = [];
+  }
+  const filled = counts.filter((entry) => entry.count >= MIN_VIDEOS_PER_CATEGORY).length;
   const withThumbnails = rows.filter((video) => video.thumbnail_url).length;
 
   return (
@@ -71,39 +74,34 @@ export default async function AdminVideosPage() {
         <div>
           <h1 className="text-[20px] font-semibold">Videos</h1>
           <p className="mt-1 text-[12px] text-ink-3">
-            Remote video bytes are retained after catalog deletion; each
-            deletion is recorded in media_retention for operator review. Manage
-            the video library: encoding uploads appear here immediately and
-            publish automatically once Bunny encoding completes. Filter by
-            category, manage thumbnails, set the homepage carousel, or delete
-            videos.{" "}
+            Every video in the library is embedded from damplips.com — nothing is
+            uploaded here. Curate the catalog: replace a poster, publish or hide
+            a video, place it in the homepage carousel, or remove it.{" "}
             {rows.length > 0 && (
               <span className="tabular-nums">
                 {rows.length} videos · {withThumbnails} with a thumbnail
+                {counts.length ? ` · ${filled}/${counts.length} categories at ${MIN_VIDEOS_PER_CATEGORY}+` : ""}
               </span>
             )}
           </p>
         </div>
         <Link
-          href="/admin/videos/upload"
-          className="inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white"
+          href="/admin/system-health"
+          className="inline-flex h-9 items-center rounded-md border border-line px-4 text-[13px] font-semibold"
         >
-          Upload
+          Catalog health
         </Link>
       </div>
 
+      <DamplipsImportPanel counts={counts} />
+
       {rows.length === 0 ? (
         <div className="mt-8 rounded-lg border border-dashed border-line bg-pcard p-12 text-center">
-          <p className="text-[14px] font-medium">No videos published yet</p>
+          <p className="text-[14px] font-medium">No videos in the library yet</p>
           <p className="mt-1 text-[12px] text-ink-3">
-            Upload your first video to get started.
+            Run the damplips import above to fill each category with at least{" "}
+            {MIN_VIDEOS_PER_CATEGORY} embedded videos.
           </p>
-          <Link
-            href="/admin/videos/upload"
-            className="mt-4 inline-flex h-9 items-center rounded-md bg-accent px-4 text-[13px] font-semibold text-white"
-          >
-            Upload video
-          </Link>
         </div>
       ) : (
         <VideoManager initialVideos={rows} categories={categoryOptions} />

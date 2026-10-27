@@ -22,32 +22,42 @@ function setCookie(response: NextResponse, token: string) {
 
 export async function GET() {
   const hash = await viewerHashFromCookie();
-  const cookieValue = (await cookies()).get(RECOMMENDATION_COOKIE)?.value || "";
-  const token = /^[A-Za-z0-9_-]{40,100}$/.test(cookieValue) ? cookieValue : randomBytes(32).toString("base64url");
-  const secret = process.env.ANALYTICS_HASH_SECRET || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-  let enabled = true;
+  // Personalization is opt-in: without a consented profile the answer is "off",
+  // and a cookie is only handed out when a profile hash can actually be derived.
+  let enabled = false;
   if (hash) {
     try {
-      const { data, error } = await createServiceClient().from("recommendation_preferences")
+      const { data, error } = await createServiceClient()
+        .from("recommendation_preferences")
         .select("personalization_enabled,consent_expires_at")
-        .eq("viewer_hash", hash).maybeSingle();
+        .eq("viewer_hash", hash)
+        .maybeSingle();
       if (!error && data) {
-        enabled = Boolean(data.personalization_enabled && Date.parse(data.consent_expires_at) > Date.now());
+        enabled = Boolean(
+          data.personalization_enabled && Date.parse(data.consent_expires_at) > Date.now(),
+        );
       }
-      enabled = enabled || true;
     } catch {
-      enabled = true;
+      enabled = false;
     }
   }
+
   const response = NextResponse.json({ enabled }, { headers: { "Cache-Control": "private, no-store" } });
+  const secret = process.env.ANALYTICS_HASH_SECRET || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (secret) {
-    response.cookies.set(RECOMMENDATION_COOKIE, token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 180,
-    });
+    // Keeps the opaque profile cookie stable across visits; it carries no
+    // identity and is useless without the server-side hash secret.
+    let existing = "";
+    try {
+      existing = (await cookies()).get(RECOMMENDATION_COOKIE)?.value || "";
+    } catch {
+      // No request scope (tests, or a server-to-server call): issue a fresh one.
+      existing = "";
+    }
+    const token = /^[A-Za-z0-9_-]{40,100}$/.test(existing)
+      ? existing
+      : randomBytes(32).toString("base64url");
+    setCookie(response, token);
   }
   return response;
 }

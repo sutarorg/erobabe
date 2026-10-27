@@ -5,21 +5,23 @@ import { homeSections } from "@/lib/public/selection";
 import type { PublicVideo } from "@/lib/public/catalog";
 import { activeHref } from "@/src/components/DashboardNav";
 import { Film } from "lucide-react";
-let path = "/admin/videos/upload";
+let path = "/admin/videos";
 vi.mock("next/navigation", () => ({ usePathname: () => path }));
 afterEach(cleanup);
 describe("production portal navigation", () => {
-  it("expands Content with only Upload Videos active on the nested route", () => {
+  it("expands Content with only Videos active, and offers no upload route", () => {
     render(<AdminNav />);
     expect(screen.getByRole("button", { name: "Content" })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
-    expect(screen.getByRole("link", { name: "Upload Videos" })).toHaveAttribute(
+    // Uploads are retired: the library is curated in place.
+    expect(screen.queryByRole("link", { name: /upload/i })).toBeNull();
+    expect(screen.getByRole("link", { name: "Videos" })).toHaveAttribute(
       "aria-current",
       "page",
     );
-    expect(screen.getByRole("link", { name: "Videos" })).not.toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Categories" })).not.toHaveAttribute(
       "aria-current",
     );
     fireEvent.click(screen.getByRole("button", { name: "Content" }));

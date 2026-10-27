@@ -1,5 +1,10 @@
 # Recommendation privacy and security
 
+> **Historical document (superseded 2026-10-27).** Video uploads and Bunny
+> Stream are retired. This file is kept for provenance; read
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
+> `npm run import:damplips`, `/api/videos/stream`).
+
 **Applies to:** recommendation profile, feedback, and measurement introduced in migration `00000000000024_recommendations.sql`. The public catalog remains browseable without profiling or an account. Adult viewing data is treated as sensitive even if pseudonymous.
 
 ## Data collected

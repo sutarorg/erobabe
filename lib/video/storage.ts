@@ -1,11 +1,11 @@
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
+
 import type { ServiceClient } from "@/lib/video/publishing";
 
 /**
- * Thumbnail storage only.
- *
- * Video bytes upload directly to Bunny Stream, never Supabase or the application server.
- * Thumbnails are small enough for a signed upload URL.
+ * Image storage for the admin-managed artwork (category cards and legacy
+ * posters). Video bytes never pass through this app any more: the catalog is
+ * embedded from damplips, so there is no upload target to issue.
  */
 
 export const THUMBNAIL_BUCKET = "video-thumbnails";
@@ -80,6 +80,13 @@ export interface UploadTarget {
   publicUrl?: string;
 }
 
+/**
+ * Issues a signed upload URL for an artwork image.
+ *
+ * This is the only upload target the app still issues: category cards and video
+ * posters. Video bytes are never uploaded here — the catalog is embedded from
+ * damplips — so the route that calls this rejects anything but an image.
+ */
 export async function createThumbnailUploadTarget({
   service,
   userId,
@@ -107,7 +114,7 @@ export async function createThumbnailUploadTarget({
   return { uploadUrl: data.signedUrl, storagePath, bucket: THUMBNAIL_BUCKET, publicUrl: publicData?.publicUrl };
 }
 
-/** Confirms a thumbnail path belongs to this admin and returns its public URL. */
+/** Confirms an upload path belongs to this admin and returns its public URL. */
 export function resolveThumbnailUrl(service: ServiceClient, userId: string, storagePath: string | null | undefined): string | null {
   if (!storagePath) return null;
   const normalized = String(storagePath).trim().replace(/^\/+/, "");

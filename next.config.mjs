@@ -6,12 +6,6 @@ const nextConfig = {
   allowedDevOrigins: ["*.e2b.app"],
   poweredByHeader: false,
   compress: true,
-  // Frame thumbnails run a bundled ffmpeg binary. Keep the package out of the
-  // webpack bundle and ship the linux-x64 binary with the routes that use it.
-  serverExternalPackages: ['@ffmpeg-installer/ffmpeg', '@ffmpeg-installer/linux-x64'],
-  outputFileTracingIncludes: {
-    '/api/admin/videos/thumbnails': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
-  },
   experimental: {
     staleTimes: {
       dynamic: 30,
@@ -23,14 +17,9 @@ const nextConfig = {
       { protocol: 'https', hostname: 'i.postimg.cc' },
       { protocol: 'https', hostname: 'images.pexels.com' },
       { protocol: 'https', hostname: '**.supabase.co' },
-      // Streamtape player pages and splash thumbnails.
-      { protocol: 'https', hostname: 'streamtape.com' },
-      { protocol: 'https', hostname: '**.streamtape.com' },
-      { protocol: 'https', hostname: 'tapecontent.net' },
-      { protocol: 'https', hostname: '**.tapecontent.net' },
-      // Retired UFOLOAD posters on legacy videos — historical rows keep rendering.
-      { protocol: 'https', hostname: 'ufoload.com' },
-      { protocol: 'https', hostname: '**.ufoload.com' },
+      // Embedded damplips catalog: posters and media come from its hosts.
+      { protocol: 'https', hostname: 'damplips.com' },
+      { protocol: 'https', hostname: '**.damplips.com' },
       { protocol: 'https', hostname: '**.resend.com' },
     ],
   },

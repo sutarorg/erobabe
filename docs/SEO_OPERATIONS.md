@@ -1,5 +1,10 @@
 # SEO deployment and monitoring
 
+> **Historical document (superseded 2026-10-27).** Video uploads and Bunny
+> Stream are retired. This file is kept for provenance; read
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
+> `npm run import:damplips`, `/api/videos/stream`).
+
 ## Implemented in this change
 
 - Mobile hero arrows use viewport breakpoints (no container-query override); swipe and dots remain.

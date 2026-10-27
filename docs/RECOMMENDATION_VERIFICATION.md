@@ -1,5 +1,10 @@
 # Recommendation implementation verification — 16 October 2026
 
+> **Historical document (superseded 2026-10-27).** Video uploads and Bunny
+> Stream are retired. This file is kept for provenance; read
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
+> `npm run import:damplips`, `/api/videos/stream`).
+
 ## Local checks
 
 - `npm run type-check` — passed.

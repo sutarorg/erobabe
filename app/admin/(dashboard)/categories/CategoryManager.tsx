@@ -90,7 +90,7 @@ export default function CategoryManager({ initialCategories }: { initialCategori
     setUploadingImage(true);
     try {
       const target = await postJson<{ uploadUrl: string; storagePath: string; publicUrl?: string }>(
-        "/api/videos/storage-token",
+        "/api/admin/uploads/thumbnail",
         {
           kind: "thumbnail",
           fileName: file.name,

@@ -1,4 +1,3 @@
-import { bunnyRequest, bunnyVideoSchema, deleteBunnyVideo } from "@/lib/video/bunny";
 import { suggestCarouselCopy } from "@/lib/metadata/openrouter";
 import type { CarouselCopyResult } from "@/lib/metadata/openrouter";
 import { NextRequest, NextResponse } from "next/server";
@@ -11,12 +10,13 @@ import { removeThumbnailObject, resolveImageValue } from "@/lib/video/storage";
 import { revalidatePublicTag } from "@/lib/public/revalidate";
 
 /**
- * Admin video maintenance: change/remove a thumbnail, place a video in the
- * homepage carousel, regenerate its carousel copy, or delete a video.
+ * Admin video maintenance: publish/unpublish, change/remove a thumbnail, place
+ * a video in the homepage carousel, regenerate its carousel copy, or delete a
+ * video.
  *
- * Bunny media is deleted before its catalog row. Provider failures retain the
- * row so admins can retry; an already-missing remote video is a success.
- * Thumbnail cleanup is best effort after the catalog deletion.
+ * Uploads are gone: the catalog is embedded from damplips, so publishing only
+ * verifies that the row has a playable destination. Deleting a row never
+ * touches the external media; the reference is recorded for operator review.
  *
  * Placing a video in a carousel slot also generates that video's short carousel
  * copy through the AI (max 5 words headline, max 10 words teaser). A failure
@@ -132,7 +132,7 @@ function isMissingColumnError(error: unknown): boolean {
 async function loadVideo(service: ServiceClient, id: string) {
   const { data, error } = await service
     .from("videos")
-    .select("id, slug, title, thumbnail_url, provider, provider_file_id, bunny_library_id")
+    .select("id, slug, title, thumbnail_url, provider, provider_file_id")
     .eq("id", id)
     .single();
   if (error || !data) throw new Error("Video not found");
@@ -143,7 +143,6 @@ async function loadVideo(service: ServiceClient, id: string) {
     thumbnail_url: string | null;
     provider: string | null;
     provider_file_id: string | null;
-    bunny_library_id: string | null;
   };
 }
 
@@ -247,49 +246,31 @@ export async function PATCH(req: NextRequest) {
     if (body.action === "publish") {
       const { data: video, error } = await service
         .from("videos")
-        .select("*")
+        .select("id, slug, provider, requires_reupload, playable_url, embed_url")
         .eq("id", id)
         .single();
-      if (
-        error ||
-        !video ||
-        video.provider !== "bunny" ||
-        video.requires_reupload
-      )
-        return badRequest("Video not eligible");
-      const remote = bunnyVideoSchema.parse(
-        await bunnyRequest(
-          `/${video.provider_file_id}`,
-          "GET",
-          undefined,
-          video.bunny_library_id,
-        ),
-      );
-      if (
-        remote.status !== 4 ||
-        remote.guid !== video.provider_file_id ||
-        String(remote.videoLibraryId) !== video.bunny_library_id
-      )
-        return badRequest("Bunny media is not ready");
-      const ownership = ["owned", "licensed", "partner"].includes(
-        String(body.ownership),
-      )
-        ? String(body.ownership)
-        : "partner";
-      const evidence =
-        typeof body.evidence === "string" && body.evidence.trim().length >= 20
-          ? body.evidence.trim().slice(0, 2000)
-          : "Published by active administrator after Bunny encoding completed";
-      const { error: publishError } = await service.rpc(
-        "publish_reviewed_bunny",
-        {
-          p_video: id,
-          p_admin: user.id,
-          p_ownership: ownership,
-          p_evidence: evidence,
-        },
-      );
+      if (error || !video) return badRequest("Video not found");
+      if (video.requires_reupload) return badRequest("Video not eligible");
+      if (!video.playable_url && !video.embed_url) {
+        return badRequest("This video has no playable media URL");
+      }
+      const { error: publishError } = await service
+        .from("videos")
+        .update({
+          status: "published",
+          visibility: "public",
+          rights_status: "cleared",
+          moderation_status: "approved",
+          requires_reupload: false,
+          published_at: new Date().toISOString(),
+          updated_by: user.id,
+        })
+        .eq("id", id);
       if (publishError) throw publishError;
+      await audit(service, user.id, "video_published", id, {
+        slug: video.slug,
+        provider: video.provider,
+      });
       revalidatePublicTag("videos");
       return NextResponse.json({
         video: { id, status: "published", visibility: "public" },
@@ -446,7 +427,7 @@ export async function DELETE(req: NextRequest) {
 
       const { data: rows, error: rowsError } = await service
         .from("videos")
-        .select("id, slug, title, thumbnail_url, provider, provider_file_id, bunny_library_id")
+        .select("id, slug, title, thumbnail_url, provider, provider_file_id")
         .in("id", bulkIds);
       if (rowsError) throw rowsError;
       const found = (rows || []) as Array<{
@@ -456,14 +437,12 @@ export async function DELETE(req: NextRequest) {
         thumbnail_url: string | null;
         provider: string | null;
         provider_file_id: string | null;
-        bunny_library_id: string | null;
       }>;
 
       const deleted: string[] = [];
       const failed: Array<{ id: string; error: string }> = [];
       for (const row of found) {
         try {
-          await deleteBunnyVideo(row);
           const { error } = await service.from("videos").delete().eq("id", row.id);
           if (error) throw error;
           deleted.push(row.id);
@@ -472,7 +451,7 @@ export async function DELETE(req: NextRequest) {
             slug: row.slug, title: row.title, provider: row.provider, bulk: true,
           });
         } catch {
-          failed.push({ id: row.id, error: "Deletion could not finish. Check Bunny configuration and retry." });
+          failed.push({ id: row.id, error: "Deletion could not finish. Retry the request." });
         }
       }
 
@@ -494,12 +473,11 @@ export async function DELETE(req: NextRequest) {
 
     const video = await loadVideo(service, id);
 
-    await deleteBunnyVideo(video);
     const { error } = await service.from("videos").delete().eq("id", id);
     if (error) throw error;
 
-    // video_tags / video_events cascade; upload_jobs and rights_records are
-    // ON DELETE SET NULL — the row is gone without orphaning other tables.
+    // video_tags / video_events cascade; rights_records are ON DELETE SET NULL
+    // — the row is gone without orphaning other tables.
     await removeThumbnailObject(service, video.thumbnail_url);
     await audit(service, user.id, "video_deleted", id, {
       slug: video.slug,

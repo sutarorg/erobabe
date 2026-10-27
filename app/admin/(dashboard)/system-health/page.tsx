@@ -1,10 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
-import {
-  uploadConfiguration,
-  bunnyRequest,
-  providerError,
-} from "@/lib/video/bunny";
 import { openRouterDiagnostics } from "@/lib/metadata/openrouter";
+import { categoryCounts, MIN_VIDEOS_PER_CATEGORY, type ImportService } from "@/lib/damplips/importer";
 import OpenRouterCheck from "./OpenRouterCheck";
 
 export default async function SystemHealthAdmin() {
@@ -33,40 +29,17 @@ export default async function SystemHealthAdmin() {
   const ai = openRouterDiagnostics();
   const aiStatus = ai.configured ? "Configured" : "Not configured";
 
-  let videoStatus = "Configuration blocked";
+  // The catalog is embedded from damplips; this is the real per-category count.
+  let catalogStatus = "Unavailable";
+  let catalogDetail = "Category counts could not be read. Apply migration 00000000000026_damplips_embeds.sql.";
+  let catalogCounts: Awaited<ReturnType<typeof categoryCounts>> = [];
   try {
-    uploadConfiguration();
-    await bunnyRequest("?page=1&itemsPerPage=1");
-    videoStatus = "Operational — API connected";
-  } catch (e) {
-    videoStatus = providerError(e).error;
-  }
-
-  let videoLifecycle =
-    "Unknown — apply the Bunny migration before checking sessions";
-  /** Sessions a background publish sweep could still act on. */
-  let sweepPending = 0;
-  try {
-    const { data, error } = await supabase
-      .from("bunny_uploads")
-      .select("state,provider_status,last_error")
-      .order("updated_at", { ascending: false })
-      .limit(100);
-    if (!error) {
-      const rows = (data || []) as {
-        state: string;
-        provider_status: number | null;
-        last_error?: string | null;
-      }[];
-      const count = (states: string[]) =>
-        rows.filter((r) => states.includes(r.state)).length;
-      const thumbnails = rows.filter((r) =>
-        /thumbnail/i.test(r.last_error || ""),
-      ).length;
-      sweepPending =
-        count(["uploading", "creating"]) + count(["processing"]) + count(["ready"]);
-      videoLifecycle = `${count(["uploading", "creating"])} awaiting/uploading · ${count(["processing"])} processing · ${count(["ready"])} ready awaiting save · ${count(["completed"])} completed · ${count(["failed"])} failed · ${count(["cancelled"])} paused · ${thumbnails} thumbnail failures (latest 100 sessions)`;
-    }
+    catalogCounts = await categoryCounts(supabase as unknown as ImportService);
+    const filled = catalogCounts.filter((entry) => entry.count >= MIN_VIDEOS_PER_CATEGORY);
+    catalogStatus = `${filled.length}/${catalogCounts.length} categories at ${MIN_VIDEOS_PER_CATEGORY}+`;
+    catalogDetail = catalogCounts
+      .map((entry) => `${entry.label}: ${entry.count}`)
+      .join(" · ");
   } catch {
     /* Honest unknown, never fabricated availability. */
   }
@@ -91,26 +64,16 @@ export default async function SystemHealthAdmin() {
       desc: "Guest checkout uses the published PayPal QR. Staff verify each payment in PayPal before approving the ad; no payment-gateway API or advertiser account is required.",
     },
     {
-      name: "Video Provider",
-      status: videoStatus,
+      name: "Video catalog (damplips)",
+      status: catalogStatus,
       latency: "—",
-      desc: "Bunny Stream read-only API connectivity. This does not prove TUS upload or playback; verify a real staging upload. Processing and thumbnail failures appear in upload sessions.",
+      desc: catalogDetail,
     },
     {
-      name: "Bunny upload lifecycle",
-      status: "Session diagnostics",
+      name: "Video uploads",
+      status: "Retired",
       latency: "—",
-      desc: videoLifecycle,
-    },
-    {
-      name: "Background auto-publish",
-      status: process.env.CRON_SECRET
-        ? "Scheduler can authenticate"
-        : "No scheduler secret",
-      latency: "—",
-      desc: process.env.CRON_SECRET
-        ? `CRON_SECRET is set, so a scheduler may call /api/cron/bunny-publish and publish finished uploads with no browser open. ${sweepPending} session(s) currently waiting for it. Run the "Publish finished uploads" GitHub workflow, or curl the endpoint with Authorization: Bearer <secret>, to prove it.`
-        : `CRON_SECRET is not set, so /api/cron/bunny-publish answers an active admin session only: an encode that finishes after the upload tab is closed stays unpublished until an administrator confirms the session. ${sweepPending} session(s) are waiting. Set CRON_SECRET on the host and run the "Publish finished uploads" GitHub workflow.`,
+      desc: "Uploads and the Bunny Stream pipeline are removed. The library is filled by the damplips importer from Videos → Sync from damplips, or by `npm run import:damplips`.",
     },
     {
       name: "Resend",
@@ -130,7 +93,7 @@ export default async function SystemHealthAdmin() {
 
   const { data: retainedMedia, error: retentionError } = await supabase
     .from("media_retention")
-    .select("id, video_id, provider, provider_file_id, library_id, status")
+    .select("id, video_id, provider, provider_file_id, status")
     .eq("status", "pending_review")
     .order("created_at", { ascending: false })
     .limit(50);
@@ -147,7 +110,7 @@ export default async function SystemHealthAdmin() {
         <h2 className="text-sm font-semibold">Retained remote media</h2>
         <p className="mt-1 text-xs text-ink-3">
           Catalog deletion does not delete provider media. Review these retained
-          objects under the retention policy in DEPLOYMENT.md before
+          references under the retention policy in DEPLOYMENT.md before
           provider-side deletion.
         </p>
         {retentionError ? (
@@ -157,8 +120,7 @@ export default async function SystemHealthAdmin() {
         ) : retainedMedia?.length ? (
           retainedMedia.map((row: any) => (
             <p key={row.id} className="mt-2 break-all font-mono text-xs">
-              {row.provider} · library {row.library_id || "legacy"} ·{" "}
-              {row.provider_file_id} · review {row.id}
+              {row.provider} · {row.provider_file_id} · review {row.id}
             </p>
           ))
         ) : (
@@ -176,7 +138,7 @@ export default async function SystemHealthAdmin() {
             <div className="flex items-center justify-between">
               <p className="text-[13px] font-medium">{c.name}</p>
               <span
-                className={`rounded-full px-2 py-0.5 text-[10px] ${c.status.includes("Operational") || c.status.includes("Configured") || c.status.includes("direct_url") ? "bg-emerald-500/10 text-emerald-400" : c.status.includes("Unknown") ? "bg-zinc-500/10 text-zinc-400" : "bg-amber-500/10 text-amber-300"}`}
+                className={`rounded-full px-2 py-0.5 text-[10px] ${c.status.includes("Operational") || c.status.includes("Configured") || c.status.includes("categories at") ? "bg-emerald-500/10 text-emerald-400" : c.status.includes("Unknown") || c.status.includes("Unavailable") ? "bg-zinc-500/10 text-zinc-400" : "bg-amber-500/10 text-amber-300"}`}
               >
                 {c.status}
               </span>
@@ -194,9 +156,9 @@ export default async function SystemHealthAdmin() {
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
         <p className="text-[11px] text-ink-3">
           Last checked: {new Date().toLocaleString()} — real diagnostic requests
-          are performed for Database and Bunny Stream. Use “Test OpenRouter” to
-          prove the AI metadata key with a live call. PayPal payments are checked
-          manually in your PayPal account from Ad Review.
+          are performed for Database and the damplips catalog. Use “Test
+          OpenRouter” to prove the AI metadata key with a live call. PayPal
+          payments are checked manually in your PayPal account from Ad Review.
         </p>
       </div>
     </div>

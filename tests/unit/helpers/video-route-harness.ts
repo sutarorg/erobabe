@@ -23,6 +23,8 @@ export interface Harness {
 /** Adds the bits of the Supabase client the video routes use. */
 export function withExtras(client: any, db: FakeDb, userId = ADMIN_ID) {
   client.storage = {
+    listBuckets: async () => ({ data: [{ id: "video-thumbnails", name: "video-thumbnails" }], error: null }),
+    createBucket: async (id: string) => ({ data: { id, name: id }, error: null }),
     from: (bucket: string) => ({
       getPublicUrl: (path: string) => ({ data: { publicUrl: `https://cdn.example.com/${bucket}/${path}` } }),
       createSignedUploadUrl: async (path: string) => ({ data: { signedUrl: `signed://${path}` }, error: null }),
@@ -46,7 +48,6 @@ export function createHarness(
       videos: [],
       tags: [],
       video_tags: [],
-      upload_jobs: [],
       audit_logs: [],
       ...overrides,
     },

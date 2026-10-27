@@ -1,5 +1,10 @@
 # Production readiness — 2026-10-15
 
+> **Historical document (superseded 2026-10-27).** Video uploads and Bunny
+> Stream are retired. This file is kept for provenance; read
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
+> `npm run import:damplips`, `/api/videos/stream`).
+
 ## Decision: HOLD — not production-ready
 
 Code changes and local automated verification are delivered; required staging, policy, legal and operational acceptance are incomplete. No production deployment, live charge, production migration or remote media deletion was performed. A successful build is not release approval. See `AUDIT_REPORT.md` for remaining code/policy follow-ups and `GO_LIVE_CHECKLIST.md` for every gate.

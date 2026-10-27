@@ -15,7 +15,7 @@ export async function GET() {
         const { data, error } = await supabase
           .from("videos")
           .select(
-            "slug, title, description, thumbnail_url, published_at, duration_seconds, updated_at, provider, provider_file_id, bunny_library_id, playable_url, embed_url",
+            "slug, title, description, thumbnail_url, published_at, duration_seconds, updated_at, provider, provider_file_id, playable_url, embed_url",
           )
           .eq("requires_reupload", false)
           .eq("status", "published")
@@ -36,7 +36,7 @@ export async function GET() {
 
   const xmlEntries = videos
     .flatMap((v) => {
-      const source = selectPlaybackSource(v.playable_url, v.embed_url, v.provider, v.bunny_library_id, v.provider_file_id);
+      const source = selectPlaybackSource(v.playable_url, v.embed_url, v.provider);
       if (!v.thumbnail_url || !v.title || (source.kind !== "direct" && source.kind !== "embed")) return [];
       const loc = `${siteUrl}/video/${v.slug}`;
       const thumb = v.thumbnail_url

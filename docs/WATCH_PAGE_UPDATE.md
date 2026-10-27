@@ -1,5 +1,10 @@
 # Fixed taxonomy and watch-page community update
 
+> **Historical document (superseded 2026-10-27).** Video uploads and Bunny
+> Stream are retired. This file is kept for provenance; read
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
+> `npm run import:damplips`, `/api/videos/stream`).
+
 Apply the pending migrations in order, including `00000000000021_fixed_categories_and_community.sql` and `00000000000022_unique_anonymous_comment_profiles.sql`, before deploying the matching application. No live database migration is performed by editing this repository.
 
 - The fixed-category migration seeds the requested 12 categories, keeping IDs, thumbnails and existing descriptions for matching slugs. Retired categories are removed; their videos are **not deleted**, but become uncategorized and need admin reassignment. Upload recovery rows are preserved with a null category; unfinished Bunny sessions in retired categories are cancelled and must be restarted with a current category. Back up the database and review affected category assignments before applying.

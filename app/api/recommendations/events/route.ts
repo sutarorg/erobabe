@@ -1,10 +1,8 @@
-import { createHmac } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { boundedJson, limitRequest, RequestError } from "@/lib/http/safety";
 import { createServiceClient } from "@/lib/supabase/server";
 import { viewerHashFromCookie } from "@/lib/recommendations/service";
-import { cookies } from "next/headers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,16 +23,16 @@ export async function POST(request: NextRequest) {
     await limitRequest(request, "recommendation-events", 90);
     const parsed = payload.safeParse(await boundedJson(request, 8_192));
     if (!parsed.success) return NextResponse.json({ error: "Invalid event payload" }, { status: 400 });
-    let viewerHash = await viewerHashFromCookie();
-    const cookieValue = (await cookies()).get("erobabe-rec-profile")?.value || "";
-    const token = /^[A-Za-z0-9_-]{40,100}$/.test(cookieValue) ? cookieValue : "temp-" + Math.random().toString(36).slice(2);
-    const secret = process.env.ANALYTICS_HASH_SECRET || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-    if (!viewerHash && secret) {
-      try {
-        viewerHash = createHmac("sha256", secret).update(`recommendation-profile:${token}`).digest("hex");
-      } catch { viewerHash = token; }
+    // Events are only recorded for a consented profile. Without one there is
+    // nothing to attribute and nothing private to keep, so the request is
+    // accepted and dropped.
+    const viewerHash = await viewerHashFromCookie();
+    if (!viewerHash) {
+      return NextResponse.json(
+        { accepted: 0, personalization: false },
+        { headers: { "Cache-Control": "private, no-store" } },
+      );
     }
-    if (!viewerHash) viewerHash = token;
     const db = createServiceClient();
     let accepted = 0;
     for (const item of parsed.data.events) {
@@ -55,7 +53,7 @@ export async function POST(request: NextRequest) {
       }
       if (data === true) accepted += 1;
     }
-    return NextResponse.json({ accepted }, { headers: { "Cache-Control": "private, no-store" } });
+    return NextResponse.json({ accepted, personalization: true }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     return NextResponse.json({ error: "Unable to record event" }, { status: error instanceof RequestError ? error.status : 503, headers: { "Cache-Control": "private, no-store" } });
   }

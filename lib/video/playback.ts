@@ -1,72 +1,96 @@
-export function bunnyEmbedUrl(libraryId: string, videoId: string): string {
-  if (
-    !/^[1-9]\d*$/.test(libraryId) ||
-    !Number.isSafeInteger(Number(libraryId)) ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      videoId,
-    )
-  )
-    throw new Error("Invalid Bunny playback identity");
-  return `https://iframe.mediadelivery.net/embed/${libraryId}/${videoId}`;
-}
-/** Stored direct media and embeds only. No retired-provider API calls or URL fabrication. */
+/**
+ * Which destination the watch page may hand to a player.
+ *
+ * The catalog now embeds damplips.com: a row stores the media URL the damplips
+ * post page itself serves (an mp4/HLS file or a player URL) plus the page it
+ * came from. Uploaded providers are retired, so a row still pointing at one is
+ * reported as unsupported rather than handed to an iframe.
+ */
+
 export type PlaybackSource =
   | { kind: "direct" | "embed"; url: string }
   | { kind: "missing" | "unsupported" };
+
+/** Providers whose media no longer has a working player on this site. */
+const RETIRED_PROVIDERS = new Set(["bunny", "streamtape", "ufoload", "uqload", "filekosh", "archived"]);
+
+const DAMPLIPS_DOMAIN = /(^|\.)damplips\.com$/i;
+
+export function isDamplipsHostname(hostname: string): boolean {
+  return DAMPLIPS_DOMAIN.test(hostname.toLowerCase());
+}
+
+export function isDamplipsMediaUrl(url: string): boolean {
+  try {
+    return isDamplipsHostname(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Same-origin URL that streams a damplips file through our route.
+ *
+ * damplips signs/referer-checks its media, so the browser asks our proxy and
+ * the proxy asks damplips with the origin the file expects.
+ */
+export function damplipsProxyUrl(url: string): string {
+  return `/api/videos/stream?src=${encodeURIComponent(url)}`;
+}
+
+function safeUrl(raw: string | null | undefined, allowedProtocols: RegExp): URL | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (!allowedProtocols.test(url.protocol) || url.username || url.password) return null;
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/** Hosts whose stored files cannot be refreshed or trusted after retirement. */
+const RETIRED_MEDIA_HOSTS = /(^|\.)(streamtape\.(com|net|to)|tapecontent\.net|mediadelivery\.net)$/i;
+
+function isRetiredMediaHost(url: URL): boolean {
+  return RETIRED_MEDIA_HOSTS.test(url.hostname);
+}
+
+/** YouTube/Vimeo players are the only non-damplips embeds accepted. */
+function isApprovedNonDamplipsEmbed(url: URL): boolean {
+  if (url.protocol !== "https:" || url.port) return false;
+  if (url.hostname === "www.youtube-nocookie.com" || url.hostname === "www.youtube.com") {
+    return /^\/embed\/[A-Za-z0-9_-]+$/.test(url.pathname);
+  }
+  return url.hostname === "player.vimeo.com" && /^\/video\/\d+$/.test(url.pathname);
+}
+
+/**
+ * Resolves the playable destination of a catalog row.
+ *
+ * Order matters: a direct file plays in our own player (with our poster and our
+ * analytics), so it wins over an embed of someone else's page.
+ */
 export function selectPlaybackSource(
   playableUrl?: string | null,
   embedUrl?: string | null,
   provider?: string | null,
-  libraryId?: string | null,
-  videoId?: string | null,
 ): PlaybackSource {
-  if (provider === "streamtape") return { kind: "unsupported" };
-  if (["archived", "ufoload", "uqload"].includes(provider || ""))
-    return { kind: "unsupported" };
-  if (provider === "bunny") {
-    try {
-      const expected = bunnyEmbedUrl(libraryId || "", videoId || "");
-      if (embedUrl !== expected) return { kind: "missing" };
-      return { kind: "embed", url: expected };
-    } catch {
-      return { kind: "missing" };
-    }
+  if (provider && RETIRED_PROVIDERS.has(provider)) return { kind: "unsupported" };
+
+  const direct = safeUrl(playableUrl, /^https?:$/);
+  if (direct) {
+    return isRetiredMediaHost(direct)
+      ? { kind: "unsupported" }
+      : { kind: "direct", url: direct.toString() };
   }
-  if (
-    provider &&
-    !["direct_url", "internal", "s3", "cloudflare", "embed"].includes(provider)
-  )
+
+  const embed = safeUrl(embedUrl, /^https?:$/);
+  if (embed && !isRetiredMediaHost(embed)) {
+    if (isDamplipsMediaUrl(embed.toString())) return { kind: "embed", url: embed.toString() };
+    if (isApprovedNonDamplipsEmbed(embed)) return { kind: "embed", url: embed.toString() };
     return { kind: "unsupported" };
-  for (const [raw, kind] of [
-    [playableUrl, "direct"],
-    [embedUrl, "embed"],
-  ] as const) {
-    if (!raw) continue;
-    try {
-      const url = new URL(raw);
-      if (!/^https?:$/.test(url.protocol) || url.username || url.password)
-        continue;
-      // These historic records cannot be refreshed safely after retiring the API.
-      if (
-        /(^|\.)(streamtape\.(com|net|to)|tapecontent\.net)$/i.test(url.hostname)
-      )
-        return { kind: "unsupported" };
-      if (kind === "embed") {
-        // Preserve well-defined historical players, never arbitrary iframe origins.
-        const approved =
-          (["www.youtube-nocookie.com", "www.youtube.com"].includes(
-            url.hostname,
-          ) &&
-            /^\/embed\/[A-Za-z0-9_-]+$/.test(url.pathname)) ||
-          (url.hostname === "player.vimeo.com" &&
-            /^\/video\/\d+$/.test(url.pathname));
-        if (!approved || url.protocol !== "https:" || url.port)
-          return { kind: "unsupported" };
-      }
-      return { kind, url: url.toString() };
-    } catch {
-      /* Invalid stored data must not become an executable iframe. */
-    }
   }
+
   return { kind: "missing" };
 }

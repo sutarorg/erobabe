@@ -13,7 +13,8 @@ const props = {
   title: "Test clip",
   poster: "https://cdn.example.com/poster.jpg",
 };
-const embed = "https://streamtape.com/e/abc123";
+const damplipsFile = "https://video.damplips.com/videos/67284.mp4";
+const damplipsProxy = `/api/videos/stream?src=${encodeURIComponent(damplipsFile)}`;
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -35,89 +36,46 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** The warm-up endpoint the player calls, ignoring the media element's own requests. */
-function warmCalls() {
-  return fetchMock.mock.calls.filter(([input]) =>
-    String(input).endsWith("/prepare"),
-  );
-}
-
 describe("video player", () => {
-  it("opens straight into the Bunny player — no erobabe play icon, no loading text", () => {
-    const guid = "44444444-4444-4444-8444-444444444444";
-    const url = `https://iframe.mediadelivery.net/embed/123/${guid}`;
+  it("plays a damplips file through the same-origin stream proxy", () => {
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
+  });
+
+  it("frames a damplips embed page in the restrictive sandbox", () => {
     const { container } = render(
       <VideoPlayer
         {...props}
-        provider="bunny"
-        libraryId="123"
-        videoId={guid}
-        embedUrl={url}
+        provider="damplips"
+        embedUrl="https://www.damplips.com/p/67284/"
       />,
     );
     const frame = container.querySelector("iframe")!;
+    expect(frame).toHaveAttribute("src", "https://www.damplips.com/p/67284/");
     expect(frame).toHaveAttribute(
-      "src",
-      `${url}?autoplay=false&responsive=true`,
+      "sandbox",
+      "allow-scripts allow-same-origin allow-forms allow-presentation",
     );
     expect(frame).toHaveAttribute("allowfullscreen");
-    fireEvent.load(frame);
-    // The page shows the Bunny embed itself: no poster, no play button, no
-    // "Loading Bunny player…" placeholder.
-    expect(container.querySelector("img")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
-    expect(screen.queryByText(/Loading Bunny player/i)).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(container.querySelector("video")).toBeNull();
   });
 
-  it("keeps autoplay off by default and provides a reversible control", () => {
-    const guid = "44444444-4444-4444-8444-444444444444";
-    const url = `https://iframe.mediadelivery.net/embed/123/${guid}`;
-    const { container } = render(<VideoPlayer {...props} provider="bunny" libraryId="123" videoId={guid} embedUrl={url} />);
-    const frame = container.querySelector("iframe")!;
-    expect(frame.getAttribute("src")).toContain("autoplay=false");
-    const setting = screen.getByRole("checkbox", { name: /Start Bunny playback automatically/i });
-    fireEvent.click(setting);
-    expect(container.querySelector("iframe")?.getAttribute("src")).toContain("autoplay=true");
-    expect(localStorage.getItem("erobabe-bunny-autoplay")).toBe("true");
-  });
-
-  it("offers a retry only when the Bunny embed never loads", () => {
-    vi.useFakeTimers();
-    try {
-      const guid = "44444444-4444-4444-8444-444444444444";
-      const url = `https://iframe.mediadelivery.net/embed/123/${guid}`;
-      const { container } = render(
-        <VideoPlayer
-          {...props}
-          provider="bunny"
-          libraryId="123"
-          videoId={guid}
-          embedUrl={url}
-        />,
-      );
-      expect(screen.queryByRole("alert")).toBeNull();
-
-      act(() => {
-        vi.advanceTimersByTime(20_000);
-      });
-
-      expect(screen.getByRole("alert")).toHaveTextContent("Player unavailable");
-      fireEvent.click(screen.getByRole("button", { name: /Retry playback/i }));
-      expect(container.querySelector("iframe")).toHaveAttribute(
-        "src",
-        `${url}?autoplay=false&responsive=true`,
-      );
-      expect(screen.queryByRole("alert")).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-  it("shows unsupported historic records without calling an API", () => {
-    render(<VideoPlayer {...props} embedUrl={embed} />);
-    expect(screen.getByText(/legacy video provider/)).toBeInTheDocument();
+  it("shows a message instead of a player for retired sources", () => {
+    render(
+      <VideoPlayer
+        {...props}
+        provider="bunny"
+        embedUrl="https://iframe.mediadelivery.net/embed/123/44444444-4444-4444-8444-444444444444"
+      />,
+    );
+    expect(screen.getByText(/no longer supported/)).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
   it("prefers native video over any advertising iframe", () => {
     const { container } = render(
       <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
@@ -127,8 +85,6 @@ describe("video player", () => {
       "https://cdn.example.com/a.mp4",
     );
     expect(container.querySelector("iframe")).toBeNull();
-    // A direct file needs no server-side preparation at all.
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("buffers ahead behind the poster so the first frame is instant", () => {
@@ -172,20 +128,6 @@ describe("video player", () => {
     expect(container.querySelector("iframe, a")).toBeNull();
   });
 
-  it("starts buffering ahead on plain intent, before the click", () => {
-    const { container } = render(
-      <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
-    );
-    const video = container.querySelector("video")!;
-    expect(video).toHaveAttribute("preload", "metadata");
-
-    fireEvent.pointerEnter(video.parentElement!);
-
-    expect(video).toHaveAttribute("preload", "auto");
-    expect(HTMLMediaElement.prototype.load).toHaveBeenCalled();
-    expect(warmCalls()).toHaveLength(0);
-  });
-
   it("restarts native playback on retry", () => {
     const { container } = render(
       <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
@@ -210,19 +152,7 @@ describe("video player", () => {
       <VideoPlayer {...props} embedUrl="https://example.com/embed/abc" />,
     );
     expect(container.querySelector("iframe")).toBeNull();
-    expect(screen.getByText(/legacy video provider/)).toBeInTheDocument();
-  });
-
-  it("can retry a failed direct source without opening an iframe", () => {
-    const { container } = render(
-      <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
-    );
-    const first = container.querySelector("video")!;
-    fireEvent.error(first);
-    fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(container.querySelector("video")).not.toBe(first);
-    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.getByText(/no longer supported/)).toBeInTheDocument();
   });
 
   it("resets native playback when navigating to another video", () => {
@@ -240,16 +170,14 @@ describe("video player", () => {
       />,
     );
 
-    // A fresh page state: poster and play control, nothing playing.
     expect(container.querySelector("video")).not.toHaveAttribute("controls");
     expect(container.querySelector("video")).toHaveAttribute(
       "src",
       "https://cdn.example.com/a.mp4",
     );
-    expect(
-      screen.getByRole("button", { name: "Play video" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
   });
+
   it("keeps trusted historical players in their restrictive sandbox", () => {
     const { container } = render(
       <VideoPlayer

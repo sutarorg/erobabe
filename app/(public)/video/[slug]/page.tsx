@@ -2,6 +2,7 @@ import VideoComments from "@/src/components/VideoComments";
 import LatestVideoFeed from "@/src/components/LatestVideoFeed";
 import WatchCategories from "@/src/components/WatchCategories";
 import { getRecommendationFeed } from "@/lib/recommendations/service";
+import RecommendationSettings from "@/src/components/RecommendationSettings";
 import RecommendationShelf from "@/src/components/RecommendationShelf";
 
 import { getPublicCategories } from "@/lib/public/catalog";
@@ -34,7 +35,7 @@ export async function generateMetadata({
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
     .eq("moderation_status", "approved")
-    .or("playable_url.not.is.null,embed_url.not.is.null,and(provider.eq.bunny,provider_file_id.not.is.null,bunny_library_id.not.is.null)")
+    .or("playable_url.not.is.null,embed_url.not.is.null")
     .single();
 
   if (!video) {
@@ -74,7 +75,8 @@ export default async function VideoPage({
       thumbnail_url,
       provider,
       provider_file_id,
-      bunny_library_id,
+      source_name,
+      source_url,
       playable_url,
       embed_url,
       duration_seconds,
@@ -91,7 +93,7 @@ export default async function VideoPage({
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
     .eq("moderation_status", "approved")
-    .or("playable_url.not.is.null,embed_url.not.is.null,and(provider.eq.bunny,provider_file_id.not.is.null,bunny_library_id.not.is.null)")
+    .or("playable_url.not.is.null,embed_url.not.is.null")
     .single();
 
   if (!video) {
@@ -109,7 +111,7 @@ export default async function VideoPage({
     .eq("visibility", "public")
     .eq("rights_status", "cleared")
     .eq("moderation_status", "approved")
-    .or("playable_url.not.is.null,embed_url.not.is.null,and(provider.eq.bunny,provider_file_id.not.is.null,bunny_library_id.not.is.null)")
+    .or("playable_url.not.is.null,embed_url.not.is.null")
     .eq("category_id", video.category_id)
     .neq("id", video.id)
     .order("published_at", { ascending: false })
@@ -127,8 +129,6 @@ export default async function VideoPage({
     video.playable_url,
     video.embed_url,
     video.provider,
-    video.bunny_library_id,
-    video.provider_file_id,
   );
   let mediaOrigin: string | null = null;
   if (playbackSource.kind === "direct") {
@@ -138,12 +138,16 @@ export default async function VideoPage({
       mediaOrigin = null;
     }
   }
-  // A Bunny video opens straight into the Bunny player, so warm the embed host
-  // instead of the poster: the thumbnail is not shown before playback anymore.
-  const embedOrigin =
-    playbackSource.kind === "embed" && video.provider === "bunny"
-      ? "https://iframe.mediadelivery.net"
-      : null;
+  // An embed plays inside someone else's player, so warm that host instead of
+  // the poster: the thumbnail is not shown before playback anymore.
+  const embedOrigin = (() => {
+    if (playbackSource.kind !== "embed") return null;
+    try {
+      return new URL(playbackSource.url).origin;
+    } catch {
+      return null;
+    }
+  })();
   const showsPoster = playbackSource.kind !== "embed";
 
   const videoJsonLd = {
@@ -201,8 +205,6 @@ export default async function VideoPage({
 
       <VideoPlayer
         provider={video.provider}
-        libraryId={video.bunny_library_id}
-        videoId={video.provider_file_id}
         id={video.id}
         title={video.title}
         poster={video.thumbnail_url}
@@ -255,6 +257,21 @@ export default async function VideoPage({
         </p>
       )}
 
+      {/* Embedded catalog entries credit the page they came from. */}
+      {video.source_url && (
+        <p className="mt-3 text-[11px] text-ink-3">
+          Source:{" "}
+          <a
+            href={video.source_url}
+            target="_blank"
+            rel="nofollow noopener noreferrer external"
+            className="underline decoration-dotted underline-offset-2 hover:text-accent"
+          >
+            {video.source_name === "damplips" ? "damplips.com" : video.source_name || "external source"}
+          </a>
+        </p>
+      )}
+
       <VideoComments key={video.id} videoId={video.id} />
       <section className="mt-8 border-t border-line pt-5">
         <h2 className="text-[15px] font-semibold">More like this</h2>
@@ -263,6 +280,7 @@ export default async function VideoPage({
         </FourRowVideoGrid>
         {!(related || []).length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
       </section>
+      <RecommendationSettings />
       <RecommendationShelf title={recommended.personalized ? "Recommended for you" : "Discover videos"} videos={recommended.videos} surface="recommended" correlationId={recommended.correlationId} algorithmVersion={recommended.algorithmVersion} />
       <RecommendationShelf title="Most Liked" videos={mostLiked.videos} surface="most_liked" correlationId={mostLiked.correlationId} algorithmVersion={mostLiked.algorithmVersion} />
       <WatchCategories

@@ -10,7 +10,7 @@ const CORRELATION = "33333333-3333-4333-8333-333333333333";
 
 beforeAll(async () => {
   await db.exec(`create role anon; create role authenticated; create role service_role;
-    create table public.categories(id uuid primary key);
+    create table public.categories(id uuid primary key, label text, slug text);
     insert into categories values ('${CATEGORY}');
     create table public.videos(
       id uuid primary key, category_id uuid references categories(id), status text, visibility text,
@@ -20,8 +20,15 @@ beforeAll(async () => {
     );
     insert into videos(id,category_id,status,visibility,rights_status,moderation_status,requires_reupload,playable_url,embed_url,provider,provider_file_id,bunny_library_id) values ('${VIDEO}','${CATEGORY}','published','public','cleared','approved',false,null,'https://player.example/embed/1','embed','1',null);
     create table public.video_tags(video_id uuid, tag_id uuid);
+    create table public.media_retention(
+      id uuid primary key default gen_random_uuid(), video_id uuid, provider text,
+      provider_file_id text, reason text, created_at timestamptz not null default now()
+    );
   `);
   await db.exec(readFileSync("supabase/migrations/00000000000024_recommendations.sql", "utf8"));
+  // Migration 26 drops the Bunny column the functions above referenced, so it
+  // redefines them; run it here to keep testing the functions that ship.
+  await db.exec(readFileSync("supabase/migrations/00000000000026_damplips_embeds.sql", "utf8"));
 }, 30000);
 afterAll(() => db.close());
 
@@ -36,13 +43,13 @@ describe("recommendation data migration and RLS", () => {
   });
 
   it("enforces consent and eligible playable video requirements in trusted feedback writes", async () => {
-    await expect(db.query("select set_recommendation_feedback($1,$2,$3)", [VIEWER, VIDEO, "interested"])).rejects.toThrow(/consent required/);
+    await expect(db.query("select set_recommendation_feedback($1,$2,$3)", [VIEWER, VIDEO, "interested"])).rejects.toThrow(/consent required/i);
     await db.query("insert into recommendation_preferences(viewer_hash) values($1)", [VIEWER]);
     await db.query("select set_recommendation_feedback($1,$2,$3)", [VIEWER, VIDEO, "interested"]);
     await db.query("select set_recommendation_feedback($1,$2,$3)", [VIEWER, VIDEO, "not_interested"]);
     expect((await db.query("select feedback from recommendation_feedback where viewer_hash=$1", [VIEWER])).rows).toEqual([{ feedback: "not_interested" }]);
     await db.query("update videos set visibility='private' where id=$1", [VIDEO]);
-    await expect(db.query("select set_recommendation_feedback($1,$2,$3)", [VIEWER, VIDEO, "interested"])).rejects.toThrow(/unavailable/);
+    await expect(db.query("select set_recommendation_feedback($1,$2,$3)", [VIEWER, VIDEO, "interested"])).rejects.toThrow(/unavailable/i);
   });
 
   it("records idempotently and enforces event surface, type, and correlation context", async () => {
