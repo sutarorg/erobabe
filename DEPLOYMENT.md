@@ -504,7 +504,7 @@ npx playwright test
 - [ ] Device uploads at `/admin/videos/upload` → multiple local files, real progress, local thumbnails and verified completion.
 - [ ] `/admin/videos` offers no upload control, and `app/admin/(dashboard)/videos/upload` returns 404.
 - [ ] **Sync from damplips** fills a category: the report shows a target, the imported count, and a poster and title for every row; `select * from damplips_category_counts` shows 100+ for every category.
-- [ ] A published damplips video plays on `/video/<slug>` through `/api/videos/stream`, seeks (range request), and shows the damplips credit link.
+- [ ] A published damplips video plays on `/video/<slug>` through `/api/videos/stream`, seeks (range request), and an HLS row plays every segment through the same route (playlists are rewritten; no request goes to damplips from the browser).
 - [ ] `curl -o /dev/null -w '%{http_code}' 'https://your-domain/api/videos/stream?src=https://example.com/x.mp4'` returns 403.
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
@@ -667,7 +667,7 @@ Migration **00000000000024_recommendations.sql** is a new forward migration and 
 1. Deploy the matching application and migration together. Personalized feeds are no-store; do not add CDN/shared caching to `/api/videos/feed`, `/api/recommendations/*`, or cookie-varying home/watch responses.
 2. Configure dedicated server-only `ANALYTICS_HASH_SECRET` and existing `SUPABASE_SECRET_KEY` (never a `NEXT_PUBLIC_*` secret). Set the canonical `SITE_URL` for the recommendation-retention job; the upload-publish sweep workflow has been removed.
 3. Confirm `.github/workflows/recommendation-retention.yml` is enabled, run it manually, verify `/api/cron/recommendation-retention` returns 2xx only with the secret, and verify expired rows are removed. It runs daily; cleanup failure is a privacy incident. The retention RPC removes event rows older than 30 days and feedback/profile rows after their 180-day lifetime.
-4. Stage the opt-in flow, profile cookie attributes, disable/reset deletion, feedback suppression, no-consent browsing, API origin/rate validation, and no-store cache headers. Confirm recommendation tables are inaccessible to `anon` and `authenticated` and only trusted server RPCs can write.
+4. Stage the default-on profile flow (cookie requested by `RecommendationProfileInit` on the first public page view), profile cookie attributes, disable/reset deletion, feedback suppression, cold-start browsing, API origin/rate validation, and no-store cache headers. Confirm recommendation tables are inaccessible to `anon` and `authenticated` and only trusted server RPCs can write.
 5. Run `EXPLAIN (ANALYZE, BUFFERS)` against a representative staging catalog for latest, category, like, popularity and tag candidate queries. No production query plan or p95 value is available from this session. Do not report the documented 250 ms/150 ms targets as measured.
 6. Verify the embedded player's `play/timeupdate/ended/error` milestones against a real damplips video and a direct-file clip, including the same-origin proxy and a range-seeking browser.
 7. Confirm user-facing privacy copy, 18+ controls, legal age assurance, rights/moderation review and adult-content provider approval with the responsible privacy/legal/operator owners. The current localStorage age declaration is not remote age verification.

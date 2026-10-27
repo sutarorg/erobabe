@@ -3,6 +3,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { createServiceClient } from "@/lib/supabase/server";
 import type { PublicVideo } from "@/lib/public/catalog";
+import { RECOMMENDATION_COOKIE, RECOMMENDATION_TOKEN_PATTERN } from "./cookie";
 import {
   ALGORITHM_VERSION,
   mostLikedScore,
@@ -14,7 +15,7 @@ import {
   type ScoringContext,
 } from "./ranking";
 
-export const RECOMMENDATION_COOKIE = "erobabe-rec-profile";
+export { RECOMMENDATION_COOKIE } from "./cookie";
 const ELIGIBLE = [
   ["status", "published"],
   ["visibility", "public"],
@@ -37,7 +38,7 @@ function hasPersonalSignals(context: Awaited<ReturnType<typeof loadPersonalConte
 export async function viewerHashFromCookie(): Promise<string | null> {
   try {
     const token = (await cookies()).get(RECOMMENDATION_COOKIE)?.value;
-    if (!token || !/^[A-Za-z0-9_-]{40,100}$/.test(token)) return null;
+    if (!token || !RECOMMENDATION_TOKEN_PATTERN.test(token)) return null;
     const secret = process.env.ANALYTICS_HASH_SECRET || process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!secret) return null;
     return createHmac("sha256", secret).update(`recommendation-profile:${token}`).digest("hex");
@@ -106,8 +107,14 @@ async function loadPersonalContext(db: Db, viewerHash: string | null) {
   };
   if (!viewerHash) return base;
   try {
+    // Personalization is on by default: a viewer only has an explicit row when
+    // they turned it off (or reset it) through the API, so a missing row means
+    // "enabled with nothing learned yet", not "opted out".
     const { data: pref, error: prefError } = await db.from("recommendation_preferences").select("personalization_enabled,preferred_category_ids,suppressed_category_ids,consent_expires_at").eq("viewer_hash", viewerHash).maybeSingle();
-    if (prefError || !pref?.personalization_enabled || Date.parse(pref.consent_expires_at) <= Date.now()) return base;
+    if (prefError) return base;
+    if (pref && (!pref.personalization_enabled || Date.parse(pref.consent_expires_at) <= Date.now())) {
+      return { ...base, enabled: false };
+    }
     const { data: feedback, error: feedbackError } = await db.from("recommendation_feedback").select("video_id,feedback").eq("viewer_hash", viewerHash).gt("updated_at", new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString()).order("updated_at", { ascending: false }).limit(300);
     if (feedbackError) return { ...base, enabled: true };
     const interestedVideoIds = new Set<string>((feedback || []).filter((item: any) => item.feedback === "interested").map((item: any) => String(item.video_id)));
@@ -127,7 +134,7 @@ async function loadPersonalContext(db: Db, viewerHash: string | null) {
     const categoryRows = candidateVideoIds.length
       ? await db.from("videos").select("id,category_id").in("id", candidateVideoIds)
       : { data: [], error: null };
-    const preferenceCategories = new Set<string>((pref.preferred_category_ids || []).map(String));
+    const preferenceCategories = new Set<string>((pref?.preferred_category_ids || []).map(String));
     for (const row of categoryRows.data || []) {
       if (interestedVideoIds.has(String((row as any).id)) && (row as any).category_id) preferenceCategories.add(String((row as any).category_id));
     }
@@ -142,7 +149,7 @@ async function loadPersonalContext(db: Db, viewerHash: string | null) {
     return {
       enabled: true,
       preferredCategoryIds: preferenceCategories,
-      suppressedCategoryIds: new Set<string>((pref.suppressed_category_ids || []).map(String)),
+      suppressedCategoryIds: new Set<string>((pref?.suppressed_category_ids || []).map(String)),
       interestedVideoIds,
       rejectedVideoIds,
       lessLikeCategoryIds,

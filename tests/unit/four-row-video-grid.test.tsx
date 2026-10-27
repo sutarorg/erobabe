@@ -57,7 +57,7 @@ describe("four-row video sections", () => {
     expect(disconnect).toHaveBeenCalled();
   });
 
-  it("uses two rows on mobile, including after a container resize", () => {
+  it("uses a single row on mobile, including after a container resize", () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({
       matches: true,
       addEventListener: vi.fn(),
@@ -65,12 +65,13 @@ describe("four-row video sections", () => {
     })));
     width = 350;
     const { container } = render(<FourRowVideoGrid>{cards()}</FourRowVideoGrid>);
-    expect(container.querySelector(".video-grid")).toHaveAttribute("data-grid-rows", "2");
-    expect(screen.getAllByRole("link")).toHaveLength(4);
+    expect(container.querySelector(".video-grid")).toHaveAttribute("data-grid-rows", "1");
+    // One row of two columns on a phone.
+    expect(screen.getAllByRole("link")).toHaveLength(2);
 
     act(() => { width = 600; onResize(); });
-    expect(screen.getAllByRole("link")).toHaveLength(6);
-    expect(container.querySelector(".video-grid")).toHaveAttribute("data-grid-rows", "2");
+    expect(screen.getAllByRole("link")).toHaveLength(3);
+    expect(container.querySelector(".video-grid")).toHaveAttribute("data-grid-rows", "1");
   });
 
   it("does not duplicate cards when fewer videos are available", () => {

@@ -26,11 +26,12 @@ afterEach(() => {
 });
 
 describe("recommendation privacy preferences", () => {
-  it("defaults to off with a private, uncached response", async () => {
+  it("reports personalization as on by default with a private, uncached response", async () => {
     viewerHashFromCookie.mockResolvedValue(null);
     const response = await GET();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ enabled: false });
+    // The opt-in controls are gone: personalization is on unless paused.
+    expect(await response.json()).toEqual({ enabled: true });
     expect(response.headers.get("Cache-Control")).toContain("no-store");
   });
 

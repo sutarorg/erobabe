@@ -4,7 +4,8 @@ import { z } from "zod";
 import { boundedJson, limitRequest, RequestError } from "@/lib/http/safety";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
-import { RECOMMENDATION_COOKIE, viewerHashFromCookie } from "@/lib/recommendations/service";
+import { viewerHashFromCookie } from "@/lib/recommendations/service";
+import { RECOMMENDATION_COOKIE, RECOMMENDATION_TOKEN_PATTERN } from "@/lib/recommendations/cookie";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,9 +23,10 @@ function setCookie(response: NextResponse, token: string) {
 
 export async function GET() {
   const hash = await viewerHashFromCookie();
-  // Personalization is opt-in: without a consented profile the answer is "off",
-  // and a cookie is only handed out when a profile hash can actually be derived.
-  let enabled = false;
+  // Personalization is on by default, so the answer is only "off" when this
+  // viewer explicitly paused it. A profile is issued here as well as in the
+  // middleware, so an API client gets one on its first call.
+  let enabled = true;
   if (hash) {
     try {
       const { data, error } = await createServiceClient()
@@ -38,7 +40,7 @@ export async function GET() {
         );
       }
     } catch {
-      enabled = false;
+      // A failed lookup leaves the default in place: recommendations stay on.
     }
   }
 
@@ -54,7 +56,7 @@ export async function GET() {
       // No request scope (tests, or a server-to-server call): issue a fresh one.
       existing = "";
     }
-    const token = /^[A-Za-z0-9_-]{40,100}$/.test(existing)
+    const token = RECOMMENDATION_TOKEN_PATTERN.test(existing)
       ? existing
       : randomBytes(32).toString("base64url");
     setCookie(response, token);
@@ -86,7 +88,7 @@ export async function POST(request: NextRequest) {
     }
 
     const suppliedToken = request.cookies.get(RECOMMENDATION_COOKIE)?.value || "";
-    const token = /^[A-Za-z0-9_-]{40,100}$/.test(suppliedToken)
+    const token = RECOMMENDATION_TOKEN_PATTERN.test(suppliedToken)
       ? suppliedToken
       : randomBytes(32).toString("base64url");
     // Hash only the server-issued opaque cookie; it is not an account ID or proof of identity.
