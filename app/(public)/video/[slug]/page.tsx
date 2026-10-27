@@ -17,6 +17,7 @@ import { Eye } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 export async function generateMetadata({
   params,
@@ -53,6 +54,80 @@ export async function generateMetadata({
       url: `${SITE_URL}/video/${slug}`,
     },
   };
+}
+
+function WatchSuggestionsFallback() {
+  return (
+    <div className="mt-8 space-y-8" aria-label="Loading video recommendations">
+      {["More like this", "Recommended for you", "Most Liked"].map((title) => (
+        <section key={title} className="border-t border-line pt-5">
+          <h2 className="text-[15px] font-semibold">{title}</h2>
+          <div className="mt-3.5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-hidden>
+            {Array.from({ length: 4 }, (_, index) => <div key={index} className="aspect-video animate-pulse rounded-lg bg-card" />)}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+export async function WatchSuggestions({ video }: { video: any }) {
+  const supabase = await createClient();
+  // Fetch related videos same category
+  const { data: related } = await supabase
+    .from("videos")
+    .select(
+      "id, slug, title, thumbnail_url, duration_seconds, quality, view_count, published_at",
+    )
+    .eq("requires_reupload", false)
+    .eq("status", "published")
+    .eq("visibility", "public")
+    .eq("rights_status", "cleared")
+    .eq("moderation_status", "approved")
+    .or("playable_url.not.is.null,embed_url.not.is.null")
+    .eq("category_id", video.category_id)
+    .neq("id", video.id)
+    .order("published_at", { ascending: false })
+    .limit(16);
+
+  const [recommended, mostLiked, categories] = await Promise.all([
+    getRecommendationFeed({ surface: "recommended", currentVideoId: video.id, limit: 12 }),
+    getRecommendationFeed({ surface: "most_liked", currentVideoId: video.id, limit: 12 }),
+    getPublicCategories(),
+  ]);
+  const relatedVideos = (related || []).map((item: any) => ({
+    ...item,
+    description: null,
+    category_label: null,
+    category_slug: null,
+  }));
+  const relatedIds = new Set(relatedVideos.map((item: any) => String(item.id)));
+  for (const suggestion of [...recommended.videos, ...mostLiked.videos]) {
+    if (relatedVideos.length >= 10) break;
+    if (relatedIds.has(String(suggestion.id))) continue;
+    relatedIds.add(String(suggestion.id));
+    relatedVideos.push({
+      ...suggestion,
+      description: null,
+      category_label: null,
+      category_slug: null,
+    });
+  }
+
+  return (
+    <>
+      <section className="mt-8 border-t border-line pt-5">
+        <h2 className="text-[15px] font-semibold">More like this</h2>
+        <FourRowVideoGrid className="video-grid mt-3.5">
+          {relatedVideos.slice(0, 10).map((video: any) => <PublicVideoCard key={video.id} video={video} />)}
+        </FourRowVideoGrid>
+        {!(related || []).length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
+      </section>
+      <RecommendationShelf title={recommended.personalized ? "Recommended for you" : "Discover videos"} videos={recommended.videos} surface="recommended" correlationId={recommended.correlationId} algorithmVersion={recommended.algorithmVersion} />
+      <RecommendationShelf title="Most Liked" videos={mostLiked.videos} surface="most_liked" correlationId={mostLiked.correlationId} algorithmVersion={mostLiked.algorithmVersion} />
+      <WatchCategories categories={categories} activeCategory={(video.category as any)?.label ?? null} />
+    </>
+  );
 }
 
 export default async function VideoPage({
@@ -99,28 +174,6 @@ export default async function VideoPage({
     notFound();
   }
 
-  // Fetch related videos same category
-  const { data: related } = await supabase
-    .from("videos")
-    .select(
-      "id, slug, title, thumbnail_url, duration_seconds, quality, view_count, published_at",
-    )
-    .eq("requires_reupload", false)
-    .eq("status", "published")
-    .eq("visibility", "public")
-    .eq("rights_status", "cleared")
-    .eq("moderation_status", "approved")
-    .or("playable_url.not.is.null,embed_url.not.is.null")
-    .eq("category_id", video.category_id)
-    .neq("id", video.id)
-    .order("published_at", { ascending: false })
-    .limit(16);
-
-  const [recommended, mostLiked, categories] = await Promise.all([
-    getRecommendationFeed({ surface: "recommended", currentVideoId: video.id, limit: 8 }),
-    getRecommendationFeed({ surface: "most_liked", currentVideoId: video.id, limit: 8 }),
-    getPublicCategories(),
-  ]);
 
   // A direct file is fetched by the browser from its own host: open that
   // connection, and start the poster, while the document is still parsing.
@@ -259,19 +312,9 @@ export default async function VideoPage({
       )}
 
       <VideoComments key={video.id} videoId={video.id} />
-      <section className="mt-8 border-t border-line pt-5">
-        <h2 className="text-[15px] font-semibold">More like this</h2>
-        <FourRowVideoGrid className="video-grid mt-3.5">
-          {(related || []).slice(0, 8).map((v: any) => <PublicVideoCard key={v.id} video={{ ...v, description: null, category_label: null, category_slug: null }} />)}
-        </FourRowVideoGrid>
-        {!(related || []).length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
-      </section>
-      <RecommendationShelf title={recommended.personalized ? "Recommended for you" : "Discover videos"} videos={recommended.videos} surface="recommended" correlationId={recommended.correlationId} algorithmVersion={recommended.algorithmVersion} />
-      <RecommendationShelf title="Most Liked" videos={mostLiked.videos} surface="most_liked" correlationId={mostLiked.correlationId} algorithmVersion={mostLiked.algorithmVersion} />
-      <WatchCategories
-        categories={categories}
-        activeCategory={(video.category as any)?.label ?? null}
-      />
+      <Suspense fallback={<WatchSuggestionsFallback />}>
+        <WatchSuggestions video={video} />
+      </Suspense>
       <LatestVideoFeed key={video.id} videoId={video.id} />
     </div>
   );

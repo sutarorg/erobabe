@@ -48,7 +48,7 @@ describe("four-row video sections", () => {
     expect(screen.getAllByRole("link")).toHaveLength(16);
     act(() => { width = 600; onResize(); });
     expect(screen.getAllByRole("link")).toHaveLength(12);
-    // A phone-width container collapses to one video per row.
+    // A phone-width container collapses to one column.
     act(() => { width = 350; onResize(); });
     expect(screen.getAllByRole("link")).toHaveLength(4);
     act(() => { width = 1600; onResize(); });
@@ -58,7 +58,7 @@ describe("four-row video sections", () => {
     expect(disconnect).toHaveBeenCalled();
   });
 
-  it("uses one row of one video per row on mobile, including after a container resize", () => {
+  it("shows ten mobile videos vertically, including after a container resize", () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({
       matches: true,
       addEventListener: vi.fn(),
@@ -67,17 +67,22 @@ describe("four-row video sections", () => {
     width = 350;
     const { container } = render(<FourRowVideoGrid>{cards()}</FourRowVideoGrid>);
     const grid = container.querySelector(".video-grid")!;
-    expect(grid).toHaveAttribute("data-grid-rows", "1");
-    // One video per row on a phone — never two cards side by side.
+    expect(grid).toHaveAttribute("data-grid-rows", "10");
+    // Ten videos are available while preserving one column on a phone.
     expect(grid).toHaveStyle({ gridTemplateColumns: "repeat(1, minmax(0, 1fr))" });
-    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(screen.getAllByRole("link")).toHaveLength(10);
 
     act(() => { width = 600; onResize(); });
-    expect(screen.getAllByRole("link")).toHaveLength(3);
-    expect(container.querySelector(".video-grid")).toHaveAttribute("data-grid-rows", "1");
+    expect(screen.getAllByRole("link")).toHaveLength(20);
+    expect(container.querySelector(".video-grid")).toHaveAttribute("data-grid-rows", "10");
   });
 
   it("lets no caller force two columns into a phone-width grid", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
     width = 350;
     const { container } = render(
       <FourRowVideoGrid columnCount={2}>{cards()}</FourRowVideoGrid>,
@@ -85,8 +90,8 @@ describe("four-row video sections", () => {
     expect(container.querySelector(".video-grid")).toHaveStyle({
       gridTemplateColumns: "repeat(1, minmax(0, 1fr))",
     });
-    // One column, four rows: the cap cannot widen a phone grid.
-    expect(screen.getAllByRole("link")).toHaveLength(4);
+    // The cap cannot widen a phone grid; mobile sections still expose ten videos.
+    expect(screen.getAllByRole("link")).toHaveLength(10);
   });
 
   it("still honours a column cap on a wide container", () => {

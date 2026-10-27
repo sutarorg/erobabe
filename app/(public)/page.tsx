@@ -29,6 +29,19 @@ export const metadata: Metadata = publicPageMetadata({
   alternates: { canonical: SITE_URL },
 });
 
+/** Preserve ranked order, then top up from the public catalog when a feed is sparse. */
+function fillShelf<T extends { slug: string }>(primary: T[], fallback: T[], limit = 12): T[] {
+  const results: T[] = [];
+  const seen = new Set<string>();
+  for (const video of [...primary, ...fallback]) {
+    if (results.length >= limit) break;
+    if (seen.has(video.slug)) continue;
+    seen.add(video.slug);
+    results.push(video);
+  }
+  return results;
+}
+
 export default async function HomePage({
   searchParams,
 }: {
@@ -102,26 +115,22 @@ export default async function HomePage({
     getRecommendationFeed({ surface: "recommended", limit: 12 }),
   ]);
   const carouselSlugs = new Set(carousel.map((video) => video.slug));
-  const excludedSlugs = new Set([...latestVideos.map((video) => video.slug), ...carouselSlugs]);
-  const featuredVideos = featuredFeed.videos.filter((video) => !excludedSlugs.has(video.slug));
-  const rankedRecommended = recommendedFeed.videos.filter((video) => !excludedSlugs.has(video.slug) && !featuredVideos.some((item) => item.slug === video.slug));
-  // If the recommendation service has no candidates yet (for example, on a
-  // newly seeded site), still populate the first shelf with real, public videos.
-  // Avoid repeats where possible; if every catalog video is already featured,
-  // reuse the catalog rather than showing an empty Recommended for you section.
-  const catalogFallback = mappedVideos.filter((video) => !carouselSlugs.has(video.slug));
-  const distinctFallback = catalogFallback.filter((video) =>
-    !latestVideos.some((latest) => latest.slug === video.slug) &&
-    !featuredVideos.some((featured) => featured.slug === video.slug),
+  const latestSlugs = new Set(latestVideos.map((video) => video.slug));
+  const eligibleCatalog = mappedVideos.filter((video) => !carouselSlugs.has(video.slug) && !latestSlugs.has(video.slug));
+  const featuredSeed = featuredFeed.videos.filter((video) => !carouselSlugs.has(video.slug) && !latestSlugs.has(video.slug));
+  const featuredVideos = fillShelf(
+    featuredSeed,
+    [...eligibleCatalog, ...mappedVideos.filter((video) => !carouselSlugs.has(video.slug))],
   );
-  const fallbackVideos = distinctFallback.length
-    ? distinctFallback
-    : catalogFallback.length
-      ? catalogFallback
-      : mappedVideos;
-  const recommendedVideos = rankedRecommended.length
-    ? rankedRecommended
-    : fallbackVideos.slice(0, 12);
+  const featuredSlugs = new Set(featuredVideos.map((video) => video.slug));
+  const rankedRecommended = recommendedFeed.videos.filter((video) =>
+    !carouselSlugs.has(video.slug) && !latestSlugs.has(video.slug) && !featuredSlugs.has(video.slug),
+  );
+  const recommendedFallback = [
+    ...eligibleCatalog.filter((video) => !featuredSlugs.has(video.slug)),
+    ...mappedVideos.filter((video) => !carouselSlugs.has(video.slug)),
+  ];
+  const recommendedVideos = fillShelf(rankedRecommended, recommendedFallback);
 
   if (mappedVideos.length === 0) {
     return (

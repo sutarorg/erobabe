@@ -51,12 +51,20 @@ vi.mock("next/navigation", () => ({
   },
 }));
 
-const VideoPage = (await import("@/app/(public)/video/[slug]/page")).default;
+const watchPage = await import("@/app/(public)/video/[slug]/page");
+const VideoPage = watchPage.default;
 
 async function renderPage() {
   return renderToStaticMarkup(
     await (VideoPage as any)({ params: Promise.resolve({ slug: "midnight-velvet" }) })
   );
+}
+
+async function renderSuggestions() {
+  const section = await watchPage.WatchSuggestions({
+    video: { ...VIDEO_ROW, id: "vid-1", category_id: "category-1" },
+  });
+  return renderToStaticMarkup(section);
 }
 
 afterEach(() => {
@@ -78,7 +86,7 @@ describe("/video/[slug] watch page", () => {
   });
 
   it("uses the shared four-row grid for More like this, with no five-column layout", async () => {
-    const html = await renderPage();
+    const html = await renderSuggestions();
     const doc = new DOMParser().parseFromString(html, "text/html");
     const grid = doc.querySelector("[data-grid-rows='4']") as HTMLElement;
     expect(html).toContain("More like this");
@@ -89,11 +97,10 @@ describe("/video/[slug] watch page", () => {
     expect(grid.children).toHaveLength(8);
   });
 
-  it("renders the requested sections in order", async () => {
-    const html = await renderPage();
+  it("renders recommendation sections in order", async () => {
+    const html = await renderSuggestions();
     const headings = Array.from(new DOMParser().parseFromString(html, "text/html").querySelectorAll("h2")).map(h => h.textContent);
-    // Recommendations are on by default; the old opt-in controls are gone.
-    expect(headings).toEqual(["Comments", "More like this", "Discover videos", "Most Liked", "Top Categories", "Latest"]);
+    expect(headings).toEqual(["More like this", "Discover videos", "Most Liked", "Top Categories"]);
   });
 
   it("does not render an Up Next section", async () => {
@@ -103,7 +110,7 @@ describe("/video/[slug] watch page", () => {
   });
 
   it("shares the homepage five-card mobile category strip without horizontal scrolling", async () => {
-    const html = await renderPage();
+    const html = await renderSuggestions();
     const doc = new DOMParser().parseFromString(html, "text/html");
     const grid = doc.querySelector(".category-grid") as HTMLElement;
     expect(grid).toBeTruthy();
@@ -132,7 +139,7 @@ describe("/video/[slug] watch page", () => {
   });
 
   it("gives every related card a view count and a publication age, like the home page", async () => {
-    const html = await renderPage();
+    const html = await renderSuggestions();
     const grid = new DOMParser()
       .parseFromString(html, "text/html")
       .querySelector("[data-grid-rows='4']") as HTMLElement;

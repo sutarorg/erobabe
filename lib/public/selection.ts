@@ -5,7 +5,8 @@ export function homeSections(videos: PublicVideo[]) {
   const sorted = [...videos].sort((a, b) =>
     String(b.published_at || "").localeCompare(String(a.published_at || "")),
   );
-  const latest = sorted.slice(0, Math.min(16, Math.ceil(sorted.length / 2)));
+  const latestCount = Math.min(sorted.length, 16, Math.max(10, Math.ceil(sorted.length / 2)));
+  const latest = sorted.slice(0, latestCount);
   const ids = new Set(latest.map((v) => v.slug));
   const featured = sorted
     .filter((v) => !ids.has(v.slug))

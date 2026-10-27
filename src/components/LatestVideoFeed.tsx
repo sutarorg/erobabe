@@ -20,7 +20,9 @@ export default function LatestVideoFeed({ videoId }: { videoId: string }) {
     if (lock.current || done) return;
     lock.current = true; setBusy(true); setError("");
     try {
-      const params = new URLSearchParams({ exclude: videoId, limit: String(columns * rowBatch) });
+      // Start the next batch before the sentinel is close, and never make a
+      // narrow/mobile feed wait for single-card requests.
+      const params = new URLSearchParams({ exclude: videoId, limit: String(Math.max(10, columns * rowBatch)) });
       if (cursor.current) { params.set("date", cursor.current.date); params.set("id", cursor.current.id); }
       const res = await fetch(`/api/videos/feed?${params}`);
       const data = await res.json(); if (!res.ok) throw new Error(data.error);
@@ -34,7 +36,7 @@ export default function LatestVideoFeed({ videoId }: { videoId: string }) {
     if (typeof IntersectionObserver === "undefined") { if (!videos.length) void load(); return; }
     const observer = new IntersectionObserver(entries => {
       if (entries.some(e => e.isIntersecting)) void load();
-    }, { rootMargin: "400px" });
+    }, { rootMargin: "1200px 0px" });
     observer.observe(sentinel.current);
     return () => observer.disconnect();
   }, [load, done, error, videos.length]);
