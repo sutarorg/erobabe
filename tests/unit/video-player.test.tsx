@@ -240,6 +240,16 @@ describe("video player", () => {
     expect(retried).toHaveAttribute("referrerpolicy", "no-referrer");
   });
 
+  it("does not treat a damplips mp4 as an HLS playlist when the element cannot decode it", () => {
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+    const video = container.querySelector("video")!;
+    Object.defineProperty(video, "error", { value: { code: 4 }, configurable: true });
+    fireEvent.error(video);
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
+  });
+
   it("does not download the whole file when a same-origin proxy already failed", async () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,

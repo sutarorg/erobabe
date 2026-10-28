@@ -24,20 +24,38 @@ export const runtime = "edge";
 export const dynamic = "force-dynamic";
 
 /** Headers that make the request look like the browser damplips expects. */
-const UPSTREAM_HEADERS: Record<string, string> = {
-  "user-agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-  accept: "*/*",
-  "accept-language": "en-US,en;q=0.9",
-  "sec-ch-ua": '"Chromium";v="126", "Not:A-Brand";v="24", "Google Chrome";v="126"',
-  "sec-ch-ua-mobile": "?0",
-  "sec-ch-ua-platform": '"Windows"',
-  "sec-fetch-dest": "video",
-  "sec-fetch-mode": "no-cors",
-  "sec-fetch-site": "same-origin",
-  "upgrade-insecure-requests": "1",
-  referer: "https://www.damplips.com/",
-};
+const CHROME_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+const UPSTREAM_PROFILES: Record<string, string>[] = [
+  {
+    "user-agent": CHROME_UA,
+    accept: "*/*",
+    "accept-language": "en-US,en;q=0.9",
+    "sec-fetch-dest": "video",
+    "sec-fetch-mode": "no-cors",
+    "sec-fetch-site": "same-origin",
+    referer: "https://www.damplips.com/",
+    origin: "https://www.damplips.com",
+  },
+  {
+    "user-agent": CHROME_UA,
+    accept: "*/*",
+    referer: "https://www.damplips.com/",
+  },
+  {
+    "user-agent": CHROME_UA,
+    accept: "*/*",
+  },
+];
+
+const GENERIC_TYPES = new Set([
+  "application/octet-stream",
+  "application/force-download",
+  "application/x-download",
+  "binary/octet-stream",
+  "",
+]);
 
 /** Media is immutable enough to cache hard at the CDN. */
 const MEDIA_CACHE_CONTROL = "public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400";
@@ -63,6 +81,21 @@ function looksBlocked(target: URL, upstream: Response): boolean {
   return upstream.ok && type.includes("text/html") && /\.[a-z0-9]+$/i.test(target.pathname);
 }
 
+function contentTypeFor(path: string, upstreamType: string | null): string | null {
+  const ext = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase();
+  const raw = (upstreamType || "").split(";")[0].trim().toLowerCase();
+  if (ext === "mp4" || ext === "m4v") return "video/mp4";
+  if (ext === "webm") return "video/webm";
+  if (raw && !GENERIC_TYPES.has(raw) && !raw.includes("text/html")) return upstreamType;
+  return upstreamType;
+}
+
+function isUsableMedia(upstream: Response, target: URL): boolean {
+  if (looksBlocked(target, upstream)) return false;
+  if (upstream.status === 206 || upstream.status === 200 || upstream.status === 304) return true;
+  return false;
+}
+
 async function handle(req: NextRequest, headOnly: boolean): Promise<Response> {
   const raw = req.nextUrl.searchParams.get("src");
   if (!raw) return badRequest("A src parameter is required");
@@ -80,22 +113,34 @@ async function handle(req: NextRequest, headOnly: boolean): Promise<Response> {
     return badRequest("Only damplips media can be streamed here", 403);
   }
 
-  const headers: Record<string, string> = { ...UPSTREAM_HEADERS };
   const range = req.headers.get("range");
-  if (range) headers.range = range;
   const bounded = Number(req.nextUrl.searchParams.get("len"));
-  if (!range && Number.isFinite(bounded) && bounded > 0) {
-    headers.range = `bytes=0-${Math.min(bounded, 4_000_000) - 1}`;
+  const extra: Record<string, string> = {};
+  if (range) extra.range = range;
+  else if (Number.isFinite(bounded) && bounded > 0) {
+    extra.range = `bytes=0-${Math.min(bounded, 4_000_000) - 1}`;
   }
   for (const name of CONDITIONAL) {
     const value = req.headers.get(name);
-    if (value) headers[name] = value;
+    if (value) extra[name] = value;
   }
 
-  let upstream: Response;
+  let upstream: Response | null = null;
   try {
-    upstream = await fetch(target, { headers, redirect: "follow", cache: "no-store" });
+    for (const profile of UPSTREAM_PROFILES) {
+      const headers = { ...profile, ...extra };
+      const attempt = await fetch(target, { headers, redirect: "follow", cache: "no-store" });
+      if (isUsableMedia(attempt, target)) {
+        upstream = attempt;
+        break;
+      }
+      void attempt.body?.cancel().catch(() => undefined);
+      upstream = attempt;
+    }
   } catch {
+    return badRequest("The media host could not be reached", 502, "unreachable");
+  }
+  if (!upstream) {
     return badRequest("The media host could not be reached", 502, "unreachable");
   }
 
@@ -174,11 +219,10 @@ async function handle(req: NextRequest, headOnly: boolean): Promise<Response> {
   }
   responseHeaders.set("cache-control", MEDIA_CACHE_CONTROL);
   responseHeaders.set("x-content-type-options", "nosniff");
-  if (!responseHeaders.has("content-type") && isMediaPath) {
-    const ext = /\.([a-z0-9]+)$/i.exec(target.pathname)?.[1]?.toLowerCase();
-    if (ext === "mp4" || ext === "m4v") responseHeaders.set("content-type", "video/mp4");
-    if (ext === "webm") responseHeaders.set("content-type", "video/webm");
-  }
+  const mediaType = contentTypeFor(target.pathname, responseHeaders.get("content-type"));
+  if (mediaType) responseHeaders.set("content-type", mediaType);
+  else if (isMediaPath) responseHeaders.set("content-type", "video/mp4");
+  if (!responseHeaders.has("accept-ranges")) responseHeaders.set("accept-ranges", "bytes");
 
   return new Response(headOnly ? null : upstream.body, {
     status: upstream.status,
