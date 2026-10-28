@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { LoaderCircle, RefreshCw } from "lucide-react";
-import type { CategoryCount } from "@/lib/damplips/importer";
+import { MAX_VIDEOS_PER_CATEGORY, type CategoryCount } from "@/lib/damplips/importer";
 
 type CategoryReport = {
   category: string;
@@ -128,11 +128,13 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
             type="number"
             aria-label="Videos per category"
             min={1}
-            max={200}
+            max={MAX_VIDEOS_PER_CATEGORY}
             value={perCategory}
             disabled={running}
             onChange={(event) =>
-              setPerCategory(Math.max(1, Math.min(200, Number(event.target.value) || 1)))
+              setPerCategory(
+                Math.max(1, Math.min(MAX_VIDEOS_PER_CATEGORY, Number(event.target.value) || 1)),
+              )
             }
             className="h-8 w-20 rounded-md border border-line bg-void px-2 tabular-nums"
           />
