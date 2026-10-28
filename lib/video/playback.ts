@@ -66,12 +66,26 @@ export function streamProxyUrl(url: string): string {
   return `/api/videos/stream?src=${encodeURIComponent(url)}`;
 }
 
+/**
+ * Same-origin URL that streams a damplips *file* through the edge route.
+ *
+ * The Node proxy is challenged by the media host on every request it makes, so
+ * it can resolve pages and rewrite playlists but can never deliver these bytes.
+ * Edge egress is not challenged, which is why media playback uses this route
+ * while anything that needs HTML parsing stays on the Node one.
+ */
+export const EDGE_STREAM_PATH = "/api/videos/stream-edge";
+
+export function edgeStreamUrl(url: string): string {
+  return `${EDGE_STREAM_PATH}?src=${encodeURIComponent(url)}`;
+}
+
 /** Kept as the name the rest of the player and its tests use. */
 export const damplipsProxyUrl = streamProxyUrl;
 
-/** True for a URL produced by `streamProxyUrl` — i.e. served by this origin. */
+/** True for a URL produced by either proxy helper — i.e. served by this origin. */
 export function isStreamProxyUrl(url: string): boolean {
-  return url.startsWith("/api/videos/stream?");
+  return url.startsWith("/api/videos/stream?") || url.startsWith(`${EDGE_STREAM_PATH}?`);
 }
 
 /**
@@ -90,10 +104,13 @@ export function isStreamProxyUrl(url: string): boolean {
  */
 export function playbackCandidates(url: string): string[] {
   if (!isDamplipsMediaUrl(url)) return [url];
-  const proxied = damplipsProxyUrl(url);
-  if (isDamplipsPostPage(url)) return [proxied];
-  if (isHlsUrl(url)) return [proxied, url];
-  return [url, proxied];
+  // A post page has to be turned into media first, and a playlist has to have
+  // its segment URIs rewritten: both need the Node proxy's parser.
+  if (isDamplipsPostPage(url)) return [damplipsProxyUrl(url)];
+  if (isHlsUrl(url)) return [damplipsProxyUrl(url), url];
+  // A plain file plays straight from its host, and falls back to the edge
+  // proxy — the only one that can actually fetch it.
+  return [url, edgeStreamUrl(url)];
 }
 
 function safeUrl(raw: string | null | undefined, allowedProtocols: RegExp): URL | null {

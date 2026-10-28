@@ -19,7 +19,11 @@ const props = {
   poster: "https://cdn.example.com/poster.jpg",
 };
 const damplipsFile = "https://video.damplips.com/videos/67284.mp4";
-const damplipsProxy = `/api/videos/stream?src=${encodeURIComponent(damplipsFile)}`;
+/**
+ * The fallback for a damplips *file* is the edge proxy — the only runtime that
+ * can fetch the host (the Node one is challenged on every attempt).
+ */
+const damplipsProxy = `/api/videos/stream-edge?src=${encodeURIComponent(damplipsFile)}`;
 /** A post page has no file to frame: the proxy is the only destination. */
 const damplipsPostPage = "https://www.damplips.com/p/67284/";
 
@@ -468,7 +472,8 @@ describe("video player", () => {
     expect(playbackCandidates("https://cdn.example.com/a.mp4")).toEqual([
       "https://cdn.example.com/a.mp4",
     ]);
-    // A damplips file plays straight from its host, with the proxy behind it.
+    // A damplips file plays straight from its host, with the edge proxy behind
+    // it — the Node proxy cannot fetch this host at all.
     expect(playbackCandidates(damplipsFile)).toEqual([damplipsFile, damplipsProxy]);
     // A playlist is a document: it has to be rewritten before a frame can play.
     const playlist = "https://video.damplips.com/video7/717/79.m3u8";
