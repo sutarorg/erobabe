@@ -12,7 +12,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { DAMPLIPS_CATEGORY_SOURCES } from "../lib/damplips/categories";
-import { createDamplipsFetcher } from "../lib/damplips/client";
+import { createDamplipsFetcher, type FetchDamplipsPage } from "../lib/damplips/client";
 import {
   MAX_VIDEOS_PER_CATEGORY,
   categoryCounts,
@@ -30,6 +30,8 @@ type Args = {
   delayMs: number;
   /** Diagnose one damplips URL and exit (no database access needed). */
   probe: string | null;
+  /** Re-resolve rows whose stored destination is not a direct media file. */
+  repair: boolean;
   /** Write the machine-readable run report here. */
   json: string | null;
   help: boolean;
@@ -44,12 +46,14 @@ export function parseArgs(argv: string[]): Args {
     concurrency: 4,
     delayMs: 120,
     probe: null,
+    repair: false,
     json: null,
     help: false,
   };
   for (const raw of argv) {
     if (raw === "--help" || raw === "-h") args.help = true;
     else if (raw === "--dry-run") args.dryRun = true;
+    else if (raw === "--repair") args.repair = true;
     else if (raw.startsWith("--categories=")) {
       args.categories = raw
         .slice("--categories=".length)
@@ -86,6 +90,8 @@ const HELP = `Fill the catalog from damplips.com
   --concurrency=<n>            parallel post reads (default: 4)
   --delay=<ms>                 pause between post reads (default: 120)
   --probe=<url>                print what one damplips page yields, then exit
+  --repair                     rewrite catalog rows that are not storing a
+                               direct media file (post pages, old proxies)
   --json=<path>                write the run report as JSON
 
 Environment: NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or
@@ -190,6 +196,113 @@ export async function probe(target: string): Promise<number> {
   return 0;
 }
 
+
+/** A destination a browser can stream without the proxy preparing it first. */
+const DIRECT_MEDIA_PATH = /\.(mp4|m4v|webm|mov|m3u8|ogv|ogg)(?:[?#]|$)/i;
+
+export type RepairReport = {
+  scanned: number;
+  healthy: number;
+  repaired: number;
+  unresolved: number;
+  dryRun: boolean;
+  changes: Array<{ slug: string; from: string | null; to: string }>;
+  errors: string[];
+};
+
+/**
+ * Rewrites catalog rows whose `playable_url` is not a media file.
+ *
+ * The importer stores the file a damplips post serves — today a direct host URL
+ * like `https://video.damplips.com/video7/717/79.mp4`, which the browser streams
+ * itself with nothing to prepare. A row written by an older run (or another
+ * tool) may instead hold a post page, or a `/api/videos/stream` address those
+ * had to be resolved through. Those are the rows that sit on a loading screen,
+ * so this walks the catalog, re-reads the post page, and stores the file it
+ * publishes as `playable_url`.
+ *
+ * Rows already holding a direct file are left alone and never re-fetched.
+ */
+export async function repairDirectUrls(
+  service: ImportService,
+  options: { dryRun?: boolean; fetchPage?: FetchDamplipsPage } = {},
+): Promise<RepairReport> {
+  const fetchPage = options.fetchPage ?? createDamplipsFetcher({
+    baseUrl: process.env.DAMPLIPS_BASE_URL || undefined,
+  });
+  const report: RepairReport = {
+    scanned: 0,
+    healthy: 0,
+    repaired: 0,
+    unresolved: 0,
+    dryRun: Boolean(options.dryRun),
+    changes: [],
+    errors: [],
+  };
+
+  const pageSize = 500;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await service
+      .from("videos")
+      .select("id, slug, source_url, playable_url, embed_url")
+      .eq("provider", "damplips")
+      .order("created_at", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(error.message || "Unable to read the catalog");
+    const rows = (data as Array<Record<string, string | null>> | null) || [];
+    if (!rows.length) break;
+
+    for (const row of rows) {
+      report.scanned += 1;
+      const current = row.playable_url;
+      if (current && DIRECT_MEDIA_PATH.test(current)) {
+        report.healthy += 1;
+        continue;
+      }
+
+      // The post page is the thing that advertises the file: prefer our stored
+      // source page, then whatever the row was pointing at.
+      const page = row.source_url || row.playable_url || row.embed_url;
+      if (!page) {
+        report.unresolved += 1;
+        continue;
+      }
+
+      try {
+        const detail = await fetchPage(page);
+        const media = parseVideoPage(detail.html, detail.url || page)?.media;
+        if (!media || media.kind !== "direct" || !DIRECT_MEDIA_PATH.test(media.url)) {
+          report.unresolved += 1;
+          report.errors.push(`${row.slug}: the post page did not publish a media file`);
+          continue;
+        }
+        if (media.url === current && row.embed_url === null) {
+          report.healthy += 1;
+          continue;
+        }
+        if (!report.dryRun) {
+          const { error: updateError } = await service
+            .from("videos")
+            .update({ playable_url: media.url, embed_url: null })
+            .eq("id", row.id);
+          if (updateError) throw new Error(updateError.message || "update failed");
+        }
+        report.repaired += 1;
+        if (report.changes.length < 20) {
+          report.changes.push({ slug: String(row.slug), from: current, to: media.url });
+        }
+      } catch (error) {
+        report.unresolved += 1;
+        report.errors.push(
+          `${row.slug}: ${error instanceof Error ? error.message : "unreadable post page"}`,
+        );
+      }
+    }
+  }
+
+  return report;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   const args = parseArgs(argv);
   if (args.help) {
@@ -212,6 +325,31 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   const supabase = createClient(url, key, { auth: { persistSession: false } });
   const service = supabase as unknown as ImportService;
+
+  if (args.repair) {
+    process.stdout.write(
+      `Repairing direct media URLs${args.dryRun ? " (dry run)" : ""}\n`,
+    );
+    const report = await repairDirectUrls(service, { dryRun: args.dryRun });
+    process.stdout.write(
+      `  ${report.scanned} scanned · ${report.healthy} already direct · ` +
+        `${report.repaired} repaired · ${report.unresolved} unresolved\n`,
+    );
+    for (const change of report.changes) {
+      process.stdout.write(`    ${change.slug}\n      was: ${change.from || "none"}\n      now: ${change.to}\n`);
+    }
+    for (const message of report.errors.slice(0, 10)) {
+      process.stdout.write(`    ! ${message}\n`);
+    }
+    if (args.json) {
+      const { writeFile, mkdir } = await import("node:fs/promises");
+      const { dirname } = await import("node:path");
+      await mkdir(dirname(args.json), { recursive: true }).catch(() => undefined);
+      await writeFile(args.json, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+      process.stdout.write(`\nReport written to ${args.json}\n`);
+    }
+    return report.unresolved ? 2 : 0;
+  }
 
   const requested =
     args.categories.includes("all")

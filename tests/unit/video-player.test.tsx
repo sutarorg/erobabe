@@ -120,7 +120,10 @@ describe("video player", () => {
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
     expect(video).toHaveAttribute("controls");
     expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
-    expect(screen.getByRole("status")).toHaveTextContent("Preparing video");
+
+    // A file is never "prepared": the element streams it and shows its own
+    // progress, so no overlay may claim otherwise.
+    expect(screen.queryByRole("status")).toBeNull();
 
     fireEvent.canPlay(video);
     expect(screen.queryByRole("status")).toBeNull();
@@ -144,6 +147,56 @@ describe("video player", () => {
       "https://cdn.example.com/a.mp4",
     );
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("never shows a preparation screen over a direct file", () => {
+    // The reported bug: a direct host mp4 sat on "Preparing video…" instead of
+    // playing. Nothing may be drawn over a file while it buffers.
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Play video" }));
+    const video = container.querySelector("video")!;
+
+    fireEvent.waiting(video);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/Preparing video/i)).toBeNull();
+
+    // It still plays in place once the bytes arrive.
+    fireEvent.canPlay(video);
+    expect(container.querySelector("video")).toBe(video);
+  });
+
+  it("says what it is doing for a destination that must be resolved first", () => {
+    // A post page is HTML: the proxy has to turn it into media, and that is
+    // worth a status line.
+    render(<VideoPlayer {...props} provider="damplips" embedUrl="https://www.damplips.com/p/67284/" />);
+    fireEvent.click(screen.getByRole("button", { name: "Play video" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Preparing video");
+  });
+
+  it("leaves a file that is downloading alone even past the stall deadline", () => {
+    // A 100+ MB file on a slow line is not stuck. The deadline only exists for
+    // an attempt that has produced nothing, so a source with metadata must not
+    // be cut over to the (slower) proxy.
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Play video" }));
+      const video = container.querySelector("video")!;
+      Object.defineProperty(video, "readyState", { value: 1, configurable: true });
+
+      act(() => {
+        vi.advanceTimersByTime(STALL_TIMEOUT_MS + 1_000);
+      });
+
+      expect(container.querySelector("video")).toBe(video);
+      expect(video).toHaveAttribute("src", damplipsFile);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not mount untrusted generic iframe URLs", () => {
@@ -277,6 +330,7 @@ describe("video player", () => {
       fireEvent.click(screen.getByRole("button", { name: "Play video" }));
       expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
 
+      // Nothing arrives at all: no error, no byte, no metadata.
       act(() => {
         vi.advanceTimersByTime(STALL_TIMEOUT_MS + 100);
       });
