@@ -62,7 +62,11 @@ describe("video player", () => {
     // Hotlink protection rejects a foreign referer but allows none.
     expect(video).toHaveAttribute("referrerpolicy", "no-referrer");
     expect(container.querySelector("iframe")).toBeNull();
-    expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back 10 seconds" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Forward 10 seconds" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Playback speed" })).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Seek" })).toBeInTheDocument();
     // The proxy is still there, second — it is not the first request.
     expect(playbackCandidates(damplipsFile)).toEqual([damplipsFile, damplipsProxy]);
   });
@@ -121,12 +125,10 @@ describe("video player", () => {
     );
     const video = container.querySelector("video")!;
 
-    fireEvent.click(screen.getByRole("button", { name: "Play video" }));
-
     expect(container.querySelector("video")).toBe(video);
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
-    expect(video).toHaveAttribute("controls");
-    expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
+    expect(video).not.toHaveAttribute("controls");
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
 
     // A file is never "prepared": the element streams it and shows its own
     // progress, so no overlay may claim otherwise.
@@ -141,7 +143,6 @@ describe("video player", () => {
     const { container } = render(
       <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Play video" }));
     const first = container.querySelector("video")!;
     fireEvent.error(first);
     // The last resort asks the host whether a copy is worth fetching; the panel
@@ -166,7 +167,6 @@ describe("video player", () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Play video" }));
     const video = container.querySelector("video")!;
 
     fireEvent.waiting(video);
@@ -182,7 +182,6 @@ describe("video player", () => {
     // A post page is HTML: the proxy has to turn it into media, and that is
     // worth a status line.
     render(<VideoPlayer {...props} provider="damplips" embedUrl="https://www.damplips.com/p/67284/" />);
-    fireEvent.click(screen.getByRole("button", { name: "Play video" }));
     expect(screen.getByRole("status")).toHaveTextContent("Preparing video");
   });
 
@@ -195,7 +194,6 @@ describe("video player", () => {
       const { container } = render(
         <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
       );
-      fireEvent.click(screen.getByRole("button", { name: "Play video" }));
       const video = container.querySelector("video")!;
       Object.defineProperty(video, "readyState", { value: 1, configurable: true });
 
@@ -361,8 +359,7 @@ describe("video player", () => {
     const { container, rerender } = render(
       <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Play video" }));
-    expect(container.querySelector("video")).toHaveAttribute("controls");
+    expect(container.querySelector("video")).not.toHaveAttribute("controls");
 
     rerender(
       <VideoPlayer
@@ -377,7 +374,7 @@ describe("video player", () => {
       "src",
       "https://cdn.example.com/a.mp4",
     );
-    expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
   });
 
   it("falls back to the stream proxy when the host refuses the direct file", async () => {
@@ -497,7 +494,6 @@ describe("video player", () => {
       const { container } = render(
         <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
       );
-      fireEvent.click(screen.getByRole("button", { name: "Play video" }));
       expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
 
       // Nothing arrives at all: no error, no byte, no metadata.
@@ -519,7 +515,6 @@ describe("video player", () => {
       const { container } = render(
         <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
       );
-      fireEvent.click(screen.getByRole("button", { name: "Play video" }));
       const video = container.querySelector("video")!;
       fireEvent.progress(video);
 
