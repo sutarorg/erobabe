@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_VIDEOS_PER_CATEGORY,
   MIN_VIDEOS_PER_CATEGORY,
@@ -106,6 +106,24 @@ function listing(count: number, from = 1) {
 }
 
 describe("damplips importer", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo) => {
+        const url = String(input);
+        return new Response("ftyp", {
+          status: 206,
+          headers: { "content-type": "video/mp4", "content-range": "bytes 0-3/100" },
+        });
+      }),
+    );
+    // jsdom Response does not expose the request URL; the importer still stores
+    // the parsed file when the host answers as video.
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("writes the requested number of videos with title, poster and media", async () => {
     const pages: Record<string, string> = { [HARDCORE_LIST]: listing(6) };
     for (let id = 1; id <= 6; id += 1) {
@@ -217,6 +235,52 @@ describe("damplips importer", () => {
     expect(report.skipped.missingMedia).toBe(1);
     expect(report.skipped.missingThumbnail).toBe(1);
     expect(rows.map((row) => row.provider_file_id)).toEqual(["1", "4", "5"]);
+  });
+
+  it("stores the host URL the media server actually answers, not the page", async () => {
+    const pages: Record<string, string> = {
+      [HARDCORE_LIST]: listing(1),
+      "https://www.damplips.com/p/1/": postPage(1, "A hardcore scene number 1 with a long title"),
+    };
+    const { rows, service } = createCatalog();
+    const cdn = "https://video.damplips.com/cdn/1.mp4";
+
+    const report = await importCategory(
+      { categorySlug: "hardcore", perCategory: 1 },
+      {
+        fetchPage: fixtureSite(pages),
+        service,
+        categoryId: "cat-hardcore",
+        sleep: async () => {},
+        fetchHostMedia: async () => cdn,
+      },
+    );
+
+    expect(report.imported).toBe(1);
+    expect(rows[0].playable_url).toBe(cdn);
+  });
+
+  it("skips a post whose media host does not serve a video", async () => {
+    const pages: Record<string, string> = {
+      [HARDCORE_LIST]: listing(1),
+      "https://www.damplips.com/p/1/": postPage(1, "A hardcore scene number 1 with a long title"),
+    };
+    const { rows, service } = createCatalog();
+
+    const report = await importCategory(
+      { categorySlug: "hardcore", perCategory: 1 },
+      {
+        fetchPage: fixtureSite(pages),
+        service,
+        categoryId: "cat-hardcore",
+        sleep: async () => {},
+        fetchHostMedia: async () => null,
+      },
+    );
+
+    expect(report.imported).toBe(0);
+    expect(report.skipped.missingMedia).toBe(1);
+    expect(rows).toHaveLength(0);
   });
 
   it("counts a post once even when two categories list it", async () => {

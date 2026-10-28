@@ -309,6 +309,8 @@ describe("/video/[slug] watch page", () => {
     );
     expect(hints).toContain("https://cdn.example.com");
     expect(doc.querySelector("link[rel='preload'][as='image']")).toBeTruthy();
+    const videoPreload = doc.querySelector("link[rel='preload'][as='video']");
+    expect(videoPreload?.getAttribute("href")).toBe(VIDEO_ROW.playable_url);
   });
 
   it("does not resolve a post page for an ordinary media file", async () => {
