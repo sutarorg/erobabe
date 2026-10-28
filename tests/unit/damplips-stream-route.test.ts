@@ -424,6 +424,46 @@ describe("GET /api/videos/stream", () => {
     expect(body.attempts[0].profile).toBe("chrome");
   });
 
+  it("says when the host demands a browser check instead of retrying", async () => {
+    // What the media host actually answered in production: a Cloudflare managed
+    // challenge. It is solved by running JavaScript in a browser, so no header
+    // and no retry can pass it — the route must report it, not grind through
+    // four more clients to collect the same page.
+    fetchMock.mockImplementation(
+      async () =>
+        new Response("<html><title>Just a moment...</title></html>", {
+          status: 403,
+          headers: { "content-type": "text/html; charset=UTF-8" },
+        }),
+    );
+
+    const response = await GET(new NextRequest(PROXY));
+
+    expect(response.status).toBe(502);
+    expect(response.headers.get("x-media-block")).toBe("challenge");
+    expect(await response.text()).toMatch(/browser check/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a challenge as such when asked to diagnose", async () => {
+    fetchMock.mockImplementation(
+      async () =>
+        new Response("<html><title>Just a moment...</title></html>", {
+          status: 403,
+          headers: { "content-type": "text/html; charset=UTF-8" },
+        }),
+    );
+
+    const response = await GET(new NextRequest(`${PROXY}&debug=1`));
+    const body = (await response.json()) as {
+      profiles: Array<{ challenge?: boolean; reason?: string }>;
+    };
+
+    // Every client meets the same page: nothing about the request causes it.
+    expect(body.profiles.every((probe) => probe.challenge === true)).toBe(true);
+    expect(body.profiles[0].reason).toBe("Just a moment...");
+  });
+
   it("reports what every client was told, not only the last one", async () => {
     // The streaming path stops at the first usable answer, which cannot tell a
     // browser *why* the others were refused. The diagnosis asks each client and
