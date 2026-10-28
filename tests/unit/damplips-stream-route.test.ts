@@ -325,7 +325,26 @@ describe("GET /api/videos/stream", () => {
     expect((await GET(new NextRequest(PROXY))).status).toBe(502);
   });
 
-  it("retries a rejected request without the origin and referer headers", async () => {
+  it("presents a complete browser fingerprint, not just a user-agent", async () => {
+    // Production regression: Cloudflare (which fronts damplips' media host)
+    // answers 403 to a request whose UA claims Chrome but which sends none of
+    // Chrome's client hints. The same file loaded fine in a real browser and
+    // through other fetchers, while this route was rejected on every attempt.
+    await GET(new NextRequest(PROXY));
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers["user-agent"]).toMatch(/Chrome\/\d+/);
+    expect(headers["sec-ch-ua"]).toMatch(/Chromium/);
+    expect(headers["sec-ch-ua-platform"]).toBe('"Windows"');
+    expect(headers["sec-fetch-dest"]).toBe("video");
+    expect(headers["sec-fetch-mode"]).toBe("no-cors");
+    expect(headers["sec-fetch-site"]).toBe("same-origin");
+    // The request damplips' own player makes: site referer, same-origin fetch.
+    expect(headers.referer).toBe("https://www.damplips.com/");
+  });
+
+  it("relaxes one thing at a time when the host rejects the request", async () => {
     fetchMock.mockResolvedValueOnce(new Response("hotlink", { status: 403 }));
     fetchMock.mockResolvedValueOnce(mediaResponse());
 
@@ -335,16 +354,47 @@ describe("GET /api/videos/stream", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [, first] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const [, second] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect((first.headers as Record<string, string>).referer).toBe("https://www.damplips.com/");
-    expect((second.headers as Record<string, string>).referer).toBe("https://www.damplips.com/");
-    expect((second.headers as Record<string, string>).origin).toBeUndefined();
+    const firstHeaders = first.headers as Record<string, string>;
+    const secondHeaders = second.headers as Record<string, string>;
+    // Attempt one has no Origin; attempt two adds it. Everything else matches.
+    expect(firstHeaders.origin).toBeUndefined();
+    expect(secondHeaders.origin).toBe("https://www.damplips.com");
+    expect(secondHeaders.referer).toBe("https://www.damplips.com/");
   });
 
   it("gives up when every header profile is rejected", async () => {
     fetchMock.mockImplementation(async () => new Response("hotlink", { status: 403 }));
     const response = await GET(new NextRequest(PROXY));
     expect(response.status).toBe(502);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // Five profiles, each a different guess at what the host wants.
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    const profiles = fetchMock.mock.calls.map(
+      ([, init]) => (init as RequestInit).headers as Record<string, string>,
+    );
+    // The last attempt is a bare request: no referer, no client hints.
+    expect(profiles.at(-1)?.referer).toBeUndefined();
+    expect(profiles.at(-1)?.["sec-ch-ua"]).toBeUndefined();
+  });
+
+  it("reports what the host answered when asked for a diagnosis", async () => {
+    // A player cannot show a 403, so the route can: this is what turns "the
+    // video does not play" into "the host rejects our request".
+    fetchMock.mockImplementation(async () => new Response("hotlink", { status: 403 }));
+
+    const response = await GET(
+      new NextRequest(`${PROXY}&debug=1`),
+    );
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      requested: string;
+      attempts: Array<{ profile: string; status: number | null }>;
+      upstream: { status: number };
+    };
+    expect(body.requested).toBe(MEDIA);
+    expect(body.upstream.status).toBe(403);
+    expect(body.attempts.map((attempt) => attempt.status)).toEqual([403, 403, 403, 403, 403]);
+    expect(body.attempts[0].profile).toBe("browser+referer");
   });
 
   it("answers HEAD without a body", async () => {
