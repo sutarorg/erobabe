@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import type { ConnectionOptions } from "node:tls";
-import { gunzipSync } from "node:zlib";
+import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import { isDamplipsMediaUrl } from "@/lib/video/playback";
 import { isHlsContentType, isHlsUrl, isHtmlContentType, rewriteHlsPlaylist } from "@/lib/video/hls";
 import { proxiedMediaUrl } from "@/lib/video/media-proxy";
@@ -457,6 +457,18 @@ const CURL_CIPHERS =
 const CHROME_CIPHERS =
   "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384";
 
+/** Decode a compressed refusal; a truncated body still has a readable head. */
+function decodeBody(body: Buffer, encoding: string | null): string {
+  try {
+    if (encoding === "gzip") return gunzipSync(body).toString("utf8");
+    if (encoding === "br") return brotliDecompressSync(body).toString("utf8");
+    if (encoding === "deflate") return inflateSync(body).toString("utf8");
+  } catch {
+    /* Fall through to the raw bytes. */
+  }
+  return body.toString("utf8");
+}
+
 /** A header as a single string: Node types them as string | string[]. */
 function header(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) return value[0] ?? null;
@@ -554,6 +566,9 @@ type ProfileProbe = {
   reason?: string;
   /** A Cloudflare browser check: no header set can satisfy it. */
   challenge?: boolean;
+  /** Whether a refusal may be shown inside our page at all. */
+  frameOptions?: string | null;
+  frameAncestors?: string | null;
   error?: string;
 };
 
@@ -587,6 +602,10 @@ async function probeProfiles(base: Record<string, string>, url: URL): Promise<Pr
         contentType: response.headers.get("content-type"),
         contentLength: response.headers.get("content-length"),
         acceptRanges: response.headers.get("accept-ranges"),
+        frameOptions: response.headers.get("x-frame-options"),
+        frameAncestors:
+          /frame-ancestors[^;]*/i.exec(response.headers.get("content-security-policy") ?? "")?.[0] ??
+          null,
       };
       if (!response.ok) {
         // Only a refusal is read, and only the head of it: a 200 is a file.
