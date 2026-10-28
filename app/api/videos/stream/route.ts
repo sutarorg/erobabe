@@ -289,14 +289,38 @@ export type UpstreamAttempt = {
   status: number | null;
   /** The host answered a media URL with a document — a block/challenge page. */
   html?: boolean;
+  /** The document was Cloudflare's interactive check, which needs a browser. */
+  challenge?: boolean;
   error?: string;
 };
+
+/** Returned instead of a response when the host demands a browser check. */
+const CHALLENGE: unique symbol = Symbol("media-challenge");
+
+/**
+ * What the route tells the player when the host insists on a browser check.
+ * The `x-media-block` header is machine-readable so the player can explain it
+ * instead of showing a generic failure.
+ */
+function challengeBlocked(): Response {
+  return new Response(
+    "The media host answered with a browser check. It only serves the file to a browser that can run it, so play the host's own file directly.",
+    {
+      status: 502,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-media-block": "challenge",
+        "cache-control": "no-store",
+      },
+    },
+  );
+}
 
 async function requestUpstream(
   url: URL,
   base: Record<string, string>,
   log?: UpstreamAttempt[],
-): Promise<Response | null> {
+): Promise<Response | typeof CHALLENGE | null> {
   let response: Response | null = null;
   for (const profile of HEADER_PROFILES) {
     // A fresh controller per attempt: an aborted signal can never be reused,
@@ -339,9 +363,19 @@ async function requestUpstream(
       clearTimeout(timer);
     }
     if (!REJECTED.has(response.status)) return response;
+
+    // One challenge is the answer for every profile: the page is minted per IP
+    // and solved by a browser, not by a header. Trying the other four clients
+    // would only spend four more round trips to be told the same thing.
+    if (await isChallengePage(response)) {
+      log?.push({ profile: profile.name, status: response.status, challenge: true });
+      void response.body?.cancel().catch(() => undefined);
+      return CHALLENGE;
+    }
   }
   return response;
 }
+
 
 /**
  * The reason a blocked response gives, in one line.
@@ -359,6 +393,31 @@ function pageReason(html: string): string {
   return flat.slice(0, 200);
 }
 
+/**
+ * Cloudflare's interactive check, the one that cannot be satisfied from here.
+ *
+ * A managed challenge arrives as `403` (or `503`) with an HTML page whose title
+ * is "Just a moment..." / "Attention Required!". It is solved by *executing
+ * JavaScript* in a browser and returning a `cf_clearance` cookie bound to that
+ * browser's IP and user-agent — nothing a request header can produce. This is
+ * what the media host answers to every client this function presents, while a
+ * real browser loads the same file immediately, so it decides the strategy:
+ * playback stays direct, and the proxy reports the truth instead of retrying.
+ */
+const CHALLENGE_MARKERS = [/just a moment/i, /attention required/i, /checking your browser/i];
+
+async function isChallengePage(response: Response): Promise<boolean> {
+  const contentType = response.headers.get("content-type");
+  if (!isHtmlContentType(contentType)) return false;
+  // The challenged bodies are a few kilobytes; a clone is read so the caller
+  // still owns the original.
+  const html = await response
+    .clone()
+    .text()
+    .catch(() => "");
+  return CHALLENGE_MARKERS.some((marker) => marker.test(html));
+}
+
 /** Everything one client learned from the media host, for `?debug=1`. */
 type ProfileProbe = {
   profile: string;
@@ -368,6 +427,8 @@ type ProfileProbe = {
   acceptRanges?: string | null;
   /** What a refused response said it was refusing. */
   reason?: string;
+  /** A Cloudflare browser check: no header set can satisfy it. */
+  challenge?: boolean;
   error?: string;
 };
 
@@ -401,6 +462,7 @@ async function probeProfiles(base: Record<string, string>, url: URL): Promise<Pr
       };
       if (!response.ok) {
         // Only a refusal is read, and only the head of it: a 200 is a file.
+        if (await isChallengePage(response)) probe.challenge = true;
         probe.reason = pageReason(await response.text().catch(() => ""));
       }
       void response.body?.cancel().catch(() => undefined);
@@ -430,6 +492,7 @@ async function fetchUpstream(
   let current = target;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     const response = await requestUpstream(current, headers, log);
+    if (response === CHALLENGE) return challengeBlocked();
     if (!response) return badRequest("The media host could not be reached", 502);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");

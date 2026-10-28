@@ -279,6 +279,25 @@ describe("video player", () => {
     expect(screen.getByText("Technical details")).toBeInTheDocument();
   });
 
+  it("offers the direct file when playback fails everywhere", () => {
+    // A host that only serves browsers that have proven themselves cannot be
+    // proxied; opening the file in a real navigation is the way through.
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+    const fail = (element: HTMLVideoElement) => {
+      Object.defineProperty(element, "error", { value: { code: 2 }, configurable: true });
+      fireEvent.error(element);
+    };
+    // Direct file fails, then the proxy fails: nothing left to try.
+    fail(container.querySelector("video")!);
+    fail(container.querySelector("video")!);
+
+    const link = screen.getByRole("link", { name: /open the video directly/i });
+    expect(link).toHaveAttribute("href", damplipsFile);
+    expect(link).toHaveAttribute("rel", "noreferrer noopener");
+  });
+
   it("does not mount untrusted generic iframe URLs", () => {
     const { container } = render(
       <VideoPlayer {...props} embedUrl="https://example.com/embed/abc" />,

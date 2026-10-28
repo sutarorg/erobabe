@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Play, RotateCcw } from "lucide-react";
+import { ExternalLink, Loader2, Play, RotateCcw } from "lucide-react";
 import {
   damplipsProxyUrl,
   isDamplipsMediaUrl,
@@ -552,14 +552,33 @@ function NativePlayer({
             The video could not be loaded. The source may be unavailable or
             unsupported by your browser.
           </p>
-          <button
-            type="button"
-            onClick={retry}
-            className="inline-flex items-center gap-2 rounded-lg bg-white/15 px-4 py-2 font-medium hover:bg-white/25"
-          >
-            <RotateCcw className="h-4 w-4" aria-hidden />
-            Retry playback
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={retry}
+              className="inline-flex items-center gap-2 rounded-lg bg-white/15 px-4 py-2 font-medium hover:bg-white/25"
+            >
+              <RotateCcw className="h-4 w-4" aria-hidden />
+              Retry playback
+            </button>
+            {/*
+              Some media hosts only serve a file to a browser that has proven
+              itself, which a `<video>` element mid-page cannot do but a normal
+              navigation can. Opening the destination is the one action that
+              turns "blocked" into "plays", so it is offered next to Retry.
+            */}
+            {urls.length > 1 ? (
+              <a
+                href={urls[0]}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-flex items-center gap-2 rounded-lg border border-white/25 px-4 py-2 font-medium text-white/90 hover:bg-white/10"
+              >
+                <ExternalLink className="h-4 w-4" aria-hidden />
+                Open the video directly
+              </a>
+            ) : null}
+          </div>
           {/*
             A player that says only "could not be loaded" cannot be fixed from a
             screenshot. These details name the destination that was tried and
