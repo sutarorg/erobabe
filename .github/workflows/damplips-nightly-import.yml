@@ -1,0 +1,38 @@
+name: Nightly damplips import
+
+# 00:00 Asia/Kolkata = 18:30 UTC the previous calendar day.
+on:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: damplips-nightly-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Import 100 unique videos per category
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SITE_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Configure SITE_URL and CRON_SECRET repository secrets for the nightly damplips import."
+            exit 1
+          fi
+          slugs="amateur lesbian milf japanese teen-18plus hentai ebony pov big-ass threesome hardcore massage"
+          for slug in $slugs; do
+            echo "Importing ${slug}…"
+            curl --silent --show-error --fail-with-body --max-time 300 \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              "${SITE_URL%/}/api/cron/damplips-import?category=${slug}"
+            echo
+          done

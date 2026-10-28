@@ -310,8 +310,9 @@ describe("damplips importer", () => {
 
     expect(rows).toHaveLength(2);
     expect(run.categories[0].imported).toBe(2);
-    expect(run.categories).toHaveLength(1);
-    expect(run.complete).toBe(true);
+    expect(run.categories).toHaveLength(2);
+    expect(run.categories[1].imported).toBe(0);
+    expect(run.complete).toBe(false);
   });
 
   it("resolves without writing during a dry run", async () => {
