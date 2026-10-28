@@ -82,6 +82,12 @@ const GENERIC_CONTENT_TYPES = new Set([
   "",
 ]);
 
+/** Does the URL itself name a media container, whatever the host answers? */
+function isMediaPath(url: URL): boolean {
+  const match = /\.([a-z0-9]+)$/i.exec(url.pathname);
+  return Boolean(match && MEDIA_TYPES[match[1].toLowerCase()]);
+}
+
 function mediaTypeFor(url: URL, contentType: string | null): string | null {
   const declared = (contentType || "").split(";")[0]?.trim().toLowerCase() || "";
   if (!GENERIC_CONTENT_TYPES.has(declared)) return null;
@@ -181,26 +187,32 @@ function parseSource(raw: string, token: string | null): SourceResult {
 }
 
 /**
- * The browser the proxy presents to the media host.
+ * Who the proxy claims to be when it asks the media host for a file.
  *
- * A user-agent alone is not enough. Cloudflare — which fronts damplips' media
- * host — scores a request whose UA claims Chrome but which sends none of
- * Chrome's client hints (`sec-ch-ua`, `sec-fetch-*`) as a bot and answers 403.
- * That is exactly what happened in production: the same file loaded fine in a
- * browser and through other fetchers, while this route got "403" from every
- * header profile it tried. The profiles below are complete, self-consistent
- * fingerprints rather than a UA string with a referer bolted on.
+ * A browser fingerprint has to be **self-consistent**: every header is compared
+ * against the others. The first version of this route sent a Chrome user-agent
+ * with `accept-encoding: identity` and no client hints, which reads as "a script
+ * wearing a Chrome label" and earned a 403 from the Cloudflare in front of the
+ * media host on every attempt. Meanwhile a plain HTTP client from another
+ * datacenter fetched the very same file with `200 video/mp4` — so the host is
+ * not blocking proxies as such, it is scoring *this* request.
+ *
+ * Each profile below is therefore one coherent client rather than a mixture:
+ * a Chrome, a Firefox, a curl. They are tried in that order, and the one that
+ * answered can be read back with `?debug=1`.
  */
-const UA_WINDOWS =
+const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+const FIREFOX_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0";
+const CURL_UA = "curl/8.6.0";
 
-/** Headers every attempt sends. `identity` keeps the body decodable. */
-const BASE_HEADERS: Record<string, string> = {
-  "user-agent": UA_WINDOWS,
-  accept: "*/*",
-  "accept-language": "en-US,en;q=0.9",
-  "accept-encoding": "identity",
-};
+/**
+ * What a browser really asks for. No browser ever sends `identity`, and the
+ * media host never compresses a container anyway; if it ever does, `fetch`
+ * decodes the body and drops the stale `content-encoding`/`content-length`.
+ */
+const BROWSER_ENCODING = "gzip, deflate, br";
 
 /** A full Chromium client-hint set, as `<video>` itself would send it. */
 const CHROMIUM_HEADERS: Record<string, string> = {
@@ -218,35 +230,67 @@ type HeaderProfile = { name: string; headers: Record<string, string> };
 /**
  * Profiles for the media host, most likely first.
  *
- * Damplips' own player asks for the file with its site referer and a same-origin
- * fetch, so that is attempt one — it is the request the host is built to accept.
- * The rest relax one thing at a time (an `Origin`, cross-site, a bare request)
- * because hotlink protection is configured differently on each of its hosts.
+ * Damplips' own player asks for the file with its site referer from a
+ * same-origin document, so that is attempt one — it is the request the host is
+ * built to accept. The rest are other real clients, ending with a bare HTTP
+ * request, because a rejection must never be the last word if any shape of
+ * request would have worked.
  */
 const HEADER_PROFILES: HeaderProfile[] = [
-  { name: "browser+referer", headers: { ...BASE_HEADERS, ...CHROMIUM_HEADERS, referer: MEDIA_REFERER } },
   {
-    name: "browser+referer+origin",
+    name: "chrome",
     headers: {
-      ...BASE_HEADERS,
+      "user-agent": CHROME_UA,
+      accept: "*/*",
+      "accept-language": "en-US,en;q=0.9",
+      "accept-encoding": BROWSER_ENCODING,
       ...CHROMIUM_HEADERS,
       referer: MEDIA_REFERER,
-      origin: "https://www.damplips.com",
     },
   },
   {
-    name: "browser-cross-site",
-    headers: { ...BASE_HEADERS, ...CHROMIUM_HEADERS, "sec-fetch-site": "cross-site" },
+    name: "firefox",
+    headers: {
+      "user-agent": FIREFOX_UA,
+      accept: "*/*",
+      "accept-language": "en-US,en;q=0.5",
+      "accept-encoding": BROWSER_ENCODING,
+      "sec-fetch-dest": "video",
+      "sec-fetch-mode": "no-cors",
+      "sec-fetch-site": "same-origin",
+      referer: MEDIA_REFERER,
+    },
   },
-  { name: "plain+referer", headers: { ...BASE_HEADERS, referer: MEDIA_REFERER } },
-  { name: "plain", headers: { ...BASE_HEADERS } },
+  {
+    name: "chrome-cross-site",
+    headers: {
+      "user-agent": CHROME_UA,
+      accept: "*/*",
+      "accept-language": "en-US,en;q=0.9",
+      "accept-encoding": BROWSER_ENCODING,
+      ...CHROMIUM_HEADERS,
+      "sec-fetch-site": "cross-site",
+      origin: "https://erobabe.vercel.app",
+    },
+  },
+  {
+    name: "curl",
+    headers: { "user-agent": CURL_UA, accept: "*/*", referer: MEDIA_REFERER },
+  },
+  { name: "plain", headers: { "user-agent": CURL_UA, accept: "*/*" } },
 ];
 
 /** Statuses that mean "the host did not like this request", not "no file". */
 const REJECTED = new Set([401, 403, 451]);
 
 /** One attempt against the media host, kept for the diagnostic response. */
-export type UpstreamAttempt = { profile: string; status: number | null; error?: string };
+export type UpstreamAttempt = {
+  profile: string;
+  status: number | null;
+  /** The host answered a media URL with a document — a block/challenge page. */
+  html?: boolean;
+  error?: string;
+};
 
 async function requestUpstream(
   url: URL,
@@ -268,6 +312,18 @@ async function requestUpstream(
         cache: "no-store",
         signal: controller.signal,
       });
+      // A media URL answered with an HTML document is not the media: it is a
+      // block or challenge page wearing a 200. Try the next client before
+      // believing the host.
+      const challenged =
+        response.ok &&
+        isMediaPath(url) &&
+        isHtmlContentType(response.headers.get("content-type"));
+      if (challenged) {
+        log?.push({ profile: profile.name, status: response.status, html: true });
+        void response.body?.cancel().catch(() => undefined);
+        continue;
+      }
       log?.push({ profile: profile.name, status: response.status });
     } catch (error) {
       // A refused connection, a DNS failure and a host that never answered in
@@ -285,6 +341,81 @@ async function requestUpstream(
     if (!REJECTED.has(response.status)) return response;
   }
   return response;
+}
+
+/**
+ * The reason a blocked response gives, in one line.
+ *
+ * A Cloudflare block is a page, not a status code: "Sorry, you have been
+ * blocked", "Just a moment…", "Hotlinking is not allowed" mean three different
+ * fixes. Reading the title (or the first line of text) is enough to tell them
+ * apart without downloading the page.
+ */
+function pageReason(html: string): string {
+  const title = /<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1]?.trim();
+  const heading = /<h1[^>]*>([^<]*)<\/h1>/i.exec(html)?.[1]?.trim();
+  const text = [title, heading].filter(Boolean).join(" — ");
+  const flat = text || html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return flat.slice(0, 200);
+}
+
+/** Everything one client learned from the media host, for `?debug=1`. */
+type ProfileProbe = {
+  profile: string;
+  status: number | null;
+  contentType?: string | null;
+  contentLength?: string | null;
+  acceptRanges?: string | null;
+  /** What a refused response said it was refusing. */
+  reason?: string;
+  error?: string;
+};
+
+/**
+ * Ask the media host once per client, **without stopping at the first answer**.
+ *
+ * The streaming path has to stop at the first usable response, which leaves the
+ * question "would another client have been accepted?" unanswerable in a browser.
+ * A diagnosis can afford five requests, and those five are the whole difference
+ * between guessing at a fingerprint and reading one that works.
+ */
+async function probeProfiles(base: Record<string, string>, url: URL): Promise<ProfileProbe[]> {
+  const probes: ProfileProbe[] = [];
+  for (const profile of HEADER_PROFILES) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), upstreamTimeoutMs());
+    if (typeof timer === "object" && "unref" in timer) timer.unref();
+    try {
+      const response = await fetch(url, {
+        headers: { ...base, ...profile.headers },
+        redirect: "manual",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const probe: ProfileProbe = {
+        profile: profile.name,
+        status: response.status,
+        contentType: response.headers.get("content-type"),
+        contentLength: response.headers.get("content-length"),
+        acceptRanges: response.headers.get("accept-ranges"),
+      };
+      if (!response.ok) {
+        // Only a refusal is read, and only the head of it: a 200 is a file.
+        probe.reason = pageReason(await response.text().catch(() => ""));
+      }
+      void response.body?.cancel().catch(() => undefined);
+      probes.push(probe);
+    } catch (error) {
+      probes.push({
+        profile: profile.name,
+        status: null,
+        error: error instanceof Error ? error.message : "request failed",
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return probes;
 }
 
 /**
@@ -330,10 +461,10 @@ async function proxy(req: NextRequest): Promise<Response> {
   const parsed = parseSource(raw, req.nextUrl.searchParams.get("t"));
   if ("error" in parsed) return badRequest(parsed.error, parsed.status);
 
-  // Media must arrive uncompressed: the browser decodes the container, and a
-  // transparently re-encoded body would fail to play. The browser fingerprint
-  // itself lives in `BASE_HEADERS` / `HEADER_PROFILES`.
-  const headers: Record<string, string> = { ...BASE_HEADERS };
+  // Only request-scoped headers here: the client identity (user-agent, encoding,
+  // client hints, referer) lives entirely in `HEADER_PROFILES`, so that each
+  // attempt is one coherent client instead of a mixture of them.
+  const headers: Record<string, string> = {};
   const range = req.headers.get("range");
   if (range) headers.range = range;
   for (const name of CONDITIONAL_HEADERS) {
@@ -368,12 +499,16 @@ async function proxy(req: NextRequest): Promise<Response> {
             finalUrl: result.url.toString(),
           };
       if (!(result instanceof Response)) void result.response.body?.cancel().catch(() => undefined);
+      // The sweep runs after the streaming decision is made, so the report
+      // never changes what playback would have done.
+      const profiles = await probeProfiles(headers, current);
       return Response.json(
         {
           requested: requestedUrl.toString(),
           profile: attempts.at(-1)?.profile ?? null,
           attempts,
           upstream: summary,
+          profiles,
         },
         { headers: { "cache-control": "no-store" } },
       );
