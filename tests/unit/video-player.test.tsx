@@ -140,8 +140,6 @@ describe("video player", () => {
     );
     const first = container.querySelector("video")!;
     fireEvent.error(first);
-    // The last resort asks the host whether a copy is worth fetching; the panel
-    // follows that answer.
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded"),
     );
@@ -250,7 +248,7 @@ describe("video player", () => {
     expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
   });
 
-  it("does not download the whole file when a same-origin proxy already failed", async () => {
+  it("never downloads the film in the browser after import", async () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
@@ -260,6 +258,7 @@ describe("video player", () => {
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded"),
     );
+    expect(screen.queryByText(/Fetching this video from the host/i)).toBeNull();
   });
 
   it("still explains a dead end when there is no frame to fall back to", () => {
