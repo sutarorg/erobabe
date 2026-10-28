@@ -69,7 +69,7 @@ describe("GET /api/videos/stream-edge", () => {
   });
 
   it("does not hand a block page to the element as if it were the video", async () => {
-    fetchMock.mockResolvedValueOnce(
+    fetchMock.mockResolvedValue(
       new Response("<html><title>Just a moment...</title></html>", {
         status: 200,
         headers: { "content-type": "text/html; charset=UTF-8" },
@@ -83,8 +83,35 @@ describe("GET /api/videos/stream-edge", () => {
     expect(response.headers.get("x-media-block")).toBe("challenge");
   });
 
+  it("labels an octet-stream mp4 as video/mp4 so the element can play it", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("abcd", {
+        status: 206,
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-range": "bytes 0-3/100",
+          "content-length": "4",
+        },
+      }),
+    );
+    const { GET } = await route();
+    const response = await GET(new NextRequest(PROXY, { headers: { range: "bytes=0-3" } }));
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-type")).toBe("video/mp4");
+  });
+
+  it("retries a refused profile until the host serves the file", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response("nope", { status: 403 }))
+      .mockResolvedValueOnce(mediaResponse());
+    const { GET } = await route();
+    const response = await GET(new NextRequest(PROXY));
+    expect(response.status).toBe(206);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("reports a refused status instead of streaming an error body", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 403 }));
+    fetchMock.mockResolvedValue(new Response("nope", { status: 403 }));
     const { GET } = await route();
 
     const response = await GET(new NextRequest(PROXY));

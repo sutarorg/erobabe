@@ -349,7 +349,11 @@ function NativePlayer({
     setFailed(false);
     dataSeen.current = false;
 
-    if (allowAlternative && !triedAlternative) {
+    // An mp4 that the element cannot decode is not a playlist. Spending an
+    // HLS attempt on it delays the next real destination and is what left
+    // some damplips files on "source not supported".
+    const mayBePlaylist = isHls || (!isStreamProxyUrl(url) && !isDamplipsMediaUrl(url));
+    if (allowAlternative && !triedAlternative && mayBePlaylist) {
       setTriedAlternative(true);
       setStrategy((current) => (current === "hls" ? "native" : "hls"));
       setAttempt((value) => value + 1);
@@ -380,13 +384,7 @@ function NativePlayer({
     // allows CORS ones.
     // A whole-file download is slower than waiting on the proxy. Only try it
     // when there is no same-origin stream to fall back to.
-    if (
-      directUrl &&
-      !localUrl &&
-      !urls.some((candidate) => isStreamProxyUrl(candidate)) &&
-      typeof URL !== "undefined" &&
-      typeof URL.createObjectURL === "function"
-    ) {
+    if (directUrl && !localUrl && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
       void loadOwnCopy();
       return;
     }
