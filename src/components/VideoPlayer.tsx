@@ -6,10 +6,22 @@ import {
   damplipsProxyUrl,
   isDamplipsMediaUrl,
   isDamplipsPostPage,
+  isStreamProxyUrl,
+  playbackCandidates,
   selectPlaybackSource,
 } from "@/lib/video/playback";
 import { isHlsUrl } from "@/lib/video/hls";
 import { ALGORITHM_VERSION } from "@/lib/recommendations/ranking";
+
+/**
+ * Every destination worth trying for one catalog row, best first.
+ *
+ * The rule lives in `lib/video/playback` so the server and the player agree: a
+ * direct host file plays immediately, and only a playlist or a post page is
+ * handed to the proxy first. Re-exported here because the player is where the
+ * order matters, and its tests read it from this module.
+ */
+export { playbackCandidates };
 
 type Props = {
   id: string;
@@ -63,29 +75,33 @@ export function playsHlsNatively(element: HTMLVideoElement | null): boolean {
 }
 
 /**
- * Every destination worth trying for one catalog row, best first.
- *
- * damplips media is asked for through the same-origin proxy, which supplies the
- * referer the host requires, resolves a post page into the file it advertises,
- * and rewrites HLS playlists. The unproxied address is kept as a second
- * attempt: if the proxy itself is the problem (an outage or a blocking
- * intermediary), the browser can still play the file directly — except for a
- * post page, which is HTML and only the proxy can turn into media.
- */
-export function playbackCandidates(url: string): string[] {
-  if (!isDamplipsMediaUrl(url)) return [url];
-  const proxied = damplipsProxyUrl(url);
-  return isDamplipsPostPage(url) ? [proxied] : [proxied, url];
-}
-
-/**
  * `referrerPolicy` is missing from React's media attribute types, but the
  * browser honours it on a `<video>` element, so it is spread in as a plain
  * attribute rather than typed.
+ *
+ * A damplips file is played straight from its host, so the request is
+ * cross-origin and hotlink protection gets a vote. Those rules usually reject a
+ * **foreign** referer but allow a request with none, so the direct attempt
+ * sends no referrer at all. Our own proxy is same-origin and needs nothing.
  */
-function fallbackReferrerPolicy(source: number): Record<string, string> {
-  return source > 0 ? { referrerPolicy: "no-referrer" } : {};
+function referrerPolicyForCandidate(url: string, index: number): Record<string, string> {
+  if (isStreamProxyUrl(url)) return {};
+  if (index > 0 || isDamplipsMediaUrl(url)) return { referrerPolicy: "no-referrer" };
+  return {};
 }
+
+/**
+ * How long a destination may deliver **nothing at all** before the player moves
+ * on to the next one.
+ *
+ * A media element that is waiting on a request which never answers fires no
+ * error: it just sits in `waiting` and the overlay says "Preparing video…"
+ * forever. That is the state this deadline removes — if no byte, no metadata
+ * and no duration has arrived within this window, the next destination is tried
+ * (and, once every destination is spent, the visitor gets a real error instead
+ * of an endless spinner).
+ */
+export const STALL_TIMEOUT_MS = 8_000;
 
 /**
  * The native media element, with HLS support.
@@ -113,6 +129,8 @@ function NativePlayer({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const recoveries = useRef(0);
   const startedRef = useRef(false);
+  /** Has this attempt produced anything at all — a byte, metadata, a frame? */
+  const dataSeen = useRef(false);
   const [source, setSource] = useState(0);
   const [strategy, setStrategy] = useState<Strategy>(isHls ? "hls" : "native");
   const [triedAlternative, setTriedAlternative] = useState(false);
@@ -144,6 +162,7 @@ function NativePlayer({
     setWaiting(false);
     setStarted(false);
     setFailed(false);
+    dataSeen.current = false;
 
     if (allowAlternative && !triedAlternative) {
       setTriedAlternative(true);
@@ -163,6 +182,27 @@ function NativePlayer({
     setFailed(true);
     onTrack("playback_error");
   }, [isHls, onTrack, source, triedAlternative, urls.length]);
+
+  /**
+   * The spinner has a deadline.
+   *
+   * Nothing guarantees a media element will ever tell us that a request went
+   * nowhere: a host that accepts the connection and never answers produces no
+   * `error` event, only `waiting`, so the visitor is left on "Preparing
+   * video…" indefinitely. Once playback has been asked for, an attempt that has
+   * produced no data at all within `STALL_TIMEOUT_MS` is abandoned for the next
+   * destination — and when there is no next destination the visitor is shown a
+   * real error with a retry button instead of an endless spinner.
+   */
+  useEffect(() => {
+    dataSeen.current = false;
+    if (!started || failed) return;
+    const timer = setTimeout(() => {
+      if (dataSeen.current) return;
+      handleFailure(false);
+    }, STALL_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [url, strategy, attempt, started, failed, handleFailure]);
 
   // HLS in browsers without native support.
   useEffect(() => {
@@ -292,17 +332,24 @@ function NativePlayer({
         key={`${url}:${strategy}:${attempt}`}
         ref={videoRef}
         src={strategy === "native" ? url : undefined}
-        // The fallback destination is damplips itself. Hotlink protection there
+        // A direct file is fetched from its host, where hotlink protection
         // usually rejects a foreign referer but allows a request without one.
-        {...fallbackReferrerPolicy(source)}
+        {...referrerPolicyForCandidate(url, source)}
         aria-label={title}
         controls={started}
         preload="auto"
         poster={poster || undefined}
         playsInline
         className="h-full w-full bg-black"
+        onLoadedMetadata={() => {
+          dataSeen.current = true;
+        }}
+        onProgress={() => {
+          dataSeen.current = true;
+        }}
         onPlay={() => onTrack("playback_start")}
         onTimeUpdate={(event) => {
+          dataSeen.current = true;
           const media = event.currentTarget;
           if (!media.duration || !Number.isFinite(media.duration)) return;
           const progress = media.currentTime / media.duration;
@@ -311,9 +358,18 @@ function NativePlayer({
           if (progress >= 0.75) onTrack("progress_75");
         }}
         onEnded={() => onTrack("playback_complete")}
-        onPlaying={() => setWaiting(false)}
-        onLoadedData={resume}
-        onCanPlay={resume}
+        onPlaying={() => {
+          dataSeen.current = true;
+          setWaiting(false);
+        }}
+        onLoadedData={() => {
+          dataSeen.current = true;
+          resume();
+        }}
+        onCanPlay={() => {
+          dataSeen.current = true;
+          resume();
+        }}
         onWaiting={() => {
           if (startedRef.current) setWaiting(true);
         }}

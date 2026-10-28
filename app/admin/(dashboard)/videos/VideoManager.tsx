@@ -580,6 +580,20 @@ export default function VideoManager({
                         source
                       </a>
                     )}
+                    {/* The destination the player hands to the browser. Seeing
+                        it here is how an operator tells a direct host file
+                        (`…/video7/717/79.mp4`) from a post page that still has
+                        to be resolved. */}
+                    {(video.playable_url || video.embed_url) && (
+                      <a
+                        href={video.playable_url || video.embed_url || undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-ink-3 underline hover:text-accent"
+                      >
+                        media
+                      </a>
+                    )}
                     {video.requires_reupload && (
                       <span className="text-amber-300">media unavailable</span>
                     )}

@@ -257,6 +257,15 @@ export function parseDuration(value: unknown): number | null {
 }
 
 function collectMediaCandidates(html: string, pageUrl: string): DamplipsMedia[] {
+  // damplips publishes its player as server-rendered markup
+  // (`<video class="video-js"><source src="https://video.damplips.com/video7/…">`),
+  // but players configured from JavaScript carry the same URL with escaped
+  // slashes. Scanning an unescaped copy of the document as well is what lets
+  // those posts import instead of being skipped as "no media".
+  const scan = html.includes("\\/") || /\\u002f/i.test(html)
+    ? html.replace(/\\\//g, "/").replace(/\\u002[fF]/g, "/")
+    : html;
+
   const candidates: DamplipsMedia[] = [];
   const push = (declared: "direct" | "embed", raw: string | null | undefined) => {
     const url = toSafeUrl(raw ?? "", pageUrl);
@@ -276,7 +285,7 @@ function collectMediaCandidates(html: string, pageUrl: string): DamplipsMedia[] 
   };
 
   // 1. Open Graph / video meta tags (the page's own claim about its player).
-  for (const tag of html.match(/<meta\b[^>]*>/gi) || []) {
+  for (const tag of scan.match(/<meta\b[^>]*>/gi) || []) {
     const property = (attribute(tag, "property") || attribute(tag, "name") || "").toLowerCase();
     if (!property.startsWith("og:video") && property !== "twitter:player:stream") continue;
     const content = attribute(tag, "content");
@@ -284,7 +293,7 @@ function collectMediaCandidates(html: string, pageUrl: string): DamplipsMedia[] 
   }
 
   // 2. JSON-LD VideoObject.
-  for (const block of html.match(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || []) {
+  for (const block of scan.match(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || []) {
     const contentUrl = /"contentUrl"\s*:\s*"([^"]+)"/i.exec(block)?.[1];
     const embedUrl = /"embedUrl"\s*:\s*"([^"]+)"/i.exec(block)?.[1];
     push("direct", contentUrl);
@@ -292,7 +301,7 @@ function collectMediaCandidates(html: string, pageUrl: string): DamplipsMedia[] 
   }
 
   // 3. HTML5 media elements.
-  for (const element of html.match(/<(?:video|source)\b[^>]*>/gi) || []) {
+  for (const element of scan.match(/<(?:video|source)\b[^>]*>/gi) || []) {
     push("direct", attribute(element, "src"));
     push("direct", attribute(element, "data-src"));
   }
@@ -300,33 +309,33 @@ function collectMediaCandidates(html: string, pageUrl: string): DamplipsMedia[] 
   // 4. Player configuration (videojs, jwplayer, plyr, flowplayer, wp themes).
   //    A player path is an embed, not a file, even when it is written in a
   //    `src=` attribute.
-  for (const match of html.matchAll(/(?:file|src|source|video_url|videoUrl|hls)\s*[:=]\s*["']([^"']+)["']/gi)) {
+  for (const match of scan.matchAll(/(?:file|src|source|video_url|videoUrl|hls)\s*[:=]\s*["']([^"']+)["']/gi)) {
     const value = match[1];
     push(/\/(?:embed|player|e)\/[^/]/i.test(value) ? "embed" : "direct", value);
   }
-  for (const match of html.matchAll(/["'](https?:\/\/[^"'\s]+?\.(?:mp4|m4v|webm|m3u8))["']/gi)) {
+  for (const match of scan.matchAll(/["'](https?:\/\/[^"'\s]+?\.(?:mp4|m4v|webm|m3u8))["']/gi)) {
     push("direct", match[1]);
   }
 
   // 5. Explicit data-* media attributes some themes and lazy players use.
-  for (const match of html.matchAll(/data-(?:video-?(?:src|file|url|mp4|hls)|mp4|hls)\s*=\s*["']([^"']+)["']/gi)) {
+  for (const match of scan.matchAll(/data-(?:video-?(?:src|file|url|mp4|hls)|mp4|hls)\s*=\s*["']([^"']+)["']/gi)) {
     push(/\/(?:embed|player|e)\/[^/]/i.test(match[1]) ? "embed" : "direct", match[1]);
   }
 
   // 6. Schema.org microdata.
-  for (const tag of html.match(/<(?:meta|link)\b[^>]*>/gi) || []) {
+  for (const tag of scan.match(/<(?:meta|link)\b[^>]*>/gi) || []) {
     const key = (attribute(tag, "itemprop") || attribute(tag, "rel") || "").toLowerCase();
     if (key === "contenturl") push("direct", attribute(tag, "content") || attribute(tag, "href"));
     if (key === "embedurl") push("embed", attribute(tag, "content") || attribute(tag, "href"));
   }
 
   // 7. Any absolute media file URL in the page, quoted or not.
-  for (const match of html.matchAll(/https?:\/\/[^\s"'<>\\]+?\.(?:mp4|m4v|webm|m3u8)(?:\?[^\s"'<>\\]*)?/gi)) {
+  for (const match of scan.matchAll(/https?:\/\/[^\s"'<>\\]+?\.(?:mp4|m4v|webm|m3u8)(?:\?[^\s"'<>\\]*)?/gi)) {
     push("direct", match[0]);
   }
 
   // 8. A framed player damplips explicitly publishes.
-  for (const iframe of html.match(/<iframe\b[^>]*>/gi) || []) {
+  for (const iframe of scan.match(/<iframe\b[^>]*>/gi) || []) {
     push("embed", attribute(iframe, "src") || attribute(iframe, "data-src"));
   }
 

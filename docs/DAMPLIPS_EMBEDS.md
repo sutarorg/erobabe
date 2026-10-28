@@ -53,11 +53,17 @@ npm run import:damplips -- --probe=https://www.damplips.com/p/67284/
 #   Post: …
 #     poster: https://video.damplips.com/pics/…
 #     duration: 754s
-#     media: direct https://video.damplips.com/videos/67284.mp4
+#     media: direct https://video.damplips.com/video7/717/79.mp4
+#     reachable: 206 Partial Content · video/mp4 · accept-ranges: bytes · 2 bytes
 ```
 
+The last line is a real `Range: bytes=0-1` request from the machine running the
+command, so it answers the only question that matters for a direct file: does
+the host hand these bytes to a player on this network?
+
 Exit codes: `0` parsed, `1` host unreachable, `2` nothing recognised, `3` post
-found but no media destination (`media: NOT FOUND`).
+found but no media destination (`media: NOT FOUND`), `4` the media URL parsed but
+the host did not answer (`reachable: NO`).
 
 ```bash
 # all 12 categories, 110 targets (100+ minimum after skipped posts)
@@ -122,7 +128,28 @@ and a player:
   iframe, and no damplips page is ever framed: damplips does not allow it, and
   every damplips row has a direct destination the proxy can resolve.
 
-Damplips files are played through `/api/videos/stream?src=…`, a small proxy that:
+### Order of destinations
+
+`playbackCandidates` decides what the element is handed, best first:
+
+| Destination | Tried first | Why |
+| --- | --- | --- |
+| Direct file (`…/video7/717/79.mp4`) | **the host itself** | damplips publishes these on a public host, exactly like the `<source>` tag on its own post page. The element streams them directly — nothing is "prepared" — and the proxy is only the fallback for a host that refuses the request. |
+| HLS playlist (`.m3u8`) | the proxy | a playlist is a document: every segment, key and rendition URI has to be rewritten to this origin before a frame can play. The raw URL is kept as a second attempt for Safari, which plays playlists natively. |
+| Post page (`/p/<id>/`) | the proxy | it is HTML; only the proxy can turn it into a file. Never framed. |
+
+A damplips file is requested with `referrerPolicy="no-referrer"`: hotlink
+protection on these hosts rejects a **foreign** referer but allows a request
+with none, which is why the poster already loads from the same host.
+
+The player also has a deadline. A host that accepts the connection and then says
+nothing fires no media `error` event at all — the element just waits — so once
+playback has been asked for, a destination that has delivered no byte, no
+metadata and no duration within `STALL_TIMEOUT_MS` (8 s) is abandoned for the
+next one, and the visitor sees a real error with a retry button instead of an
+endless "Preparing video…".
+
+`/api/videos/stream?src=…` is the proxy behind those destinations, and it:
 
 - accepts a public `https://*.damplips.com` URL, **or** any public https host
   that carries a valid short-lived signature (see HLS below) — never loopback,
@@ -141,6 +168,17 @@ Damplips files are played through `/api/videos/stream?src=…`, a small proxy th
   `content-length`, `content-encoding` and `accept-ranges`, and streams the body
   without storing it. Upstream is asked for `accept-encoding: identity`, so a
   re-encoded body can never reach a video element,
+- **answers or gives up within `MEDIA_UPSTREAM_TIMEOUT_MS`** (12 s by default).
+  The clock covers the response **headers** only and is cleared the moment they
+  arrive, so a ten-minute file still streams for ten minutes — but a host that
+  never answers can no longer hold the request, and therefore the player, open,
+- names the container (`video/mp4`, `video/webm`, …) when the host labels the
+  file `application/octet-stream`. Every response from this app carries
+  `X-Content-Type-Options: nosniff`, so a generic binary type is not something a
+  `<video>` element should have to guess at,
+- only advertises `accept-ranges: bytes` when the host actually offered ranges
+  (or answered with `206`). Claiming range support a host does not have makes a
+  seeking player re-download the whole file on every seek,
 - follows at most four redirects. A redirect may leave damplips for a media CDN,
   but only to a public https host; anything private is refused.
 
@@ -168,10 +206,12 @@ sends the source to `hls.js`, and an hls.js fatal error sends it back to the
 plain element. A network failure is never retried in the other strategy, so a
 dead destination still fails over quickly.
 
-In the browser, the player tries the proxy first and, if that destination fails,
-the direct file (with no referer, which hotlink protection usually allows) before
-showing an error. A damplips **post page** is never framed — it has no direct
-fallback, only the proxy can turn it into media.
+In the browser, the player tries that row's destinations in the order above: a
+direct file first, the proxy behind it; and for a playlist or a post page, the
+proxy first. Only when every destination has failed is the error shown — and the
+"Preparing video…" label can no longer outlive the attempt that caused it. A
+damplips **post page** is never framed: it has no direct fallback, because only
+the proxy can turn it into media.
 
 ## Grid layout
 

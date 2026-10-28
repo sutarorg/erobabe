@@ -93,11 +93,55 @@ SUPABASE_SECRET_KEY), optionally DAMPLIPS_BASE_URL.
 `;
 
 /**
+ * Asks the media host for the first two bytes of the file and reports what came
+ * back.
+ *
+ * A media URL that parses is not necessarily a media URL that plays: the host
+ * can 403 a request, redirect somewhere odd, answer with HTML, or refuse range
+ * requests altogether. This runs from the machine the operator is sitting at,
+ * so the answer describes *their* network path — the same one the browser in
+ * front of them will use.
+ */
+export async function probeMedia(url: string): Promise<boolean> {
+  const timeout = AbortSignal.timeout(15_000);
+  try {
+    const response = await fetch(url, {
+      redirect: "follow",
+      signal: timeout,
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        accept: "*/*",
+        range: "bytes=0-1",
+      },
+    });
+    const type = response.headers.get("content-type") || "no content-type";
+    const ranges = response.headers.get("accept-ranges") || "none";
+    const length = response.headers.get("content-length") || "unknown";
+    const encoding = response.headers.get("content-encoding");
+    await response.body?.cancel().catch(() => undefined);
+    process.stdout.write(
+      `  reachable: ${response.status} ${response.statusText} · ${type} · ` +
+        `accept-ranges: ${ranges} · ${length} bytes` +
+        (encoding ? ` · encoding: ${encoding}` : "") +
+        "\n",
+    );
+    return response.ok || response.status === 206;
+  } catch (error) {
+    process.stdout.write(
+      `  reachable: NO — ${error instanceof Error ? error.message : "unknown error"}\n`,
+    );
+    return false;
+  }
+}
+
+/**
  * Prints what the parser can see on one damplips URL.
  *
  * Run this first in a new environment: it needs no database, and it is the
  * fastest way to tell whether damplips is reachable and whether its current
- * markup still exposes a poster and a media destination.
+ * markup still exposes a poster and a media destination — and whether that
+ * destination actually answers.
  */
 export async function probe(target: string): Promise<number> {
   const url = target.startsWith("http")
@@ -130,7 +174,13 @@ export async function probe(target: string): Promise<number> {
     process.stdout.write(
       `  media: ${detail.media ? `${detail.media.kind} ${detail.media.url}` : "NOT FOUND — the page loads it with JavaScript; check the player markup"}\n`,
     );
-    return detail.media ? 0 : 3;
+    if (!detail.media) return 3;
+    // A direct file is played by the browser itself, so its own reachability is
+    // the whole question. A playlist is handled by the stream proxy.
+    if (detail.media.kind === "direct") {
+      return (await probeMedia(detail.media.url)) ? 0 : 4;
+    }
+    return 0;
   }
 
   if (!listing.cards.length) {

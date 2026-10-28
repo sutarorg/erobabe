@@ -66,6 +66,20 @@ describe("VideoManager", () => {
     expect(screen.queryByText(/^Upload$/)).toBeNull();
   });
 
+  it("shows the media destination that was imported for the row", () => {
+    render(
+      <VideoManager
+        initialVideos={[
+          { ...VIDEO, playable_url: "https://video.damplips.com/video7/717/79.mp4" },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "media" })).toHaveAttribute(
+      "href",
+      "https://video.damplips.com/video7/717/79.mp4",
+    );
+  });
+
   it("saves a replacement thumbnail URL", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({ video: { id: VIDEO.id, thumbnail_url: "https://video.damplips.com/new.jpg" } }),

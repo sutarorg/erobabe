@@ -7,7 +7,10 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import VideoPlayer, { playbackCandidates } from "@/src/components/VideoPlayer";
+import VideoPlayer, {
+  STALL_TIMEOUT_MS,
+  playbackCandidates,
+} from "@/src/components/VideoPlayer";
 
 const props = {
   id: "22222222-2222-4222-8222-222222222222",
@@ -38,13 +41,23 @@ afterEach(() => {
 });
 
 describe("video player", () => {
-  it("plays a damplips file through the same-origin stream proxy", () => {
+  it("plays a direct host file immediately, with nothing to prepare", () => {
+    // damplips publishes its mp4s on a public host, exactly like the `<source>`
+    // tag on its own post page. The element must stream that URL itself; the
+    // proxy is only the fallback. Routing it through the proxy first is what
+    // left the player on "Preparing video…".
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
-    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
+    const video = container.querySelector("video")!;
+    expect(video).toHaveAttribute("src", damplipsFile);
+    expect(video).toHaveAttribute("preload", "auto");
+    // Hotlink protection rejects a foreign referer but allows none.
+    expect(video).toHaveAttribute("referrerpolicy", "no-referrer");
     expect(container.querySelector("iframe")).toBeNull();
     expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
+    // The proxy is still there, second — it is not the first request.
+    expect(playbackCandidates(damplipsFile)).toEqual([damplipsFile, damplipsProxy]);
   });
 
   it("plays a damplips post page in our own player instead of framing it", () => {
@@ -164,20 +177,21 @@ describe("video player", () => {
     expect(screen.getByRole("button", { name: "Play video" })).toBeInTheDocument();
   });
 
-  it("falls back to the direct damplips file when the proxy cannot deliver it", () => {
+  it("falls back to the stream proxy when the host refuses the direct file", () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
     const video = container.querySelector("video")!;
-    expect(video).toHaveAttribute("src", damplipsProxy);
+    expect(video).toHaveAttribute("src", damplipsFile);
 
     fireEvent.error(video);
 
-    // The proxy is gone from the element and the visitor sees no error yet:
-    // the second destination is tried first.
+    // The direct file is gone from the element and the visitor sees no error
+    // yet: the proxy gets its turn.
     const retried = container.querySelector("video")!;
     expect(retried).not.toBe(video);
-    expect(retried).toHaveAttribute("src", damplipsFile);
+    expect(retried).toHaveAttribute("src", damplipsProxy);
+    expect(retried).not.toHaveAttribute("referrerpolicy");
     expect(screen.queryByRole("alert")).toBeNull();
 
     fireEvent.error(retried);
@@ -185,14 +199,14 @@ describe("video player", () => {
     expect(screen.getByRole("button", { name: "Retry playback" })).toBeInTheDocument();
   });
 
-  it("returns to the proxy first when the visitor retries", () => {
+  it("returns to the first destination when the visitor retries", () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
     fireEvent.error(container.querySelector("video")!);
     fireEvent.error(container.querySelector("video")!);
     fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
-    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
   });
 
   it("retries a source the element cannot decode as an HLS playlist", async () => {
@@ -229,14 +243,69 @@ describe("video player", () => {
     fireEvent.error(video);
 
     // Straight to the next destination, still with a src.
-    expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
   });
 
   it("offers exactly one destination for a non-damplips file", () => {
     expect(playbackCandidates("https://cdn.example.com/a.mp4")).toEqual([
       "https://cdn.example.com/a.mp4",
     ]);
-    expect(playbackCandidates(damplipsFile)).toEqual([damplipsProxy, damplipsFile]);
+    // A damplips file plays straight from its host, with the proxy behind it.
+    expect(playbackCandidates(damplipsFile)).toEqual([damplipsFile, damplipsProxy]);
+    // A playlist is a document: it has to be rewritten before a frame can play.
+    const playlist = "https://video.damplips.com/video7/717/79.m3u8";
+    expect(playbackCandidates(playlist)).toEqual([
+      `/api/videos/stream?src=${encodeURIComponent(playlist)}`,
+      playlist,
+    ]);
+    // A post page is HTML; only the proxy can turn it into media.
+    const post = "https://www.damplips.com/p/67284/";
+    expect(playbackCandidates(post)).toEqual([
+      `/api/videos/stream?src=${encodeURIComponent(post)}`,
+    ]);
+  });
+
+  it("gives up on a destination that never delivers a byte", () => {
+    // A host that accepts the connection and then says nothing fires no error:
+    // the element just waits. Without a deadline the visitor would sit on
+    // "Preparing video…" forever.
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Play video" }));
+      expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
+
+      act(() => {
+        vi.advanceTimersByTime(STALL_TIMEOUT_MS + 100);
+      });
+
+      expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps trying a destination that is actually buffering", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Play video" }));
+      const video = container.querySelector("video")!;
+      fireEvent.progress(video);
+
+      act(() => {
+        vi.advanceTimersByTime(STALL_TIMEOUT_MS + 100);
+      });
+
+      expect(container.querySelector("video")).toBe(video);
+      expect(video).toHaveAttribute("src", damplipsFile);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("streams an HLS playlist with the element itself when the browser can, so buffering starts at once", async () => {

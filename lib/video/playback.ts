@@ -5,7 +5,16 @@
  * post page itself serves (an mp4/HLS file or a player URL) plus the page it
  * came from. Uploaded providers are retired, so a row still pointing at one is
  * reported as unsupported rather than handed to an iframe.
+ *
+ * A **direct file** — what damplips publishes today, e.g.
+ * `https://video.damplips.com/video7/717/79.mp4` — is never "prepared": the
+ * browser streams it from the host exactly like damplips' own player does, and
+ * the same-origin proxy is only the fallback. Routing every file through the
+ * proxy first meant a server hop through Cloudflare before a single byte could
+ * reach the element, which is what left the player buffering.
  */
+
+import { isHlsUrl } from "./hls";
 
 export type PlaybackSource =
   | { kind: "direct" | "embed"; url: string }
@@ -49,8 +58,9 @@ export function isDamplipsPostPage(url: string): boolean {
 /**
  * Same-origin URL that streams a media destination through our route.
  *
- * damplips signs/referer-checks its media, so the browser asks our proxy and
- * the proxy asks damplips with the origin the file expects.
+ * Used when the browser cannot take the file itself: a damplips post page has
+ * to be resolved into its file, and a playlist has to be rewritten so its
+ * segments come back through this origin.
  */
 export function streamProxyUrl(url: string): string {
   return `/api/videos/stream?src=${encodeURIComponent(url)}`;
@@ -58,6 +68,33 @@ export function streamProxyUrl(url: string): string {
 
 /** Kept as the name the rest of the player and its tests use. */
 export const damplipsProxyUrl = streamProxyUrl;
+
+/** True for a URL produced by `streamProxyUrl` — i.e. served by this origin. */
+export function isStreamProxyUrl(url: string): boolean {
+  return url.startsWith("/api/videos/stream?");
+}
+
+/**
+ * Every destination worth trying for one catalog row, best first.
+ *
+ * The order is the whole point:
+ *
+ *  - a plain file is tried **directly first**. damplips serves its mp4s from a
+ *    public host, so the browser streams them the way damplips' own player
+ *    does; the proxy is the fallback for a host that rejects the request;
+ *  - a playlist goes through the proxy first, because its segment URIs have to
+ *    be rewritten to this origin (and hls.js needs them same-origin or CORS
+ *    friendly). The raw URL stays as a second attempt for Safari, which can
+ *    take a playlist natively;
+ *  - a post page is HTML: only the proxy can turn it into media.
+ */
+export function playbackCandidates(url: string): string[] {
+  if (!isDamplipsMediaUrl(url)) return [url];
+  const proxied = damplipsProxyUrl(url);
+  if (isDamplipsPostPage(url)) return [proxied];
+  if (isHlsUrl(url)) return [proxied, url];
+  return [url, proxied];
+}
 
 function safeUrl(raw: string | null | undefined, allowedProtocols: RegExp): URL | null {
   if (!raw) return null;

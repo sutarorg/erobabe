@@ -54,9 +54,12 @@ npm run import:damplips -- --categories=hardcore --dry-run      # resolve only
 The same job is available in the dashboard at **Admin → Videos → Sync from
 damplips** (one request per category, with per-category progress). It is
 idempotent: a post already in the catalog is skipped, so a category can be
-topped up by re-running it. Playback goes through `/api/videos/stream`, which
-only proxies damplips https URLs and adds the referer the files expect; HLS
-playlists play through `hls.js` where the browser has no native support.
+topped up by re-running it. A post's direct host file (for example
+`https://video.damplips.com/video7/717/79.mp4`) is played by the browser
+straight from that host — nothing is prepared — and `/api/videos/stream` is the
+fallback, plus the only path for a post page and for HLS playlists (whose
+segments have to be rewritten; `hls.js` plays them where the browser has no
+native support).
 
 Imported rows are written as published and public with `rights_status =
 'cleared'` so the category is immediately visible. Use `--rights=pending` (or

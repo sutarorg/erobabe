@@ -40,6 +40,56 @@ const MEDIA_REFERER = "https://www.damplips.com/";
 const USER_AGENT =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
+/**
+ * How long the media host may take to answer.
+ *
+ * Only the **headers** are on a clock: a 10-minute mp4 has to be allowed to
+ * stream for 10 minutes, so the timer is cleared the moment a response arrives.
+ * Without this, a host that accepts the connection and then never answers held
+ * the request — and therefore the player, on "Preparing video…" — until the
+ * function timed out. Override with `MEDIA_UPSTREAM_TIMEOUT_MS`.
+ */
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 12_000;
+
+function upstreamTimeoutMs(): number {
+  const configured = Number(process.env.MEDIA_UPSTREAM_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured < 1_000) return DEFAULT_UPSTREAM_TIMEOUT_MS;
+  return Math.min(configured, 120_000);
+}
+
+/**
+ * A media type for a file the host labelled generically.
+ *
+ * Every response from this app carries `X-Content-Type-Options: nosniff`, and a
+ * `<video>` element handed `application/octet-stream` is at the mercy of the
+ * browser's media sniffing. Naming the container makes playback predictable.
+ */
+const MEDIA_TYPES: Record<string, string> = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  ogv: "video/ogg",
+  ogg: "video/ogg",
+  ts: "video/mp2t",
+};
+
+const GENERIC_CONTENT_TYPES = new Set([
+  "application/octet-stream",
+  "binary/octet-stream",
+  "application/unknown",
+  "application/x-download",
+  "",
+]);
+
+function mediaTypeFor(url: URL, contentType: string | null): string | null {
+  const declared = (contentType || "").split(";")[0]?.trim().toLowerCase() || "";
+  if (!GENERIC_CONTENT_TYPES.has(declared)) return null;
+  const match = /\.([a-z0-9]+)$/i.exec(url.pathname);
+  if (!match) return null;
+  return MEDIA_TYPES[match[1].toLowerCase()] || null;
+}
+
 const PASS_THROUGH_HEADERS = [
   "content-type",
   "content-length",
@@ -150,14 +200,26 @@ const REJECTED = new Set([401, 403, 451]);
 async function requestUpstream(url: URL, base: Record<string, string>): Promise<Response | null> {
   let response: Response | null = null;
   for (const profile of HEADER_PROFILES) {
+    // A fresh controller per attempt: an aborted signal can never be reused,
+    // and the timer is cleared as soon as headers arrive so the body can stream
+    // for as long as the file needs.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), upstreamTimeoutMs());
+    if (typeof timer === "object" && "unref" in timer) timer.unref();
     try {
       response = await fetch(url, {
         headers: { ...base, ...profile },
         redirect: "manual",
         cache: "no-store",
+        signal: controller.signal,
       });
     } catch {
+      // A refused connection, a DNS failure and a host that never answered in
+      // time all mean the same thing: this destination is dead. Failing fast
+      // lets the player try its other destination instead of waiting.
       return null;
+    } finally {
+      clearTimeout(timer);
     }
     if (!REJECTED.has(response.status)) return response;
   }
@@ -318,7 +380,14 @@ async function proxy(req: NextRequest): Promise<Response> {
       const value = upstream.headers.get(name);
       if (value) responseHeaders.set(name, value);
     }
-    if (!responseHeaders.has("accept-ranges")) responseHeaders.set("accept-ranges", "bytes");
+    // Never claim range support the host did not give us: a browser that seeks
+    // against an honest `none` restarts cleanly, while a false `bytes` makes it
+    // re-request ranges the host answers with the whole file over and over.
+    if (!responseHeaders.has("accept-ranges") && upstream.status === 206) {
+      responseHeaders.set("accept-ranges", "bytes");
+    }
+    const mediaType = mediaTypeFor(upstreamUrl, responseHeaders.get("content-type"));
+    if (mediaType) responseHeaders.set("content-type", mediaType);
     responseHeaders.set("cache-control", MEDIA_CACHE_CONTROL);
 
     return new Response(req.method === "HEAD" ? null : upstream.body, {

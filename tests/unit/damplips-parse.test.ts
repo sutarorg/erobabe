@@ -122,6 +122,42 @@ describe("post page parsing", () => {
     });
   });
 
+  it("reads the media damplips actually publishes today", () => {
+    // The current post markup: a server-rendered video.js element whose
+    // `<source>` is a plain file on the media host — the URL an importer must
+    // store as `playable_url` so the browser can stream it directly.
+    const file = "https://video.damplips.com/video7/717/79.mp4";
+    const html = `<html><head><meta property="og:title" content="Paramedic could not stop"></head>
+      <body>
+        <div class="video-player">
+          <video id="player" class="video-js vjs-tech" poster="${POSTER}" preload="auto">
+            <source src="${file}" type="video/mp4">
+          </video>
+        </div>
+      </body></html>`;
+
+    expect(parseMedia(html, "https://www.damplips.com/p/67284/")).toEqual({
+      kind: "direct",
+      url: file,
+    });
+    expect(parseVideoPage(html, "https://www.damplips.com/p/67284/")?.media).toEqual({
+      kind: "direct",
+      url: file,
+    });
+  });
+
+  it("reads a media URL a player wrote with escaped slashes", () => {
+    // Players configured from JavaScript publish `https:\/\/…`; without
+    // unescaping, those posts import as "no media".
+    const html = `<html><head><meta property="og:title" content="A JavaScript player"></head>
+      <body><script>
+        jwplayer("v").setup({ file: "https:\/\/video.damplips.com\/video7\/717\/80.mp4" });
+      </script></body></html>`;
+    expect(parseMedia(html, "https://www.damplips.com/p/67285/")?.url).toBe(
+      "https://video.damplips.com/video7/717/80.mp4",
+    );
+  });
+
   it("accepts a damplips embed page when the post frames its own player", () => {
     const html = `<meta property="og:title" content="A framed damplips player">
       <iframe src="https://www.damplips.com/embed/67284/"></iframe>`;
