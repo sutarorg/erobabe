@@ -77,7 +77,18 @@ npm run import:damplips -- --categories=all --rights=pending
 
 # keep a machine-readable report of the run
 npm run import:damplips -- --categories=all --json=.cache/import-report.json
+
+# re-resolve rows that are not storing a direct media file
+npm run import:damplips -- --repair --dry-run   # report only
+npm run import:damplips -- --repair             # write playable_url
 ```
+
+`--repair` walks the catalog and, for every row whose `playable_url` is not a
+media file (a post page, or a `/api/videos/stream` address an older run wrote),
+re-reads the post page and stores the file it publishes — setting `embed_url` to
+null. Rows that already hold a direct file are counted as healthy and **never
+re-fetched**. Exit code `2` means at least one row could not be resolved
+(the post no longer publishes a file).
 
 Environment: `NEXT_PUBLIC_SUPABASE_URL` plus `SUPABASE_SERVICE_ROLE_KEY` (or
 `SUPABASE_SECRET_KEY`). `DAMPLIPS_BASE_URL` may point at a mirror.
@@ -140,14 +151,25 @@ and a player:
 
 A damplips file is requested with `referrerPolicy="no-referrer"`: hotlink
 protection on these hosts rejects a **foreign** referer but allows a request
-with none, which is why the poster already loads from the same host.
+with none, which is why the poster already loads from the same host. The media
+host itself is CDN-cached, sends `Content-Type: video/mp4`,
+`Accept-Ranges: bytes` and `Access-Control-Allow-Origin: *`, so nothing about a
+direct file needs a server in between.
 
-The player also has a deadline. A host that accepts the connection and then says
-nothing fires no media `error` event at all — the element just waits — so once
-playback has been asked for, a destination that has delivered no byte, no
-metadata and no duration within `STALL_TIMEOUT_MS` (8 s) is abandoned for the
-next one, and the visitor sees a real error with a retry button instead of an
-endless "Preparing video…".
+**A file is never "prepared".** The "Preparing video…" line is rendered only for
+a destination that genuinely has to be built first — a playlist manifest, or a
+post page the proxy must resolve (`needsPreparation()`). Over a direct mp4 there
+is no overlay at all: the element buffers and paints the first frame itself,
+exactly as damplips' own player does. This is why the watch page opens on the
+poster and starts on the first click instead of showing a preparation screen.
+
+The player still has a safety deadline, but it is not a loading screen. A host
+that accepts the connection and then says nothing fires no media `error` event
+at all — the element just waits — so once playback has been asked for, an
+attempt that has delivered **nothing whatsoever** within `STALL_TIMEOUT_MS`
+(12 s) is abandoned for the next destination. An attempt that has any metadata or
+bytes is left alone: a 100+ MB file on a slow line is downloading, not stuck, and
+cutting it over to the proxy would make it slower.
 
 `/api/videos/stream?src=…` is the proxy behind those destinations, and it:
 

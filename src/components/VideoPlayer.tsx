@@ -23,6 +23,18 @@ import { ALGORITHM_VERSION } from "@/lib/recommendations/ranking";
  */
 export { playbackCandidates };
 
+/**
+ * Is this catalog destination something that has to be built before it can
+ * play — a playlist, or a post page the proxy must resolve?
+ *
+ * A direct file answers `false`, which is the whole point: `…/video7/717/79.mp4`
+ * is streamed by the element itself, so nothing may be shown over it that
+ * suggests it is being "prepared".
+ */
+export function needsPreparation(url: string): boolean {
+  return isDamplipsPostPage(url) || isHlsUrl(url);
+}
+
 type Props = {
   id: string;
   title: string;
@@ -95,13 +107,27 @@ function referrerPolicyForCandidate(url: string, index: number): Record<string, 
  * on to the next one.
  *
  * A media element that is waiting on a request which never answers fires no
- * error: it just sits in `waiting` and the overlay says "Preparing video…"
- * forever. That is the state this deadline removes — if no byte, no metadata
- * and no duration has arrived within this window, the next destination is tried
- * (and, once every destination is spent, the visitor gets a real error instead
- * of an endless spinner).
+ * error: it just sits in `waiting` for ever. That is the state this deadline
+ * removes — if no byte, no metadata and no duration has arrived within this
+ * window, the next destination is tried (and, once every destination is spent,
+ * the visitor gets a real error with a retry button).
+ *
+ * Deliberately generous: a 100+ MB file on a slow line is *downloading*, not
+ * stuck, and cutting it over to the proxy would make it slower, not faster.
  */
-export const STALL_TIMEOUT_MS = 8_000;
+export const STALL_TIMEOUT_MS = 12_000;
+
+/**
+ * True when a destination is a document that has to be turned into video before
+ * a single frame can exist.
+ *
+ * A playlist is a manifest whose segments still have to be fetched, and a
+ * damplips post page is HTML that the proxy has to resolve into a file. Those
+ * take a moment, and saying so is honest. A **file** — the direct host URL, e.g.
+ * `https://video.damplips.com/video7/717/79.mp4` — is none of that: the element
+ * streams it exactly as damplips' own player does, so showing a "Preparing
+ * video…" screen over it is simply wrong (and is what this component used to
+ * do).
 
 /**
  * The native media element, with HLS support.
@@ -115,6 +141,7 @@ export const STALL_TIMEOUT_MS = 8_000;
 function NativePlayer({
   urls,
   isHls,
+  prepares,
   title,
   poster,
   onTrack,
@@ -122,6 +149,8 @@ function NativePlayer({
   urls: string[];
   /** Derived from the catalog URL, not from the proxy URL it is played through. */
   isHls: boolean;
+  /** Does this catalog destination still have to be turned into media? */
+  prepares: boolean;
   title: string;
   poster?: string | null;
   onTrack: (type: PlaybackEvent) => void;
@@ -184,21 +213,27 @@ function NativePlayer({
   }, [isHls, onTrack, source, triedAlternative, urls.length]);
 
   /**
-   * The spinner has a deadline.
+   * The fallback has a deadline.
    *
    * Nothing guarantees a media element will ever tell us that a request went
    * nowhere: a host that accepts the connection and never answers produces no
-   * `error` event, only `waiting`, so the visitor is left on "Preparing
-   * video…" indefinitely. Once playback has been asked for, an attempt that has
-   * produced no data at all within `STALL_TIMEOUT_MS` is abandoned for the next
-   * destination — and when there is no next destination the visitor is shown a
-   * real error with a retry button instead of an endless spinner.
+   * `error` event, only `waiting`. Once playback has been asked for, an attempt
+   * that has produced nothing at all within `STALL_TIMEOUT_MS` is abandoned for
+   * the next destination — and when there is no next destination the visitor is
+   * shown a real error with a retry button.
+   *
+   * This is **not** a loading screen: a file that is downloading stays exactly
+   * where it is (see the `readyState` guard), and no "Preparing video…" text is
+   * rendered over a plain file in the first place.
    */
   useEffect(() => {
     dataSeen.current = false;
     if (!started || failed) return;
     const timer = setTimeout(() => {
       if (dataSeen.current) return;
+      // `readyState >= HAVE_METADATA` means the element has the file's
+      // information and is genuinely buffering it: leave it alone.
+      if ((videoRef.current?.readyState ?? 0) >= 1) return;
       handleFailure(false);
     }, STALL_TIMEOUT_MS);
     return () => clearTimeout(timer);
@@ -413,7 +448,7 @@ function NativePlayer({
         </button>
       )}
 
-      {started && waiting && !failed && (
+      {prepares && started && waiting && !failed && (
         <p
           role="status"
           className="pointer-events-none absolute inset-x-0 bottom-14 flex items-center justify-center gap-2 text-[12px] font-medium text-white/90"
@@ -455,6 +490,7 @@ export default function VideoPlayer(props: Props) {
           key={key}
           urls={playbackCandidates(source.url)}
           isHls={isHlsUrl(source.url)}
+          prepares={needsPreparation(source.url)}
           title={props.title}
           poster={props.poster}
           onTrack={onTrack}

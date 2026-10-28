@@ -56,10 +56,14 @@ damplips** (one request per category, with per-category progress). It is
 idempotent: a post already in the catalog is skipped, so a category can be
 topped up by re-running it. A post's direct host file (for example
 `https://video.damplips.com/video7/717/79.mp4`) is played by the browser
-straight from that host — nothing is prepared — and `/api/videos/stream` is the
-fallback, plus the only path for a post page and for HLS playlists (whose
-segments have to be rewritten; `hls.js` plays them where the browser has no
-native support).
+straight from that host — nothing is prepared, and no "Preparing video…" overlay
+is ever drawn over a file — and `/api/videos/stream` is the fallback, plus the
+only path for a post page and for HLS playlists (whose segments have to be
+rewritten; `hls.js` plays them where the browser has no native support).
+
+`npm run import:damplips -- --repair` re-resolves any row that is not already
+storing a direct media file (an older post-page or proxy URL) and writes the
+file the post publishes; healthy rows are never re-fetched.
 
 Imported rows are written as published and public with `rights_status =
 'cleared'` so the category is immediately visible. Use `--rights=pending` (or
