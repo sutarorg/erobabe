@@ -1,6 +1,7 @@
 import { DAMPLIPS_BASE_URL, damplipsSlug, parseListing, parseVideoPage } from "./parse";
 import { categorySource, sourcePlan } from "./categories";
 import type { FetchDamplipsPage } from "./client";
+import { fetchHostMediaUrl, type FetchHostMedia } from "./host-media";
 
 /**
  * Fills the erobabe catalog from damplips.com.
@@ -52,6 +53,11 @@ export type ImportDeps = {
   service: ImportService;
   /** erobabe category id, resolved by the caller from the fixed taxonomy. */
   categoryId: string;
+  /**
+   * Hits the media host so the stored URL is already the file a browser can
+   * play. Defaults to a range-request against the parsed file.
+   */
+  fetchHostMedia?: FetchHostMedia;
   /** Post ids used by this run, shared across categories. */
   claimed?: Set<string>;
   logger?: ImportLogger;
@@ -134,6 +140,7 @@ export async function importCategory(
   const log = deps.logger ?? (() => {});
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? (() => new Date());
+  const fetchHostMedia = deps.fetchHostMedia ?? fetchHostMediaUrl;
   const claimed = deps.claimed ?? new Set<string>();
   const baseUrl = (options.baseUrl || DAMPLIPS_BASE_URL).replace(/\/$/, "");
   const target = clampTarget(options.perCategory);
@@ -279,7 +286,13 @@ export async function importCategory(
     // immediately. HLS and post pages would push that work onto the visitor.
     if (!detail.media || detail.media.kind !== "direct") return "missingMedia";
 
-    return saveCard({ detail, thumbnailUrl });
+    const hostUrl = await fetchHostMedia(detail.media.url);
+    if (!hostUrl) return "missingMedia";
+
+    return saveCard({
+      detail: { ...detail, media: { kind: "direct", url: hostUrl } },
+      thumbnailUrl,
+    });
   }
 
   function tally(outcomes: Outcome[], sourceReport: ImportSourceReport): void {
@@ -419,6 +432,7 @@ export async function importCatalog(
   deps: {
     fetchPage: FetchDamplipsPage;
     service: ImportService;
+    fetchHostMedia?: FetchHostMedia;
     logger?: ImportLogger;
     now?: () => Date;
     sleep?: (ms: number) => Promise<void>;
@@ -444,6 +458,7 @@ export async function importCatalog(
         {
           fetchPage: deps.fetchPage,
           service: deps.service,
+          fetchHostMedia: deps.fetchHostMedia,
           categoryId: category.id,
           claimed,
           logger: deps.logger,

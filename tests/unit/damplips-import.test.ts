@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_VIDEOS_PER_CATEGORY,
   MIN_VIDEOS_PER_CATEGORY,
@@ -149,6 +149,18 @@ const CATEGORY_ID = "cat-hardcore";
 const NOW = () => new Date("2026-10-27T00:00:00.000Z");
 
 describe("damplips importer", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response("ftyp", { status: 206, headers: { "content-type": "video/mp4" } }),
+      ),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("imports the requested number of videos with title, poster and media", async () => {
     const service = fakeService();
     const { fetchPage } = fakeFetch({ ids: [1, 2, 3, 4, 5, 6], perPage: 4 });

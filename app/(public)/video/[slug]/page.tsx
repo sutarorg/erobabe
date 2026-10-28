@@ -405,6 +405,15 @@ export default async function VideoPage({
       {posterOrigin && <link rel="preconnect" href={posterOrigin} />}
       {posterOrigin && <link rel="dns-prefetch" href={posterOrigin} />}
       {mediaOrigin && <link rel="preconnect" href={mediaOrigin} />}
+      {firstCandidate && !isStreamProxyUrl(firstCandidate) && (
+        <link
+          rel="preload"
+          as="video"
+          href={firstCandidate}
+          fetchPriority="high"
+          {...{ referrerPolicy: "no-referrer" }}
+        />
+      )}
       {embedOrigin && <link rel="preconnect" href={embedOrigin} />}
       {showsPoster && video.thumbnail_url && (
         <link
