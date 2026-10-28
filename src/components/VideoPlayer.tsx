@@ -235,6 +235,14 @@ function NativePlayer({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const recoveries = useRef(0);
   const startedRef = useRef(false);
+  /** The blob URL this player created, so it can be released. */
+  const localRef = useRef<string | null>(null);
+  useEffect(
+    () => () => {
+      if (localRef.current) URL.revokeObjectURL(localRef.current);
+    },
+    [],
+  );
   /** Has this attempt produced anything at all — a byte, metadata, a frame? */
   const dataSeen = useRef(false);
   const [source, setSource] = useState(0);
@@ -244,6 +252,16 @@ function NativePlayer({
   const [started, setStarted] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [failed, setFailed] = useState(false);
+  /**
+   * A damplips file asked for as a `no-cors` media request can be refused while
+   * the same file requested in CORS mode is allowed — the host publishes
+   * `Access-Control-Allow-Origin: *`. `crossOrigin` turns the element's request
+   * into that second kind, so it is a real second attempt, not a cosmetic one.
+   */
+  const [corsMode, setCorsMode] = useState(false);
+  /** A copy the browser fetched itself, when the element's own request is refused. */
+  const [localUrl, setLocalUrl] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
   /** What actually went wrong, for the "Technical details" block. */
   const [diagnosis, setDiagnosis] = useState<{
     error: string | null;
@@ -258,13 +276,61 @@ function NativePlayer({
   }, [started]);
 
   const url = urls[Math.min(source, urls.length - 1)];
+  /** The direct host file, if this row has one — never a proxied URL. */
+  const directUrl = urls.length > 0 && !isStreamProxyUrl(urls[0]) ? urls[0] : null;
+
   /**
-   * The destination that can be loaded as a *document* when the element fails.
-   * A proxied URL is our own route and has nothing to show in a frame; a direct
-   * host file is exactly what the frame is for.
+   * Fetch the file with the browser and hand the element its own copy.
+   *
+   * When the host refuses the element's `no-cors` media request, the page can
+   * still be allowed to *read* the bytes (`Access-Control-Allow-Origin: *`).
+   * A blob URL has no origin and no headers to refuse, so the element plays it.
+   *
+   * The file is only fetched when the host says it is a video: a block page, a
+   * 403 or a dead link is not worth 120 MB of the visitor's bandwidth, and the
+   * answer is reported in the panel instead.
    */
-  const frameUrl =
-    urls.length > 1 && isDamplipsMediaUrl(urls[0]) ? urls[0] : null;
+  const loadOwnCopy = useCallback(async () => {
+    const direct = directUrl;
+    if (!direct || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
+      setFailed(true);
+      onTrack("playback_error");
+      return;
+    }
+    setFetching(true);
+    setWaiting(false);
+    try {
+      const answer = await probeDirectSource(direct, PROBE_TIMEOUT_MS * 4);
+      setDiagnosis((current) => ({ ...current, direct: answer }));
+      const type = answer?.contentType ?? "";
+      if (!answer || !answer.status || answer.status >= 400 || !type.startsWith("video/")) {
+        setFailed(true);
+        onTrack("playback_error");
+        return;
+      }
+      const response = await fetch(direct, {
+        mode: "cors",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        setFailed(true);
+        onTrack("playback_error");
+        return;
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      localRef.current = objectUrl;
+      setLocalUrl(objectUrl);
+      setAttempt((value) => value + 1);
+    } catch {
+      setFailed(true);
+      onTrack("playback_error");
+    } finally {
+      setFetching(false);
+    }
+  }, [directUrl, onTrack]);
 
   /**
    * A source that fails is retried in the other strategy, then replaced by the
@@ -290,25 +356,36 @@ function NativePlayer({
       return;
     }
 
+    // The same file, requested in CORS mode. Cheap, and it is the difference
+    // between "the host refuses media requests from other sites" and "the host
+    // refuses this visitor".
+    if (!corsMode && !isStreamProxyUrl(url) && isDamplipsMediaUrl(url)) {
+      setCorsMode(true);
+      setAttempt((value) => value + 1);
+      return;
+    }
+
     if (source < urls.length - 1) {
       setTriedAlternative(false);
+      setCorsMode(false);
       setStrategy(isHls ? "hls" : "native");
       setSource((value) => value + 1);
       setAttempt((value) => value + 1);
       return;
     }
 
+    // Last resort: if this browser can *read* the file — even though the
+    // element cannot take it — fetch it and play the browser's own copy. That
+    // is the only path that works when the host refuses media requests but
+    // allows CORS ones.
+    if (directUrl && !localUrl && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+      void loadOwnCopy();
+      return;
+    }
+
     setFailed(true);
     onTrack("playback_error");
-    // Ask the browser once what the direct file actually returns, so the panel
-    // can say "403 text/html" instead of "could not be loaded".
-    const direct = urls[0];
-    if (direct && !isStreamProxyUrl(direct)) {
-      void probeDirectSource(direct).then((answer) =>
-        setDiagnosis((current) => ({ ...current, direct: answer })),
-      );
-    }
-  }, [isHls, onTrack, source, triedAlternative, urls]);
+  }, [corsMode, directUrl, isHls, localUrl, onTrack, source, triedAlternative, urls, loadOwnCopy]);
 
   /**
    * Ask the media host whether it is reachable at all, and if it is not, move
@@ -481,6 +558,13 @@ function NativePlayer({
 
   const retry = () => {
     recoveries.current = 0;
+    setCorsMode(false);
+    setFetching(false);
+    setLocalUrl(null);
+    if (localRef.current) {
+      URL.revokeObjectURL(localRef.current);
+      localRef.current = null;
+    }
     setFailed(false);
     setStarted(false);
     setWaiting(false);
@@ -495,9 +579,12 @@ function NativePlayer({
       className="relative h-full w-full"
     >
       <video
-        key={`${url}:${strategy}:${attempt}`}
+        key={`${url}:${strategy}:${attempt}:${corsMode ? "cors" : "media"}`}
         ref={videoRef}
-        src={strategy === "native" ? url : undefined}
+        src={strategy === "native" ? (localUrl ?? url) : undefined}
+        // A blob has no origin to check; a host file may only be readable in
+        // CORS mode, which is exactly what this second attempt asks for.
+        crossOrigin={corsMode ? "anonymous" : undefined}
         // A direct file is fetched from its host, where hotlink protection
         // usually rejects a foreign referer but allows a request without one.
         {...referrerPolicyForCandidate(url, source)}
@@ -601,50 +688,31 @@ function NativePlayer({
       )}
 
       {/*
-        A media element cannot pass a browser check — it has no JavaScript and
-        no document. A frame can. When everything in the element has failed but
-        the host publishes the file at a URL this page may frame, the file is
-        loaded *as a document* instead: the check runs in the frame, and the
-        browser's own player takes over. This is what makes a challenged host's
-        video playable at all.
+        Fetching the browser's own copy: this is a real download, so it is
+        stated rather than disguised. It only starts when the host has already
+        said the URL is a video.
       */}
-      {failed && frameUrl && (
-        <div className="absolute inset-0 flex flex-col bg-black">
-          <iframe
-            src={frameUrl}
-            title={title}
-            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-            referrerPolicy="no-referrer"
-            className="h-full w-full border-0 bg-black"
-          />
-          <div className="flex flex-wrap items-center justify-between gap-2 bg-black/95 px-3 py-2 text-[11px] text-white/80">
-            <span role="status">
-              Playing the host&apos;s own file. If a browser check appears, complete it.
-            </span>
-            <span className="flex items-center gap-3">
-              <button type="button" onClick={retry} className="inline-flex items-center gap-1 underline">
-                <RotateCcw className="h-3 w-3" aria-hidden />
-                Retry in player
-              </button>
-              <a
-                href={frameUrl}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="inline-flex items-center gap-1 underline"
-              >
-                <ExternalLink className="h-3 w-3" aria-hidden />
-                Open
-              </a>
-            </span>
-          </div>
+      {fetching && !failed && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-center text-sm text-white">
+          <p role="status" className="flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            Fetching this video from the host…
+          </p>
         </div>
       )}
 
-      {failed && !frameUrl && (
+      {failed && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-center text-sm text-white">
           <p role="alert">
-            The video could not be loaded. The source may be unavailable or
-            unsupported by your browser.
+            {diagnosis.direct && !diagnosis.direct.contentType?.startsWith("video/") ? (
+              <>
+                This video could not be loaded: the host answered with{" "}
+                <span className="font-mono">{diagnosis.direct.contentType || "no content type"}</span>{" "}
+                instead of a video.
+              </>
+            ) : (
+              <>The video could not be loaded. The source may be unavailable or unsupported by your browser.</>
+            )}
           </p>
           <div className="flex flex-wrap items-center justify-center gap-2">
             <button
@@ -661,9 +729,9 @@ function NativePlayer({
               navigation can. Opening the destination is the one action that
               turns "blocked" into "plays", so it is offered next to Retry.
             */}
-            {urls.length > 1 ? (
+            {directUrl ? (
               <a
-                href={urls[0]}
+                href={directUrl}
                 target="_blank"
                 rel="noreferrer noopener"
                 className="inline-flex items-center gap-2 rounded-lg border border-white/25 px-4 py-2 font-medium text-white/90 hover:bg-white/10"
@@ -673,6 +741,13 @@ function NativePlayer({
               </a>
             ) : null}
           </div>
+          {directUrl ? (
+            <p className="max-w-[420px] text-[11px] leading-relaxed text-white/60">
+              If the link shows a browser check, complete it there and then press{" "}
+              <span className="text-white/80">Retry playback</span> — the check also
+              unblocks this player.
+            </p>
+          ) : null}
           {/*
             A player that says only "could not be loaded" cannot be fixed from a
             screenshot. These details name the destination that was tried and
