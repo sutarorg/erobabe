@@ -123,9 +123,10 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
             its search bar, e.g. “amateur”) and stores unique posts only.
             Duplicates and rows already in the catalog are skipped. The number
             is how many new videos to add this run; run again until search
-            results are exhausted. {short > 0}
+            results are exhausted.{" "}
+            {short > 0
               ? `${counts.reduce((sum, entry) => sum + entry.count, 0)} unique videos in the catalog.`
-              : `Catalog already has videos in every selected category.`}
+              : "Catalog already has videos in every selected category."}
           </p>
         </div>
         <label className="flex items-center gap-2 text-[11.5px]">
