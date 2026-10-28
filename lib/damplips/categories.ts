@@ -22,8 +22,8 @@ export type DamplipsCategorySource = {
 export const DAMPLIPS_CATEGORY_SOURCES: DamplipsCategorySource[] = [
   {
     slug: "amateur",
-    categorySlugs: ["amateur-porn", "amateur"],
-    searchTerms: ["amateur", "homemade"],
+    categorySlugs: ["amateur-porn", "amateur", "amateur-sex", "homemade"],
+    searchTerms: ["amateur", "homemade", "amateur porn"],
   },
   {
     slug: "lesbian",

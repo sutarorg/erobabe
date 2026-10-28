@@ -67,7 +67,17 @@ const MEDIA_EXTENSION = /\.(mp4|m4v|webm|m3u8)(?:[?#]|$)/i;
  * request time; those are prepared at import instead, or skipped.
  */
 export function isReadyMediaFile(url: string): boolean {
-  return FILE_EXTENSION.test(url);
+  if (FILE_EXTENSION.test(url)) return true;
+  try {
+    const parsed = new URL(url);
+    if (parsed.username || parsed.password) return false;
+    const host = parsed.hostname.toLowerCase();
+    if (!host.endsWith("damplips.com")) return false;
+    if (/\.m3u8(?:[?#]|$)/i.test(parsed.pathname)) return false;
+    return /\/videos?\//i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 const NAMED_ENTITIES: Record<string, string> = {

@@ -286,11 +286,13 @@ export async function importCategory(
     // immediately. HLS and post pages would push that work onto the visitor.
     if (!detail.media || detail.media.kind !== "direct") return "missingMedia";
 
+    // Prefer the URL the host actually answers, but never drop a parsed file
+    // because a datacenter fetch was blocked — that is what left amateur at 0.
     const hostUrl = await fetchHostMedia(detail.media.url);
-    if (!hostUrl) return "missingMedia";
+    const mediaUrl = hostUrl || detail.media.url;
 
     return saveCard({
-      detail: { ...detail, media: { kind: "direct", url: hostUrl } },
+      detail: { ...detail, media: { kind: "direct", url: mediaUrl } },
       thumbnailUrl,
     });
   }

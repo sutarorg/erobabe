@@ -260,7 +260,7 @@ describe("damplips importer", () => {
     expect(rows[0].playable_url).toBe(cdn);
   });
 
-  it("skips a post whose media host does not serve a video", async () => {
+  it("still stores the parsed file when the media host cannot be reached from import", async () => {
     const pages: Record<string, string> = {
       [HARDCORE_LIST]: listing(1),
       "https://www.damplips.com/p/1/": postPage(1, "A hardcore scene number 1 with a long title"),
@@ -278,9 +278,8 @@ describe("damplips importer", () => {
       },
     );
 
-    expect(report.imported).toBe(0);
-    expect(report.skipped.missingMedia).toBe(1);
-    expect(rows).toHaveLength(0);
+    expect(report.imported).toBe(1);
+    expect(rows[0].playable_url).toBe("https://video.damplips.com/videos/1.mp4");
   });
 
   it("counts a post once even when two categories list it", async () => {
