@@ -275,7 +275,9 @@ export async function importCategory(
 
     const thumbnailUrl = detail.thumbnailUrl || card.thumbnailUrl;
     if (!thumbnailUrl) return "missingThumbnail";
-    if (!detail.media) return "missingMedia";
+    // A row is only worth importing when the watch page can stream a file
+    // immediately. HLS and post pages would push that work onto the visitor.
+    if (!detail.media || detail.media.kind !== "direct") return "missingMedia";
 
     return saveCard({ detail, thumbnailUrl });
   }

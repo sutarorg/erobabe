@@ -8,12 +8,10 @@ import { getPublicCategories, type PublicVideo } from "@/lib/public/catalog";
 import ViewTracker from "@/src/components/ViewTracker";
 import { createClient } from "@/lib/supabase/server";
 import {
-  isDamplipsPostPage,
   isStreamProxyUrl,
   playbackCandidates,
   selectPlaybackSource,
 } from "@/lib/video/playback";
-import { resolvePageMedia, resolveWithin } from "@/lib/video/page-media";
 import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
 import { SHELF_VIDEO_LIMIT } from "@/lib/public/shelf";
 import VideoActions from "@/src/components/VideoActions";
@@ -112,16 +110,6 @@ type WatchVideo = {
   category_id: string | null;
   category: { label: string | null; slug: string | null } | null;
 };
-
-/**
- * How long the watch page will wait for a post page to name its file.
- *
- * The resolution is cached for half an hour, so paying ~100 ms here is worth it
- * (the browser starts fetching bytes immediately). But a slow damplips response
- * must never delay the whole document: after this budget the page renders with
- * the page URL and the stream proxy resolves it on the first byte request.
- */
-const PAGE_RESOLVE_BUDGET_MS = 1_200;
 
 /**
  * The video row, fetched once per request.
@@ -357,20 +345,7 @@ export default async function VideoPage({
     }
   })();
   const showsPoster = playbackSource.kind !== "embed";
-
-  /**
-   * Some rows stored the damplips *post page* as their playable URL. Resolving
-   * it here — once, cached in-process for half an hour — means the server-
-   * rendered `<video src>` is already the media file, so the browser starts
-   * fetching bytes while it is still parsing HTML instead of first discovering
-   * the file through an ad-laden page. If resolution fails, the unchanged page
-   * URL is passed on and the stream proxy resolves it as a fallback.
-   */
-  const resolvedFile =
-    playbackSource.kind === "direct" && isDamplipsPostPage(playbackSource.url)
-      ? await resolveWithin(resolvePageMedia(playbackSource.url), PAGE_RESOLVE_BUDGET_MS)
-      : null;
-  const playableUrl = resolvedFile ?? video.playable_url;
+  const playableUrl = video.playable_url;
 
   // The poster is loaded straight from the media host while the document
   // parses; warming that connection is what makes the first paint instant.
@@ -397,7 +372,7 @@ export default async function VideoPage({
       : undefined,
     // Search engines want the file, not the third-party page it came from.
     contentUrl:
-      playbackSource.kind === "direct" ? (resolvedFile ?? playbackSource.url) : undefined,
+      playbackSource.kind === "direct" ? playbackSource.url : undefined,
     embedUrl: playbackSource.kind === "embed" ? playbackSource.url : undefined,
     publisher: {
       "@type": "Organization",
