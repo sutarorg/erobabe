@@ -248,6 +248,25 @@ export function parseNextPageUrl(html: string, pageUrl = DAMPLIPS_BASE_URL): str
   return null;
 }
 
+/**
+ * Next page of a damplips search listing when the HTML has no `rel=next`.
+ *
+ * WordPress serves `/?s=amateur` then `/?s=amateur&paged=2`. The importer
+ * stops as soon as a page has no new cards.
+ */
+export function advanceSearchPage(pageUrl: string): string | null {
+  try {
+    const url = new URL(pageUrl);
+    if (!url.searchParams.has("s")) return null;
+    const current = Number(url.searchParams.get("paged") || "1");
+    if (!Number.isFinite(current) || current < 1) return null;
+    url.searchParams.set("paged", String(Math.floor(current) + 1));
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 /** `PT12M34S`, `00:12:34`, `754` → seconds. */
 export function parseDuration(value: unknown): number | null {
   if (value == null) return null;

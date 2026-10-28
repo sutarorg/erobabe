@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sourcePlan } from "@/lib/damplips/categories";
 import {
   DEFAULT_VIDEOS_PER_CATEGORY,
   MAX_VIDEOS_PER_CATEGORY,
@@ -97,7 +98,8 @@ function fixtureSite(pages: Record<string, string>): FetchDamplipsPage {
   });
 }
 
-const HARDCORE_LIST = "https://www.damplips.com/c/hardcore/";
+const HARDCORE_LIST = "https://www.damplips.com/?s=hardcore";
+const LESBIAN_LIST = "https://www.damplips.com/?s=lesbian";
 
 function listing(count: number, from = 1) {
   return Array.from({ length: count }, (_, index) =>
@@ -106,6 +108,11 @@ function listing(count: number, from = 1) {
 }
 
 describe("damplips importer", () => {
+  it("looks up each erobabe category through damplips search", () => {
+    expect(sourcePlan("amateur")[0]).toBe("https://www.damplips.com/?s=amateur");
+    expect(sourcePlan("hardcore")).toEqual(["https://www.damplips.com/?s=hardcore"]);
+  });
+
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",
@@ -184,8 +191,8 @@ describe("damplips importer", () => {
 
   it("pages through the listing until the quota is met", async () => {
     const pages: Record<string, string> = {
-      [HARDCORE_LIST]: `${listing(4, 1)}<a class="next" href="${HARDCORE_LIST}page/2/">Next</a>`,
-      [`${HARDCORE_LIST}page/2/`]: listing(4, 5),
+      [HARDCORE_LIST]: `${listing(4, 1)}<a class="next" href="${HARDCORE_LIST}&paged=2">Next</a>`,
+      [`${HARDCORE_LIST}&paged=2`]: listing(4, 5),
     };
     for (let id = 1; id <= 8; id += 1) {
       pages[`https://www.damplips.com/p/${id}/`] = postPage(id, `A hardcore scene number ${id} with a long title`);
@@ -283,7 +290,7 @@ describe("damplips importer", () => {
   it("counts a post once even when two categories list it", async () => {
     const pages: Record<string, string> = {
       [HARDCORE_LIST]: listing(2),
-      "https://www.damplips.com/c/lesbian/": listing(2),
+      [LESBIAN_LIST]: listing(2),
       "https://www.damplips.com/p/1/": postPage(1, "A hardcore scene number 1 with a long title"),
       "https://www.damplips.com/p/2/": postPage(2, "A hardcore scene number 2 with a long title"),
     };

@@ -3,12 +3,10 @@ import { DAMPLIPS_BASE_URL } from "./parse";
 /**
  * How each fixed erobabe category is sourced from damplips.
  *
- * `categorySlugs` are damplips taxonomy slugs (their `/c/<slug>/` pages), given
- * in preference order. `searchTerms` are the fallback: when none of the
- * taxonomy slugs exists (or a slug exists but has fewer posts than we need),
- * the importer pages through damplips search results instead. Nothing here is
- * assumed to exist — the importer verifies every source against live HTML and
- * reports categories that could not be filled.
+ * The operator types the same words into damplips' search bar (`/?s=amateur`
+ * for Amateur). `searchTerms` are those queries, most specific first. Taxonomy
+ * `/c/<slug>/` paths are kept only as a documented mapping — the importer
+ * pages search results so a renamed category page cannot starve a run.
  */
 export type DamplipsCategorySource = {
   /** erobabe fixed category slug */
@@ -86,12 +84,15 @@ export function categorySource(slug: string): DamplipsCategorySource | null {
   return DAMPLIPS_CATEGORY_SOURCES.find((entry) => entry.slug === slug) ?? null;
 }
 
+/** damplips search-bar URL for one query (`/?s=amateur`). */
+export function searchUrl(term: string, baseUrl: string = DAMPLIPS_BASE_URL): string {
+  const base = baseUrl.replace(/\/$/, "");
+  return `${base}/?s=${encodeURIComponent(term)}`;
+}
+
 /**
- * Ordered list of URLs to try for one category, most specific first.
- *
- * Taxonomy pages are preferred because their listings are dense and stable;
- * the search pages are appended as a top-up so a category never silently
- * under-delivers just because damplips renamed a slug.
+ * Ordered search URLs for one erobabe category — the same queries a visitor
+ * would type into damplips' search bar, most specific first.
  */
 export function sourcePlan(
   slug: string,
@@ -99,16 +100,12 @@ export function sourcePlan(
 ): string[] {
   const entry = categorySource(slug);
   if (!entry) return [];
-  const base = baseUrl.replace(/\/$/, "");
-  return [
-    ...entry.categorySlugs.map((candidate) => `${base}/c/${candidate}/`),
-    ...entry.searchTerms.map((term) => `${base}/?s=${encodeURIComponent(term)}`),
-  ];
+  return entry.searchTerms.map((term) => searchUrl(term, baseUrl));
 }
 
-/** damplips taxonomy slug → erobabe category slug, for admin reporting. */
+/** damplips search queries used for this erobabe category. */
 export function describeSources(slug: string): string {
   const entry = categorySource(slug);
   if (!entry) return "no source";
-  return [...entry.categorySlugs.map((value) => `/c/${value}/`), ...entry.searchTerms.map((value) => `search "${value}"`)].join(", ");
+  return entry.searchTerms.map((value) => `search "${value}"`).join(", ");
 }

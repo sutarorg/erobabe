@@ -119,10 +119,11 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
             Sync from damplips
           </h2>
           <p className="mt-0.5 max-w-[720px] text-[11.5px] text-ink-3">
-            Reads damplips.com and stores unique videos only (never the same
-            post twice). The number is the total to add this run, spread across
-            the selected categories. Run again to keep filling until damplips
-            has nothing new. {short > 0
+            Searches damplips.com for each selected category (the same query as
+            its search bar, e.g. “amateur”) and stores unique posts only.
+            Duplicates and rows already in the catalog are skipped. The number
+            is how many new videos to add this run; run again until search
+            results are exhausted. {short > 0}
               ? `${counts.reduce((sum, entry) => sum + entry.count, 0)} unique videos in the catalog.`
               : `Catalog already has videos in every selected category.`}
           </p>

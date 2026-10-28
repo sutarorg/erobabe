@@ -105,12 +105,12 @@ function fakeFetch(options: {
     const slice = options.ids.slice((page - 1) * options.perPage, page * options.perPage);
     const next =
       page < totalPages
-        ? `<a rel="next" href="https://www.damplips.com/c/hardcore/page/${page + 1}/">Next</a>`
+        ? `<a rel="next" href="https://www.damplips.com/?s=hardcore&paged=${page + 1}">Next</a>`
         : "";
     const url =
       page === 1
-        ? "https://www.damplips.com/c/hardcore/"
-        : `https://www.damplips.com/c/hardcore/page/${page}/`;
+        ? "https://www.damplips.com/?s=hardcore"
+        : `https://www.damplips.com/?s=hardcore&paged=${page}`;
     pages.set(url, `${slice.map(card).join("")}${next}`);
   }
 
@@ -201,7 +201,7 @@ describe("damplips importer", () => {
       { fetchPage, service, categoryId: CATEGORY_ID, sleep: async () => {} },
     );
     expect(report.imported).toBe(6);
-    expect(calls.filter((url) => url.includes("/c/hardcore/"))).toHaveLength(2);
+    expect(calls.filter((url) => url.includes("s=hardcore"))).toHaveLength(2);
   });
 
   it("is idempotent: a second run adds nothing and reports what is already there", async () => {
@@ -244,10 +244,9 @@ describe("damplips importer", () => {
     const service = fakeService();
     const { fetchPage } = fakeFetch({ ids: [1, 2, 3], perPage: 10 });
     const fetchBoth = async (url: string) => {
-      if (url.includes("/c/lesbian/")) {
+      if (url.includes("s=lesbian")) {
         return { url, html: [1, 2, 3].map(card).join(""), status: 200 };
       }
-      if (url.includes("/?s=")) return { url, html: "", status: 200 };
       return fetchPage(url);
     };
     const run = await importCatalog(
@@ -315,7 +314,7 @@ describe("damplips importer", () => {
     const service = fakeService();
     const { fetchPage } = fakeFetch({ ids: [1, 2], perPage: 10 });
     const fetchWithBrokenCategory = async (url: string) => {
-      if (url.endsWith("/c/hardcore/")) throw new Error("damplips responded 503");
+      if (/[?&]s=hardcore(?:&|$)/.test(url) && !url.includes("paged")) throw new Error("damplips responded 503");
       return fetchPage(url);
     };
     const report = await importCategory(
@@ -323,7 +322,7 @@ describe("damplips importer", () => {
       { fetchPage: fetchWithBrokenCategory, service, categoryId: CATEGORY_ID, sleep: async () => {} },
     );
     expect(report.sources[0].error).toContain("503");
-    expect(report.imported).toBe(2);
+    expect(report.imported).toBe(0);
   });
 
   it("refuses a category with no configured source", async () => {
