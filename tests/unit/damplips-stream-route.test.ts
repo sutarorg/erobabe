@@ -61,10 +61,36 @@ describe("GET /api/videos/stream", () => {
     expect(init.redirect).toBe("manual");
   });
 
-  it("asks the media host for bytes it can hand to a video element unchanged", async () => {
+  it("presents one coherent client rather than a mixture of two", async () => {
     await GET(new NextRequest(PROXY, { headers: { range: "bytes=0-3" } }));
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect((init.headers as Record<string, string>)["accept-encoding"]).toBe("identity");
+    const headers = init.headers as Record<string, string>;
+    // A browser sends Chrome's client hints *and* a browser accept-encoding.
+    // Claiming Chrome while sending `accept-encoding: identity` is precisely the
+    // mismatch that earned a 403 from the Cloudflare in front of the media host.
+    expect(headers["user-agent"]).toMatch(/Chrome\/126/);
+    expect(headers["sec-ch-ua"]).toMatch(/Chromium/);
+    expect(headers["accept-encoding"]).toBe("gzip, deflate, br");
+    // The byte range still rides along untouched.
+    expect(headers.range).toBe("bytes=0-3");
+  });
+
+  it("does not mistake a challenge page served as 200 for the video", async () => {
+    // Cloudflare can answer a blocked media request with a document and a 200.
+    // Streaming that to the element would be a silent failure; the next client
+    // has to be tried instead.
+    fetchMock.mockResolvedValueOnce(
+      new Response("<html><title>Just a moment...</title></html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=UTF-8" },
+      }),
+    );
+    fetchMock.mockResolvedValueOnce(mediaResponse());
+
+    const response = await GET(new NextRequest(PROXY));
+
+    expect(response.status).toBe(206);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("rewrites an HLS playlist so every segment is fetched through the proxy", async () => {
@@ -344,8 +370,8 @@ describe("GET /api/videos/stream", () => {
     expect(headers.referer).toBe("https://www.damplips.com/");
   });
 
-  it("relaxes one thing at a time when the host rejects the request", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("hotlink", { status: 403 }));
+  it("tries a different client when the host refuses one", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("blocked", { status: 403 }));
     fetchMock.mockResolvedValueOnce(mediaResponse());
 
     const response = await GET(new NextRequest(PROXY));
@@ -356,9 +382,10 @@ describe("GET /api/videos/stream", () => {
     const [, second] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
     const firstHeaders = first.headers as Record<string, string>;
     const secondHeaders = second.headers as Record<string, string>;
-    // Attempt one has no Origin; attempt two adds it. Everything else matches.
-    expect(firstHeaders.origin).toBeUndefined();
-    expect(secondHeaders.origin).toBe("https://www.damplips.com");
+    // Not just a header swapped inside the same browser claim: a different
+    // client entirely, still asking the way damplips' own player does.
+    expect(firstHeaders["user-agent"]).toMatch(/Chrome/);
+    expect(secondHeaders["user-agent"]).toMatch(/Firefox/);
     expect(secondHeaders.referer).toBe("https://www.damplips.com/");
   });
 
@@ -394,7 +421,34 @@ describe("GET /api/videos/stream", () => {
     expect(body.requested).toBe(MEDIA);
     expect(body.upstream.status).toBe(403);
     expect(body.attempts.map((attempt) => attempt.status)).toEqual([403, 403, 403, 403, 403]);
-    expect(body.attempts[0].profile).toBe("browser+referer");
+    expect(body.attempts[0].profile).toBe("chrome");
+  });
+
+  it("reports what every client was told, not only the last one", async () => {
+    // The streaming path stops at the first usable answer, which cannot tell a
+    // browser *why* the others were refused. The diagnosis asks each client and
+    // keeps the reason, so a block can be named instead of guessed at.
+    fetchMock.mockImplementation(
+      async () =>
+        new Response("<html><title>Sorry, you have been blocked</title></html>", {
+          status: 403,
+          headers: { "content-type": "text/html; charset=UTF-8" },
+        }),
+    );
+
+    const response = await GET(new NextRequest(`${PROXY}&debug=1`));
+    const body = (await response.json()) as {
+      profiles: Array<{ profile: string; status: number; reason?: string }>;
+    };
+
+    expect(body.profiles.map((probe) => probe.profile)).toEqual([
+      "chrome",
+      "firefox",
+      "chrome-cross-site",
+      "curl",
+      "plain",
+    ]);
+    expect(body.profiles[0].reason).toBe("Sorry, you have been blocked");
   });
 
   it("answers HEAD without a body", async () => {
