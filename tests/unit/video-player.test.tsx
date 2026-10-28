@@ -48,25 +48,22 @@ afterEach(() => {
 });
 
 describe("video player", () => {
-  it("plays a direct host file immediately, with nothing to prepare", () => {
-    // damplips publishes its mp4s on a public host, exactly like the `<source>`
-    // tag on its own post page. The element must stream that URL itself; the
-    // proxy is only the fallback. Routing it through the proxy first is what
-    // left the player on "Preparing video…".
+  it("plays a damplips file through the edge proxy immediately", () => {
+    // The visitor's browser is often refused the host file. Streaming through
+    // our edge origin first is what makes the first frame arrive without a
+    // multi-second hang on a blocked media request.
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
     const video = container.querySelector("video")!;
-    expect(video).toHaveAttribute("src", damplipsFile);
+    expect(video).toHaveAttribute("src", damplipsProxy);
     expect(video).toHaveAttribute("preload", "auto");
-    // Hotlink protection rejects a foreign referer but allows none.
-    expect(video).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(video).not.toHaveAttribute("referrerpolicy");
     expect(container.querySelector("iframe")).toBeNull();
     expect(video).toHaveAttribute("controls");
     expect(video).toHaveAttribute("controlslist", "nodownload noremoteplayback");
     expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
-    // The proxy is still there, second — it is not the first request.
-    expect(playbackCandidates(damplipsFile)).toEqual([damplipsFile, damplipsProxy]);
+    expect(playbackCandidates(damplipsFile)).toEqual([damplipsProxy, damplipsFile]);
   });
 
   it("plays a damplips post page in our own player instead of framing it", () => {
@@ -200,58 +197,22 @@ describe("video player", () => {
       });
 
       expect(container.querySelector("video")).toBe(video);
-      expect(video).toHaveAttribute("src", damplipsFile);
+      expect(video).toHaveAttribute("src", damplipsProxy);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("switches to the proxy at once when the media host cannot be reached", async () => {
-    // An ISP filter, a DNS block or an ad-blocker drops the host entirely. The
-    // element would sit there; the probe settles it in a moment and the video
-    // plays through our own origin instead.
-    fetchMock.mockImplementation(async (url: string) => {
-      if (String(url) === damplipsFile) throw new TypeError("Failed to fetch");
-      return new Response(null, { status: 200 });
-    });
-
+  it("does not wait on a host probe before the proxy starts", async () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
-
-    await waitFor(() =>
-      expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy),
-    );
-    expect(container.querySelector("video")).not.toHaveAttribute("referrerpolicy");
-  });
-
-  it("keeps playing the direct file when the host answers the probe", async () => {
-    fetchMock.mockImplementation(async () => new Response(null, { status: 200 }));
-
-    const { container } = render(
-      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
-    );
-
-    // Give the probe a turn; the element must keep the fast direct source.
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
     await act(async () => {
       await Promise.resolve();
     });
-    expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
-  });
-
-  it("probes the host once, not on every render", async () => {
-    // Regression guard: `urls` is rebuilt by the caller on each render, so an
-    // effect keyed on the array would hammer the media host forever.
-    fetchMock.mockImplementation(async () => new Response(null, { status: 200 }));
-    const { rerender } = render(
-      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
-    );
-    rerender(<VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />);
-    rerender(<VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("probes with a HEAD request that needs no CORS grant", async () => {
@@ -264,64 +225,31 @@ describe("video player", () => {
     expect(init.referrerPolicy).toBe("no-referrer");
   });
 
-  it("retries the same file in CORS mode before giving up on the host", async () => {
-    // The host publishes `Access-Control-Allow-Origin: *`, so a file it refuses
-    // as a plain media request can still be allowed as a CORS request. That is
-    // a different request, so it is worth one attempt.
+  it("falls back to the host file when the proxy cannot serve it", () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
     const first = container.querySelector("video")!;
-    expect(first).not.toHaveAttribute("crossorigin");
+    expect(first).toHaveAttribute("src", damplipsProxy);
 
     fireEvent.error(first);
 
     const retried = container.querySelector("video")!;
     expect(retried).not.toBe(first);
     expect(retried).toHaveAttribute("src", damplipsFile);
-    expect(retried).toHaveAttribute("crossorigin", "anonymous");
+    expect(retried).toHaveAttribute("referrerpolicy", "no-referrer");
   });
 
-  it("tries the proxy when the CORS request is refused too", () => {
+  it("does not download the whole file when a same-origin proxy already failed", async () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
     fireEvent.error(container.querySelector("video")!);
     fireEvent.error(container.querySelector("video")!);
-
-    const proxied = container.querySelector("video")!;
-    expect(proxied).toHaveAttribute("src", damplipsProxy);
-    expect(proxied).not.toHaveAttribute("crossorigin");
-  });
-
-  it("plays a copy the browser fetched itself when the element cannot take the file", async () => {
-    // Last resort: the element is refused, but the page may still read the
-    // bytes. A blob URL has no origin and no headers to refuse.
-    const objectUrl = "blob:erobabe/1";
-    const createObjectURL = vi.fn(() => objectUrl);
-    const original = URL.createObjectURL;
-    // jsdom has no object-URL support; the player checks before using it.
-    Object.defineProperty(URL, "createObjectURL", { value: createObjectURL, configurable: true });
-    fetchMock.mockImplementation(async (url: string) => {
-      if (String(url).includes("/api/videos/stream")) throw new TypeError("Failed to fetch");
-      return new Response("x", { status: 200, headers: { "content-type": "video/mp4" } });
-    });
-    try {
-      const { container } = render(
-        <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
-      );
-      fireEvent.error(container.querySelector("video")!); // CORS retry
-      fireEvent.error(container.querySelector("video")!); // proxy
-      fireEvent.error(container.querySelector("video")!); // own copy
-
-      await waitFor(() =>
-        expect(container.querySelector("video")).toHaveAttribute("src", objectUrl),
-      );
-      expect(createObjectURL).toHaveBeenCalled();
-      expect(screen.queryByRole("alert")).toBeNull();
-    } finally {
-      Object.defineProperty(URL, "createObjectURL", { value: original, configurable: true });
-    }
+    fireEvent.error(container.querySelector("video")!);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded"),
+    );
   });
 
   it("still explains a dead end when there is no frame to fall back to", () => {
@@ -380,23 +308,17 @@ describe("video player", () => {
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
     const video = container.querySelector("video")!;
-    expect(video).toHaveAttribute("src", damplipsFile);
+    expect(video).toHaveAttribute("src", damplipsProxy);
 
     fireEvent.error(video);
 
-    // First the same file in CORS mode, then the proxy; the visitor sees no
-    // error while anything is still being tried.
-    fireEvent.error(container.querySelector("video")!);
-
     const retried = container.querySelector("video")!;
     expect(retried).not.toBe(video);
-    expect(retried).toHaveAttribute("src", damplipsProxy);
-    expect(retried).not.toHaveAttribute("referrerpolicy");
+    expect(retried).toHaveAttribute("src", damplipsFile);
     expect(screen.queryByRole("alert")).toBeNull();
 
-    // Both destinations failed, and no copy could be fetched: the visitor is
-    // told, with the one action that can still work for a challenged host.
     fireEvent.error(retried);
+    fireEvent.error(container.querySelector("video")!);
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded"),
     );
@@ -418,8 +340,7 @@ describe("video player", () => {
       expect(screen.getByRole("button", { name: "Retry playback" })).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
-    expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
-    // The CORS attempt is not remembered as the starting point.
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
     expect(container.querySelector("video")).not.toHaveAttribute("crossorigin");
   });
 
@@ -456,11 +377,9 @@ describe("video player", () => {
 
     fireEvent.error(video);
 
-    // No HLS attempt (the content was never the problem) — the same file is
-    // tried in CORS mode first, then the proxy.
+    // No HLS attempt (the content was never the problem) — the host file is
+    // next after the proxy.
     expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
-    fireEvent.error(container.querySelector("video")!);
-    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
   });
 
   it("offers exactly one destination for a non-damplips file", () => {
@@ -469,7 +388,7 @@ describe("video player", () => {
     ]);
     // A damplips file plays straight from its host, with the edge proxy behind
     // it — the Node proxy cannot fetch this host at all.
-    expect(playbackCandidates(damplipsFile)).toEqual([damplipsFile, damplipsProxy]);
+    expect(playbackCandidates(damplipsFile)).toEqual([damplipsProxy, damplipsFile]);
     // A playlist is a document: it has to be rewritten before a frame can play.
     const playlist = "https://video.damplips.com/video7/717/79.m3u8";
     expect(playbackCandidates(playlist)).toEqual([
@@ -492,16 +411,15 @@ describe("video player", () => {
       const { container } = render(
         <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
       );
-      expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
+      expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
 
       // Nothing arrives at all: no error, no byte, no metadata.
       act(() => {
         vi.advanceTimersByTime(STALL_TIMEOUT_MS + 100);
       });
 
-      // The deadline moves on to the next attempt rather than waiting forever.
+      // The deadline moves on to the host file rather than waiting forever.
       expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
-      expect(container.querySelector("video")).toHaveAttribute("crossorigin", "anonymous");
     } finally {
       vi.useRealTimers();
     }
@@ -521,7 +439,7 @@ describe("video player", () => {
       });
 
       expect(container.querySelector("video")).toBe(video);
-      expect(video).toHaveAttribute("src", damplipsFile);
+      expect(video).toHaveAttribute("src", damplipsProxy);
     } finally {
       vi.useRealTimers();
     }
