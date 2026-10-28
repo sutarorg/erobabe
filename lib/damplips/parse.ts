@@ -339,9 +339,16 @@ function collectMediaCandidates(html: string, pageUrl: string): DamplipsMedia[] 
     push("embed", attribute(iframe, "src") || attribute(iframe, "data-src"));
   }
 
-  // Direct sources are preferred: they play in our own player, without the ad
-  // framing of a third-party embed.
-  return [...candidates.filter((candidate) => candidate.kind === "direct"), ...candidates.filter((candidate) => candidate.kind === "embed")];
+  // Direct files first so import stores a ready-to-play URL (no watch-page
+  // "Preparing" step). Playlists are last among direct sources; embeds after.
+  const files = candidates.filter(
+    (candidate) => candidate.kind === "direct" && !/\.m3u8(\?|$)/i.test(candidate.url),
+  );
+  const playlists = candidates.filter(
+    (candidate) => candidate.kind === "direct" && /\.m3u8(\?|$)/i.test(candidate.url),
+  );
+  const embeds = candidates.filter((candidate) => candidate.kind === "embed");
+  return [...files, ...playlists, ...embeds];
 }
 
 /** The best media destination a post page offers, prefering direct files. */

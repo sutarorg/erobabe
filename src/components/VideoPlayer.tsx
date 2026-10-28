@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExternalLink, Loader2, Pause, Play, RotateCcw, SkipBack, SkipForward } from "lucide-react";
+import { ExternalLink, Loader2, RotateCcw } from "lucide-react";
 import {
   damplipsProxyUrl,
   isDamplipsMediaUrl,
@@ -117,18 +117,6 @@ function referrerPolicyForCandidate(url: string, index: number): Record<string, 
  */
 export const STALL_TIMEOUT_MS = 12_000;
 
-const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
-
-function formatClock(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
-  const total = Math.floor(seconds);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
 /** How long the reachability probe may take before it is treated as "blocked". */
 export const PROBE_TIMEOUT_MS = 2_500;
 
@@ -230,7 +218,7 @@ export async function mediaHostReachable(url: string, timeoutMs = PROBE_TIMEOUT_
 function NativePlayer({
   urls,
   isHls,
-  prepares,
+  prepares: _prepares,
   title,
   poster,
   onTrack,
@@ -262,12 +250,8 @@ function NativePlayer({
   const [triedAlternative, setTriedAlternative] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [started, setStarted] = useState(true);
-  const [waiting, setWaiting] = useState(prepares);
+  const [waiting, setWaiting] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [paused, setPaused] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [playbackRate, setPlaybackRate] = useState(1);
   /**
    * A damplips file asked for as a `no-cors` media request can be refused while
    * the same file requested in CORS mode is allowed — the host publishes
@@ -577,40 +561,6 @@ function NativePlayer({
     });
   }, []);
 
-  const togglePause = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      const play = video.play() as Promise<void> | undefined;
-      play?.catch(() => undefined);
-    } else {
-      video.pause();
-    }
-  };
-
-  const skipBy = (delta: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    const next = Math.max(0, Math.min((video.duration || 0) || Infinity, video.currentTime + delta));
-    video.currentTime = Number.isFinite(next) ? next : Math.max(0, video.currentTime + delta);
-    setCurrentTime(video.currentTime);
-  };
-
-  const cycleRate = () => {
-    const video = videoRef.current;
-    const index = PLAYBACK_RATES.indexOf(playbackRate as (typeof PLAYBACK_RATES)[number]);
-    const next = PLAYBACK_RATES[(index + 1) % PLAYBACK_RATES.length];
-    setPlaybackRate(next);
-    if (video) video.playbackRate = next;
-  };
-
-  const seekTo = (value: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = value;
-    setCurrentTime(value);
-  };
-
   const retry = () => {
     recoveries.current = 0;
     setCorsMode(false);
@@ -622,8 +572,7 @@ function NativePlayer({
     }
     setFailed(false);
     setStarted(true);
-    setWaiting(prepares);
-    setPaused(false);
+    setWaiting(false);
     setTriedAlternative(false);
     setStrategy(isHls ? "hls" : "native");
     setSource(0);
@@ -646,29 +595,25 @@ function NativePlayer({
         {...referrerPolicyForCandidate(url, source)}
         aria-label={title}
         autoPlay
+        controls
+        controlsList="nodownload noremoteplayback"
+        disablePictureInPicture
         preload="auto"
         poster={poster || undefined}
         playsInline
         className="h-full w-full bg-black"
-        onLoadedMetadata={(event) => {
+        onContextMenu={(event) => event.preventDefault()}
+        onLoadedMetadata={() => {
           dataSeen.current = true;
-          setDuration(event.currentTarget.duration || 0);
-          event.currentTarget.playbackRate = playbackRate;
           resume();
         }}
         onProgress={() => {
           dataSeen.current = true;
         }}
-        onPlay={() => {
-          setPaused(false);
-          onTrack("playback_start");
-        }}
-        onPause={() => setPaused(true)}
+        onPlay={() => onTrack("playback_start")}
         onTimeUpdate={(event) => {
           dataSeen.current = true;
           const media = event.currentTarget;
-          setCurrentTime(media.currentTime);
-          if (media.duration && Number.isFinite(media.duration)) setDuration(media.duration);
           if (!media.duration || !Number.isFinite(media.duration)) return;
           const progress = media.currentTime / media.duration;
           if (progress >= 0.25) onTrack("progress_25");
@@ -678,7 +623,6 @@ function NativePlayer({
         onEnded={() => onTrack("playback_complete")}
         onPlaying={() => {
           dataSeen.current = true;
-          setPaused(false);
           setWaiting(false);
         }}
         onLoadedData={() => {
@@ -715,79 +659,6 @@ function NativePlayer({
       >
         Your browser does not support the video tag.
       </video>
-
-      {started && !failed && !fetching && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-3 pb-2.5 pt-10">
-          <div className="pointer-events-auto flex flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <span className="min-w-[36px] text-[11px] tabular-nums text-white/80">
-                {formatClock(currentTime)}
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={duration && Number.isFinite(duration) ? duration : 0}
-                step={0.1}
-                value={Number.isFinite(currentTime) ? currentTime : 0}
-                aria-label="Seek"
-                onChange={(event) => seekTo(Number(event.currentTarget.value))}
-                className="h-1 w-full cursor-pointer appearance-none rounded-full bg-white/25 accent-[#f51655]"
-              />
-              <span className="min-w-[36px] text-right text-[11px] tabular-nums text-white/80">
-                {formatClock(duration)}
-              </span>
-            </div>
-            <div className="flex items-center justify-center gap-3">
-              <button
-                type="button"
-                onClick={() => skipBy(-10)}
-                aria-label="Back 10 seconds"
-                className="flex h-9 w-9 items-center justify-center rounded-full text-white hover:bg-white/15"
-              >
-                <SkipBack className="h-5 w-5" aria-hidden />
-              </button>
-              <button
-                type="button"
-                onClick={togglePause}
-                aria-label={paused ? "Resume" : "Pause"}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-[#f51655] text-white shadow-[0_8px_20px_rgba(245,22,85,0.45)] hover:bg-[#ff326c]"
-              >
-                {paused ? (
-                  <Play className="h-5 w-5 translate-x-[1px] fill-current" aria-hidden />
-                ) : (
-                  <Pause className="h-5 w-5 fill-current" aria-hidden />
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={() => skipBy(10)}
-                aria-label="Forward 10 seconds"
-                className="flex h-9 w-9 items-center justify-center rounded-full text-white hover:bg-white/15"
-              >
-                <SkipForward className="h-5 w-5" aria-hidden />
-              </button>
-              <button
-                type="button"
-                onClick={cycleRate}
-                aria-label="Playback speed"
-                className="ml-1 min-w-[44px] rounded-md border border-white/20 px-2 py-1 text-[12px] font-semibold text-white hover:bg-white/15"
-              >
-                {playbackRate === 1 ? "1×" : `${playbackRate}×`}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {prepares && started && waiting && !failed && (
-        <p
-          role="status"
-          className="pointer-events-none absolute inset-x-0 bottom-14 flex items-center justify-center gap-2 text-[12px] font-medium text-white/90"
-        >
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-          Preparing video…
-        </p>
-      )}
 
       {/*
         Fetching the browser's own copy: this is a real download, so it is
