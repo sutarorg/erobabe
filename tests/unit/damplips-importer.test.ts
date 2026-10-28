@@ -34,6 +34,7 @@ function createCatalog(initial: Row[] = []) {
         filters.push([column, value]);
         return api;
       },
+      range: () => api,
       maybeSingle: async () => ({
         data: rows.find(matcher(filters)) ?? null,
         error: null,
@@ -186,6 +187,26 @@ describe("damplips importer", () => {
     expect(second.imported).toBe(0);
     expect(second.alreadyPresent).toBe(3);
     expect(second.fulfilled).toBe(false);
+    expect(rows).toHaveLength(3);
+  });
+
+  it("re-imports a damplips post after the catalog row was deleted", async () => {
+    const pages: Record<string, string> = {
+      [HARDCORE_LIST]: listing(3),
+      "https://www.damplips.com/p/1/": postPage(1, "A hardcore scene number 1 with a long title"),
+      "https://www.damplips.com/p/2/": postPage(2, "A hardcore scene number 2 with a long title"),
+      "https://www.damplips.com/p/3/": postPage(3, "A hardcore scene number 3 with a long title"),
+    };
+    const { rows, service } = createCatalog();
+    const deps = { fetchPage: fixtureSite(pages), service, categoryId: "cat-hardcore", sleep: async () => {} };
+
+    expect((await importCategory({ categorySlug: "hardcore", perCategory: 3 }, deps)).imported).toBe(3);
+    rows.splice(0, rows.length);
+
+    const again = await importCategory({ categorySlug: "hardcore", perCategory: 3 }, deps);
+    expect(again.alreadyPresent).toBe(0);
+    expect(again.imported).toBe(3);
+    expect(again.updated).toBe(0);
     expect(rows).toHaveLength(3);
   });
 

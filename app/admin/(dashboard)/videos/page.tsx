@@ -7,16 +7,32 @@ import VideoManager, {
   type AdminVideo,
 } from "./VideoManager";
 
+const ADMIN_VIDEO_PAGE = 1000;
+
+const ADMIN_VIDEO_COLUMNS =
+  "id, slug, title, status, visibility, provider, requires_reupload, thumbnail_url, playable_url, embed_url, source_url, view_count, created_at, carousel_position, carousel_title, carousel_description, category_id, category:categories(label)";
+
+async function loadAllAdminVideos(supabase: ReturnType<typeof createServiceClient>) {
+  const videos: any[] = [];
+  let from = 0;
+  for (;;) {
+    const { data } = await supabase
+      .from("videos")
+      .select(ADMIN_VIDEO_COLUMNS)
+      .order("created_at", { ascending: false })
+      .range(from, from + ADMIN_VIDEO_PAGE - 1);
+    const batch = data || [];
+    videos.push(...batch);
+    if (batch.length < ADMIN_VIDEO_PAGE) break;
+    from += ADMIN_VIDEO_PAGE;
+  }
+  return videos;
+}
+
 export default async function AdminVideosPage() {
   const supabase = createServiceClient();
-  const [{ data: videos }, { data: categories }] = await Promise.all([
-    supabase
-      .from("videos")
-      .select(
-        "id, slug, title, status, visibility, provider, requires_reupload, thumbnail_url, playable_url, embed_url, source_url, view_count, created_at, carousel_position, carousel_title, carousel_description, category_id, category:categories(label)",
-      )
-      .order("created_at", { ascending: false })
-      .limit(1000),
+  const [videos, { data: categories }] = await Promise.all([
+    loadAllAdminVideos(supabase),
     supabase.from("categories").select("id, label").order("label"),
   ]);
 

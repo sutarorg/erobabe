@@ -27,6 +27,7 @@ function fakeService(seed: Row[] = []): ImportService & { rows: Row[]; inserts: 
         return api;
       },
       limit: () => api,
+      range: () => api,
       in: (column: string, values: unknown[]) => {
         filters.push([column, values]);
         return api;

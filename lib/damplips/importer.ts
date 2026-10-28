@@ -109,6 +109,40 @@ type Outcome = "imported" | "updated" | "failed" | "missingMedia" | "missingThum
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** PostgREST pages at 1 000 rows; a larger catalog would otherwise look "already imported". */
+const CATALOG_PAGE = 1000;
+
+type DamplipsIdentity = { provider_file_id: string; category_id: string | null };
+
+/**
+ * Every live damplips row. Deleted videos are gone from `videos` and must not
+ * appear here — `media_retention` is operator history, not the catalog.
+ */
+export async function loadLiveDamplipsIdentities(service: ImportService): Promise<DamplipsIdentity[]> {
+  const identities: DamplipsIdentity[] = [];
+  let from = 0;
+  for (;;) {
+    const query = service
+      .from("videos")
+      .select("provider_file_id, category_id")
+      .eq("provider", "damplips");
+    const page = typeof query.range === "function" ? query.range(from, from + CATALOG_PAGE - 1) : query;
+    const { data, error } = await page;
+    if (error) throw new Error(error.message || "Unable to read the category catalog");
+    const batch = (data || []) as Array<{ provider_file_id?: string | null; category_id?: string | null }>;
+    for (const row of batch) {
+      if (!row.provider_file_id) continue;
+      identities.push({
+        provider_file_id: String(row.provider_file_id),
+        category_id: row.category_id == null ? null : String(row.category_id),
+      });
+    }
+    if (batch.length < CATALOG_PAGE) break;
+    from += CATALOG_PAGE;
+  }
+  return identities;
+}
+
 function clampTarget(value: number | undefined): number {
   if (!Number.isFinite(value) || !value || value <= 0) return DEFAULT_VIDEOS_PER_CATEGORY;
   return Math.min(MAX_VIDEOS_PER_CATEGORY, Math.max(1, Math.floor(value)));
@@ -319,16 +353,11 @@ export async function importCategory(
     }
   }
 
-  // Every damplips post already in the catalog is unique site-wide: never
-  // import it again, in this category or another.
-  const { data: existingRows, error: existingError } = await deps.service
-    .from("videos")
-    .select("provider_file_id, category_id")
-    .eq("provider", "damplips");
-  if (existingError) throw new Error(existingError.message || "Unable to read the category catalog");
-  for (const row of (existingRows as Array<{ provider_file_id?: string | null; category_id?: string | null }> | null) || []) {
-    if (!row.provider_file_id) continue;
-    claimed.add(String(row.provider_file_id));
+  // Live catalog only. A deleted row is not "already present" — the operator
+  // wiped it and this run must import that damplips post again.
+  const existingRows = await loadLiveDamplipsIdentities(deps.service);
+  for (const row of existingRows) {
+    claimed.add(row.provider_file_id);
     if (String(row.category_id) === String(deps.categoryId)) report.alreadyPresent += 1;
   }
   report.total = report.alreadyPresent;
