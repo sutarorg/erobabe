@@ -113,7 +113,7 @@ describe("public video listing copy", () => {
     async (_path, page) => {
       const html = await renderPage(page);
       expect(html).toContain(
-        '<div class="pt-4"><p class="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">',
+        "text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent",
       );
       expect(html).toContain(
         '<div class="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1"><h1 class="text-[22px] font-semibold tracking-tight">',

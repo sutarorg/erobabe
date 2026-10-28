@@ -38,9 +38,12 @@ export function navForPath(pathname: string | null): NavKey | null {
 export default function PublicLayoutClient({
   children,
   activeCampaigns,
+  skipAgeGate = false,
 }: {
   children: React.ReactNode;
   activeCampaigns: ActiveCampaign[];
+  /** Search crawlers index the same HTML without the 18+ overlay. */
+  skipAgeGate?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -101,7 +104,7 @@ export default function PublicLayoutClient({
       </main>
 
       <AdRail side="right" start={6} activeCampaigns={activeCampaigns} />
-      <AgeGate />
+      {skipAgeGate ? null : <AgeGate />}
     </div>
   );
 }

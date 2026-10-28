@@ -35,6 +35,7 @@ const nextConfig = {
           ...(process.env.NODE_ENV === 'production' ? [{ key: 'Strict-Transport-Security', value: 'max-age=31536000' }] : []),
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          { key: 'Rating', value: 'RTA-5042-1996-1400-1577-RTA' },
         ],
       },
     ];

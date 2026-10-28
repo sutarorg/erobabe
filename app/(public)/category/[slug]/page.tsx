@@ -3,6 +3,10 @@ import { notFound } from "next/navigation";
 import { SITE_URL } from "@/lib/site";
 import { getCategoryBySlug } from "@/lib/public/catalog";
 import PublicVideoCard from "@/src/components/PublicVideoCard";
+import Breadcrumbs from "@/src/components/Breadcrumbs";
+import JsonLd from "@/src/components/JsonLd";
+import { collectionPageJsonLd } from "@/lib/seo/json-ld";
+import { publicPageMetadata } from "@/lib/metadata/page";
 import type { Metadata } from "next";
 
 export const revalidate = 30;
@@ -11,17 +15,20 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { slug } = await params;
   const { category, videos } = await getCategoryBySlug(slug);
   if (!category) notFound();
-  return {
+  const description =
+    category.description ||
+    `Browse ${category.label} adult videos on erobabe. ${videos.length} published scene${videos.length === 1 ? "" : "s"}. 18+ only.`;
+  return publicPageMetadata({
     title: `${category.label} Videos`,
-    description: category.description || `Browse the ${category.label} video collection on Erobabe. Find published listings and related categories. For adults aged 18 and over.`,
+    description,
     robots: { index: videos.length > 0, follow: true },
     openGraph: {
       title: `${category.label} Videos`,
-      description: category.description || `Explore the ${category.label} collection on Erobabe. Adults 18+ only.`,
+      description,
       url: `${SITE_URL}/category/${slug}`,
     },
     alternates: { canonical: `${SITE_URL}/category/${slug}` },
-  };
+  });
 }
 
 export default async function CategoryPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -29,9 +36,26 @@ export default async function CategoryPage({ params }: { params: Promise<{ slug:
   const { category, videos } = await getCategoryBySlug(slug);
   if (!category) notFound();
 
+  const description =
+    category.description || `Explore hand-curated ${category.label.toLowerCase()} scenes updated daily.`;
+
   return (
     <div className="pt-4">
-      <p className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">Category</p>
+      <JsonLd
+        data={collectionPageJsonLd({
+          name: `${category.label} Videos`,
+          description,
+          path: `/category/${slug}`,
+        })}
+      />
+      <Breadcrumbs
+        items={[
+          { name: "Home", path: "/" },
+          { name: "Categories", path: "/categories" },
+          { name: category.label, path: `/category/${slug}` },
+        ]}
+      />
+      <p className="mt-3 text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">Category</p>
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 className="text-[22px] font-semibold tracking-tight">{category.label}</h1>
         <span className="text-[12px] tabular-nums text-ink-3">{videos.length} videos</span>

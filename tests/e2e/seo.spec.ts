@@ -49,8 +49,9 @@ test.describe("SEO acceptance", () => {
     expect(res.status()).toBe(200);
     const text = await res.text();
     expect(text).toContain("Sitemap:");
-    expect(text).toContain("/admin/");
+    expect(text).toContain("/admin");
     expect(text).toContain("Disallow");
+    expect(text).not.toContain("Disallow: /video");
   });
 
   test("internal navigation uses crawlable <a href>", async ({ page }) => {
@@ -72,5 +73,15 @@ test.describe("SEO acceptance", () => {
       const href = await canonical.getAttribute("href");
       expect(href).toBeTruthy();
     }
+  });
+
+  test("labels the site as adult and exposes WebSite JSON-LD", async ({ page }) => {
+    await page.goto("/");
+    const rating = page.locator('meta[name="rating"]');
+    expect(await rating.getAttribute("content")).toBe("adult");
+    const jsonLd = page.locator('script[type="application/ld+json"]');
+    expect(await jsonLd.count()).toBeGreaterThan(0);
+    const payload = JSON.parse((await jsonLd.first().textContent()) || "{}");
+    expect(payload["@type"]).toBe("WebSite");
   });
 });

@@ -1,23 +1,46 @@
 import type { Metadata } from "next";
 import { getSiteUrl } from "@/lib/site";
+import { websiteJsonLd } from "@/lib/seo/json-ld";
+import JsonLd from "@/src/components/JsonLd";
 import "./globals.css";
+
+const SITE = getSiteUrl();
 
 export const metadata: Metadata = {
   title: {
-    default: "erobabe — Premium Adult Entertainment",
+    default: "erobabe — Adult Videos for 18+",
     template: "%s | erobabe",
   },
-  description: "erobabe — your destination for discovering premium adult entertainment. 18+ adults only.",
-  metadataBase: new URL(getSiteUrl()),
+  description:
+    "Watch adult videos on erobabe. Browse categories, latest uploads, and popular scenes. 18+ only.",
+  metadataBase: new URL(SITE),
+  applicationName: "erobabe",
+  referrer: "origin-when-cross-origin",
   openGraph: {
     type: "website",
+    locale: "en_US",
     siteName: "erobabe",
-    title: "erobabe — Premium Adult Entertainment",
-    description: "Your destination for discovering premium adult entertainment. 18+ adults only.",
+    title: "erobabe — Adult Videos for 18+",
+    description:
+      "Watch adult videos on erobabe. Browse categories, latest uploads, and popular scenes. 18+ only.",
+    url: SITE,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "erobabe — Adult Videos for 18+",
+    description:
+      "Watch adult videos on erobabe. Browse categories, latest uploads, and popular scenes. 18+ only.",
   },
   robots: {
     index: true,
     follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
   },
   icons: {
     icon: "https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png",
@@ -25,6 +48,7 @@ export const metadata: Metadata = {
   },
   other: {
     rating: "adult",
+    RATING: "RTA-5042-1996-1400-1577-RTA",
   },
 };
 
@@ -39,7 +63,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body className="min-h-screen bg-void text-ink antialiased">{children}</body>
+      <body className="min-h-screen bg-void text-ink antialiased">
+        <JsonLd data={websiteJsonLd(SITE)} />
+        {children}
+      </body>
     </html>
   );
 }
