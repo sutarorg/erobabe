@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExternalLink, Loader2, RotateCcw } from "lucide-react";
+import { ExternalLink, RotateCcw } from "lucide-react";
 import {
   damplipsProxyUrl,
   isDamplipsMediaUrl,
@@ -235,14 +235,6 @@ function NativePlayer({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const recoveries = useRef(0);
   const startedRef = useRef(false);
-  /** The blob URL this player created, so it can be released. */
-  const localRef = useRef<string | null>(null);
-  useEffect(
-    () => () => {
-      if (localRef.current) URL.revokeObjectURL(localRef.current);
-    },
-    [],
-  );
   /** Has this attempt produced anything at all — a byte, metadata, a frame? */
   const dataSeen = useRef(false);
   const [source, setSource] = useState(0);
@@ -259,9 +251,6 @@ function NativePlayer({
    * into that second kind, so it is a real second attempt, not a cosmetic one.
    */
   const [corsMode, setCorsMode] = useState(false);
-  /** A copy the browser fetched itself, when the element's own request is refused. */
-  const [localUrl, setLocalUrl] = useState<string | null>(null);
-  const [fetching, setFetching] = useState(false);
   /** What actually went wrong, for the "Technical details" block. */
   const [diagnosis, setDiagnosis] = useState<{
     error: string | null;
@@ -278,59 +267,6 @@ function NativePlayer({
   const url = urls[Math.min(source, urls.length - 1)];
   /** The direct host file, if this row has one — never a proxied URL. */
   const directUrl = urls.find((candidate) => !isStreamProxyUrl(candidate)) ?? null;
-
-  /**
-   * Fetch the file with the browser and hand the element its own copy.
-   *
-   * When the host refuses the element's `no-cors` media request, the page can
-   * still be allowed to *read* the bytes (`Access-Control-Allow-Origin: *`).
-   * A blob URL has no origin and no headers to refuse, so the element plays it.
-   *
-   * The file is only fetched when the host says it is a video: a block page, a
-   * 403 or a dead link is not worth 120 MB of the visitor's bandwidth, and the
-   * answer is reported in the panel instead.
-   */
-  const loadOwnCopy = useCallback(async () => {
-    const direct = directUrl;
-    if (!direct || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
-      setFailed(true);
-      onTrack("playback_error");
-      return;
-    }
-    setFetching(true);
-    setWaiting(false);
-    try {
-      const answer = await probeDirectSource(direct, PROBE_TIMEOUT_MS * 4);
-      setDiagnosis((current) => ({ ...current, direct: answer }));
-      const type = answer?.contentType ?? "";
-      if (!answer || !answer.status || answer.status >= 400 || !type.startsWith("video/")) {
-        setFailed(true);
-        onTrack("playback_error");
-        return;
-      }
-      const response = await fetch(direct, {
-        mode: "cors",
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        setFailed(true);
-        onTrack("playback_error");
-        return;
-      }
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      localRef.current = objectUrl;
-      setLocalUrl(objectUrl);
-      setAttempt((value) => value + 1);
-    } catch {
-      setFailed(true);
-      onTrack("playback_error");
-    } finally {
-      setFetching(false);
-    }
-  }, [directUrl, onTrack]);
 
   /**
    * A source that fails is retried in the other strategy, then replaced by the
@@ -378,20 +314,9 @@ function NativePlayer({
       return;
     }
 
-    // Last resort: if this browser can *read* the file — even though the
-    // element cannot take it — fetch it and play the browser's own copy. That
-    // is the only path that works when the host refuses media requests but
-    // allows CORS ones.
-    // A whole-file download is slower than waiting on the proxy. Only try it
-    // when there is no same-origin stream to fall back to.
-    if (directUrl && !localUrl && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
-      void loadOwnCopy();
-      return;
-    }
-
     setFailed(true);
     onTrack("playback_error");
-  }, [corsMode, directUrl, isHls, localUrl, onTrack, source, triedAlternative, urls, loadOwnCopy]);
+  }, [corsMode, isHls, onTrack, source, triedAlternative, urls, url]);
 
   /**
    * Ask the media host whether it is reachable at all, and if it is not, move
@@ -552,7 +477,7 @@ function NativePlayer({
       }
     };
     kick();
-  }, [url, strategy, attempt, corsMode, localUrl, failed]);
+  }, [url, strategy, attempt, corsMode, failed]);
 
   /** The first moment playback can really begin, whatever the strategy. */
   const resume = useCallback(() => {
@@ -570,12 +495,6 @@ function NativePlayer({
   const retry = () => {
     recoveries.current = 0;
     setCorsMode(false);
-    setFetching(false);
-    setLocalUrl(null);
-    if (localRef.current) {
-      URL.revokeObjectURL(localRef.current);
-      localRef.current = null;
-    }
     setFailed(false);
     setStarted(true);
     setWaiting(false);
@@ -592,7 +511,7 @@ function NativePlayer({
       <video
         key={`${url}:${strategy}:${attempt}:${corsMode ? "cors" : "media"}`}
         ref={videoRef}
-        src={strategy === "native" ? (localUrl ?? url) : undefined}
+        src={strategy === "native" ? url : undefined}
         // A blob has no origin to check; a host file may only be readable in
         // CORS mode, which is exactly what this second attempt asks for.
         crossOrigin={corsMode ? "anonymous" : undefined}
@@ -665,20 +584,6 @@ function NativePlayer({
       >
         Your browser does not support the video tag.
       </video>
-
-      {/*
-        Fetching the browser's own copy: this is a real download, so it is
-        stated rather than disguised. It only starts when the host has already
-        said the URL is a video.
-      */}
-      {fetching && !failed && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-center text-sm text-white">
-          <p role="status" className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-            Fetching this video from the host…
-          </p>
-        </div>
-      )}
 
       {failed && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-center text-sm text-white">
