@@ -83,6 +83,10 @@ async function handle(req: NextRequest, headOnly: boolean): Promise<Response> {
   const headers: Record<string, string> = { ...UPSTREAM_HEADERS };
   const range = req.headers.get("range");
   if (range) headers.range = range;
+  const bounded = Number(req.nextUrl.searchParams.get("len"));
+  if (!range && Number.isFinite(bounded) && bounded > 0) {
+    headers.range = `bytes=0-${Math.min(bounded, 4_000_000) - 1}`;
+  }
   for (const name of CONDITIONAL) {
     const value = req.headers.get(name);
     if (value) headers[name] = value;
@@ -98,7 +102,9 @@ async function handle(req: NextRequest, headOnly: boolean): Promise<Response> {
   const isMediaPath = /\.[a-z0-9]+$/i.test(target.pathname);
 
   // `?probe=1` answers with what the host said instead of streaming, so the
-  // route can be checked from anywhere without downloading a film.
+  // route can be checked from anywhere without downloading a film. `&len=N`
+  // additionally reads N bytes through the stream, which is how the route is
+  // verified end to end without pulling a 120 MB file.
   if (req.nextUrl.searchParams.get("probe") === "1") {
     const summary = {
       ok: upstream.ok,
@@ -109,8 +115,26 @@ async function handle(req: NextRequest, headOnly: boolean): Promise<Response> {
       acceptRanges: upstream.headers.get("accept-ranges"),
       blocked: looksBlocked(target, upstream),
     };
-    void upstream.body?.cancel().catch(() => undefined);
-    return Response.json(summary, { headers: { "cache-control": "no-store" } });
+    const wanted = Number(req.nextUrl.searchParams.get("len"));
+    let streamed: number | undefined;
+    if (Number.isFinite(wanted) && wanted > 0) {
+      const reader = upstream.body?.getReader();
+      let read = 0;
+      const limit = Math.min(wanted, 4_000_000);
+      while (reader && read < limit) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        read += chunk.value?.byteLength ?? 0;
+      }
+      void reader?.cancel().catch(() => undefined);
+      streamed = read;
+    } else {
+      void upstream.body?.cancel().catch(() => undefined);
+    }
+    return Response.json(
+      streamed === undefined ? summary : { ...summary, streamed },
+      { headers: { "cache-control": "no-store" } },
+    );
   }
 
   if (upstream.status === 304) {

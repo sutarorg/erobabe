@@ -112,6 +112,28 @@ describe("GET /api/videos/stream-edge", () => {
     expect(body.contentRange).toBe("bytes 0-3/118811167");
   });
 
+  it("can prove it streams by reading a bounded number of bytes", async () => {
+    // Verification without downloading a film: read 1 MB through the route.
+    fetchMock.mockResolvedValueOnce(
+      new Response("x".repeat(1024), {
+        status: 206,
+        headers: {
+          "content-type": "video/mp4",
+          "content-range": "bytes 0-1023/118811167",
+        },
+      }),
+    );
+    const { GET } = await route();
+
+    const response = await GET(new NextRequest(`${PROXY}&probe=1&len=1024`));
+    const body = (await response.json()) as { status: number; streamed: number };
+
+    expect(body.status).toBe(206);
+    expect(body.streamed).toBe(1024);
+    const [, init] = fetchMock.mock.calls[0] as unknown as [URL | string, RequestInit];
+    expect((init.headers as Record<string, string>).range).toBe("bytes=0-1023");
+  });
+
   it("sends a HEAD upstream request without a body", async () => {
     fetchMock.mockResolvedValueOnce(mediaResponse());
     const { HEAD } = await route();
