@@ -38,15 +38,6 @@ const UPSTREAM_PROFILES: Record<string, string>[] = [
     referer: "https://www.damplips.com/",
     origin: "https://www.damplips.com",
   },
-  {
-    "user-agent": CHROME_UA,
-    accept: "*/*",
-    referer: "https://www.damplips.com/",
-  },
-  {
-    "user-agent": CHROME_UA,
-    accept: "*/*",
-  },
 ];
 
 const GENERIC_TYPES = new Set([

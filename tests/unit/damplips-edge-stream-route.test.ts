@@ -100,12 +100,12 @@ describe("GET /api/videos/stream-edge", () => {
     expect(response.headers.get("content-type")).toBe("video/mp4");
   });
 
-  it("retries a refused profile until the host serves the file", async () => {
+  it("retries without Range when the host refuses a ranged request", async () => {
     fetchMock
       .mockResolvedValueOnce(new Response("nope", { status: 403 }))
       .mockResolvedValueOnce(mediaResponse());
     const { GET } = await route();
-    const response = await GET(new NextRequest(PROXY));
+    const response = await GET(new NextRequest(PROXY, { headers: { range: "bytes=0-3" } }));
     expect(response.status).toBe(206);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
