@@ -181,23 +181,78 @@ function parseSource(raw: string, token: string | null): SourceResult {
 }
 
 /**
- * Header profiles for the media host, most browser-like first.
+ * The browser the proxy presents to the media host.
  *
- * Hotlink protection on tube sites is configured in many ways: some hosts want
- * the site referer, some reject a media request that carries an `Origin` at
- * all, and a few refuse anything but a bare request. Trying these in order is
- * far cheaper than a broken player.
+ * A user-agent alone is not enough. Cloudflare — which fronts damplips' media
+ * host — scores a request whose UA claims Chrome but which sends none of
+ * Chrome's client hints (`sec-ch-ua`, `sec-fetch-*`) as a bot and answers 403.
+ * That is exactly what happened in production: the same file loaded fine in a
+ * browser and through other fetchers, while this route got "403" from every
+ * header profile it tried. The profiles below are complete, self-consistent
+ * fingerprints rather than a UA string with a referer bolted on.
  */
-const HEADER_PROFILES: Array<Record<string, string>> = [
-  { referer: MEDIA_REFERER, origin: "https://www.damplips.com" },
-  { referer: MEDIA_REFERER },
-  {},
+const UA_WINDOWS =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+/** Headers every attempt sends. `identity` keeps the body decodable. */
+const BASE_HEADERS: Record<string, string> = {
+  "user-agent": UA_WINDOWS,
+  accept: "*/*",
+  "accept-language": "en-US,en;q=0.9",
+  "accept-encoding": "identity",
+};
+
+/** A full Chromium client-hint set, as `<video>` itself would send it. */
+const CHROMIUM_HEADERS: Record<string, string> = {
+  "sec-ch-ua": '"Chromium";v="126", "Not:A-Brand";v="24", "Google Chrome";v="126"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
+  "sec-fetch-dest": "video",
+  "sec-fetch-mode": "no-cors",
+  "sec-fetch-site": "same-origin",
+  "upgrade-insecure-requests": "1",
+};
+
+type HeaderProfile = { name: string; headers: Record<string, string> };
+
+/**
+ * Profiles for the media host, most likely first.
+ *
+ * Damplips' own player asks for the file with its site referer and a same-origin
+ * fetch, so that is attempt one — it is the request the host is built to accept.
+ * The rest relax one thing at a time (an `Origin`, cross-site, a bare request)
+ * because hotlink protection is configured differently on each of its hosts.
+ */
+const HEADER_PROFILES: HeaderProfile[] = [
+  { name: "browser+referer", headers: { ...BASE_HEADERS, ...CHROMIUM_HEADERS, referer: MEDIA_REFERER } },
+  {
+    name: "browser+referer+origin",
+    headers: {
+      ...BASE_HEADERS,
+      ...CHROMIUM_HEADERS,
+      referer: MEDIA_REFERER,
+      origin: "https://www.damplips.com",
+    },
+  },
+  {
+    name: "browser-cross-site",
+    headers: { ...BASE_HEADERS, ...CHROMIUM_HEADERS, "sec-fetch-site": "cross-site" },
+  },
+  { name: "plain+referer", headers: { ...BASE_HEADERS, referer: MEDIA_REFERER } },
+  { name: "plain", headers: { ...BASE_HEADERS } },
 ];
 
 /** Statuses that mean "the host did not like this request", not "no file". */
 const REJECTED = new Set([401, 403, 451]);
 
-async function requestUpstream(url: URL, base: Record<string, string>): Promise<Response | null> {
+/** One attempt against the media host, kept for the diagnostic response. */
+export type UpstreamAttempt = { profile: string; status: number | null; error?: string };
+
+async function requestUpstream(
+  url: URL,
+  base: Record<string, string>,
+  log?: UpstreamAttempt[],
+): Promise<Response | null> {
   let response: Response | null = null;
   for (const profile of HEADER_PROFILES) {
     // A fresh controller per attempt: an aborted signal can never be reused,
@@ -208,15 +263,21 @@ async function requestUpstream(url: URL, base: Record<string, string>): Promise<
     if (typeof timer === "object" && "unref" in timer) timer.unref();
     try {
       response = await fetch(url, {
-        headers: { ...base, ...profile },
+        headers: { ...base, ...profile.headers },
         redirect: "manual",
         cache: "no-store",
         signal: controller.signal,
       });
-    } catch {
+      log?.push({ profile: profile.name, status: response.status });
+    } catch (error) {
       // A refused connection, a DNS failure and a host that never answered in
       // time all mean the same thing: this destination is dead. Failing fast
       // lets the player try its other destination instead of waiting.
+      log?.push({
+        profile: profile.name,
+        status: null,
+        error: error instanceof Error ? error.message : "request failed",
+      });
       return null;
     } finally {
       clearTimeout(timer);
@@ -230,10 +291,14 @@ async function requestUpstream(url: URL, base: Record<string, string>): Promise<
  * Follows redirects by hand so a redirect that leaves damplips is still only
  * followed to a public https host, and so we can report a precise failure.
  */
-async function fetchUpstream(target: URL, headers: Record<string, string>): Promise<{ response: Response; url: URL } | Response> {
+async function fetchUpstream(
+  target: URL,
+  headers: Record<string, string>,
+  log?: UpstreamAttempt[],
+): Promise<{ response: Response; url: URL } | Response> {
   let current = target;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    const response = await requestUpstream(current, headers);
+    const response = await requestUpstream(current, headers, log);
     if (!response) return badRequest("The media host could not be reached", 502);
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");
@@ -265,14 +330,10 @@ async function proxy(req: NextRequest): Promise<Response> {
   const parsed = parseSource(raw, req.nextUrl.searchParams.get("t"));
   if ("error" in parsed) return badRequest(parsed.error, parsed.status);
 
-  const headers: Record<string, string> = {
-    "user-agent": USER_AGENT,
-    accept: "*/*",
-    "accept-language": "en-US,en;q=0.9",
-    // Media must arrive uncompressed: the browser decodes the container, and a
-    // transparently re-encoded body would fail to play.
-    "accept-encoding": "identity",
-  };
+  // Media must arrive uncompressed: the browser decodes the container, and a
+  // transparently re-encoded body would fail to play. The browser fingerprint
+  // itself lives in `BASE_HEADERS` / `HEADER_PROFILES`.
+  const headers: Record<string, string> = { ...BASE_HEADERS };
   const range = req.headers.get("range");
   if (range) headers.range = range;
   for (const name of CONDITIONAL_HEADERS) {
@@ -281,12 +342,42 @@ async function proxy(req: NextRequest): Promise<Response> {
   }
 
   const requestedUrl = parsed.url;
+  // `?debug=1` turns the route into a diagnostic: it asks the media host the
+  // same question it would ask for playback, and reports what came back
+  // instead of streaming bytes. A 403 from Cloudflare is indistinguishable
+  // from a dead file in a player, so this is the difference between "the
+  // video is broken" and "this host does not like our request".
+  const debug = req.nextUrl.searchParams.get("debug") === "1";
+  const attempts: UpstreamAttempt[] = [];
+
   const cached = recallPageMedia(requestedUrl.toString());
   let current = cached ? new URL(cached) : requestedUrl;
   let usingCache = cached !== null;
 
   for (let hop = 0; hop <= MAX_PAGE_HOPS; hop += 1) {
-    const result = await fetchUpstream(current, headers);
+    const result = await fetchUpstream(current, headers, debug ? attempts : undefined);
+    if (debug) {
+      const summary = result instanceof Response
+        ? { ok: false, status: result.status, body: await result.clone().text().catch(() => "") }
+        : {
+            ok: result.response.ok,
+            status: result.response.status,
+            contentType: result.response.headers.get("content-type"),
+            contentLength: result.response.headers.get("content-length"),
+            acceptRanges: result.response.headers.get("accept-ranges"),
+            finalUrl: result.url.toString(),
+          };
+      if (!(result instanceof Response)) void result.response.body?.cancel().catch(() => undefined);
+      return Response.json(
+        {
+          requested: requestedUrl.toString(),
+          profile: attempts.at(-1)?.profile ?? null,
+          attempts,
+          upstream: summary,
+        },
+        { headers: { "cache-control": "no-store" } },
+      );
+    }
     if (result instanceof Response) {
       // A remembered media URL can rot. Drop it and read the page again
       // instead of failing playback for the rest of the cache window.

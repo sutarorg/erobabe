@@ -117,6 +117,45 @@ function referrerPolicyForCandidate(url: string, index: number): Record<string, 
  */
 export const STALL_TIMEOUT_MS = 12_000;
 
+/** How long the reachability probe may take before it is treated as "blocked". */
+export const PROBE_TIMEOUT_MS = 2_500;
+
+/**
+ * Can this browser reach the media host *at all*?
+ *
+ * A `<video>` element reports a blocked request the same way it reports a dead
+ * file — sometimes not at all, just an endless wait — so a visitor whose ISP,
+ * DNS filter or ad-blocker drops `video.damplips.com` would sit on a black
+ * player (or, before this, on "Preparing video…") for the whole stall window
+ * before the proxy got a turn.
+ *
+ * A `HEAD` request answers that question in milliseconds. `mode: "no-cors"` is
+ * deliberate: we are asking "did this request leave the building", not reading
+ * a response, so no CORS grant is needed and an opaque reply still counts as
+ * success. Any rejection — DNS, connection reset, extension block, timeout —
+ * means the direct file is not an option for this visitor, and the proxy behind
+ * it is tried instead.
+ */
+export async function mediaHostReachable(url: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
+  if (typeof fetch !== "function") return true;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    await fetch(url, {
+      method: "HEAD",
+      mode: "no-cors",
+      cache: "no-store",
+      referrerPolicy: "no-referrer",
+      signal: controller.signal,
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * True when a destination is a document that has to be turned into video before
  * a single frame can exist.
@@ -167,6 +206,11 @@ function NativePlayer({
   const [started, setStarted] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [failed, setFailed] = useState(false);
+  /** What actually went wrong, for the "Technical details" block. */
+  const [diagnosis, setDiagnosis] = useState<{ error: string | null; hostReachable: boolean | null }>({
+    error: null,
+    hostReachable: null,
+  });
 
   // Media events fire outside React's render cycle, so the handlers below read
   // "has the visitor pressed play" from a ref.
@@ -211,6 +255,39 @@ function NativePlayer({
     setFailed(true);
     onTrack("playback_error");
   }, [isHls, onTrack, source, triedAlternative, urls.length]);
+
+  /**
+   * Ask the media host whether it is reachable at all, and if it is not, move
+   * to the proxy immediately instead of waiting for a media error that a
+   * blocked request may never fire.
+   *
+   * This runs once per destination list, in parallel with the element's own
+   * `preload`: when the host *is* reachable nothing changes and playback starts
+   * from the direct file exactly as before.
+   */
+  // Deliberately keyed on the string, not on `urls`: the caller rebuilds that
+  // array on every render, and probing on identity would hit the host again and
+  // again. One probe per direct destination.
+  const probeTarget = urls.length > 1 && !isStreamProxyUrl(urls[0]) ? urls[0] : null;
+  const probed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!probeTarget || probed.current === probeTarget) return;
+    probed.current = probeTarget;
+    let cancelled = false;
+    void mediaHostReachable(probeTarget).then((reachable) => {
+      if (cancelled) return;
+      setDiagnosis((current) => ({ ...current, hostReachable: reachable }));
+      if (reachable) return;
+      // The element has not been asked to fetch anything yet, so this costs
+      // nothing: it only changes which destination `url` points at.
+      setTriedAlternative(false);
+      setSource((value) => (value === 0 ? 1 : value));
+      setAttempt((value) => value + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [probeTarget]);
 
   /**
    * The fallback has a deadline.
@@ -410,6 +487,17 @@ function NativePlayer({
         }}
         onError={(event) => {
           const code = event.currentTarget.error?.code;
+          setDiagnosis((current) => ({
+            ...current,
+            error: `media error ${code ?? "unknown"}${
+              {
+                1: " (aborted)",
+                2: " (network)",
+                3: " (decode)",
+                4: " (source not supported or unreachable)",
+              }[code ?? 0] ?? ""
+            }`,
+          }));
           // 1 = MEDIA_ERR_ABORTED: a load we cancelled ourselves, not a failure.
           if (code === 1) return;
           // 3 = decode error, 4 = the element cannot use this source at all:
@@ -472,6 +560,21 @@ function NativePlayer({
             <RotateCcw className="h-4 w-4" aria-hidden />
             Retry playback
           </button>
+          {/*
+            A player that says only "could not be loaded" cannot be fixed from a
+            screenshot. These details name the destination that was tried and
+            what the element reported, which is what turns a bug report into a
+            diagnosis — including on a visitor's own network.
+          */}
+          <details className="w-full max-w-[420px] text-left text-[11px] leading-relaxed text-white/70">
+            <summary className="cursor-pointer text-center">Technical details</summary>
+            <ul className="mt-2 space-y-0.5 break-all font-mono">
+              <li>source: {url}</li>
+              <li>media host reachable: {diagnosis.hostReachable === null ? "unknown" : diagnosis.hostReachable ? "yes" : "no"}</li>
+              <li>last error: {diagnosis.error || "none reported by the browser"}</li>
+              <li>destinations tried: {urls.length}</li>
+            </ul>
+          </details>
         </div>
       )}
     </div>

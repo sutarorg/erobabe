@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import VideoPlayer, {
   STALL_TIMEOUT_MS,
+  mediaHostReachable,
   playbackCandidates,
 } from "@/src/components/VideoPlayer";
 
@@ -197,6 +198,85 @@ describe("video player", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("switches to the proxy at once when the media host cannot be reached", async () => {
+    // An ISP filter, a DNS block or an ad-blocker drops the host entirely. The
+    // element would sit there; the probe settles it in a moment and the video
+    // plays through our own origin instead.
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url) === damplipsFile) throw new TypeError("Failed to fetch");
+      return new Response(null, { status: 200 });
+    });
+
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+
+    await waitFor(() =>
+      expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy),
+    );
+    expect(container.querySelector("video")).not.toHaveAttribute("referrerpolicy");
+  });
+
+  it("keeps playing the direct file when the host answers the probe", async () => {
+    fetchMock.mockImplementation(async () => new Response(null, { status: 200 }));
+
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+
+    // Give the probe a turn; the element must keep the fast direct source.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
+  });
+
+  it("probes the host once, not on every render", async () => {
+    // Regression guard: `urls` is rebuilt by the caller on each render, so an
+    // effect keyed on the array would hammer the media host forever.
+    fetchMock.mockImplementation(async () => new Response(null, { status: 200 }));
+    const { rerender } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+    rerender(<VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />);
+    rerender(<VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("probes with a HEAD request that needs no CORS grant", async () => {
+    fetchMock.mockImplementation(async () => new Response(null, { status: 200 }));
+    await mediaHostReachable(damplipsFile);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toBe(damplipsFile);
+    expect(init.method).toBe("HEAD");
+    expect(init.mode).toBe("no-cors");
+    expect(init.referrerPolicy).toBe("no-referrer");
+  });
+
+  it("reports what failed instead of a blank 'could not be loaded'", () => {
+    const { container } = render(
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+    );
+    const fail = (element: HTMLVideoElement) => {
+      Object.defineProperty(element, "error", { value: { code: 2 }, configurable: true });
+      fireEvent.error(element);
+    };
+    // A network failure moves straight to the next destination, then fails.
+    fail(container.querySelector("video")!);
+    fail(container.querySelector("video")!);
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/could not be loaded/i);
+    // The destination and the browser's own error code are on the page, so a
+    // report can be acted on without a screen recording.
+    expect(container.textContent).toContain(damplipsProxy);
+    expect(container.textContent).toMatch(/media error 2 \(network\)/);
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
   });
 
   it("does not mount untrusted generic iframe URLs", () => {
