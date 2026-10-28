@@ -757,8 +757,8 @@ function NativePlayer({
           <details className="w-full max-w-[420px] text-left text-[11px] leading-relaxed text-white/70">
             <summary className="cursor-pointer text-center">Technical details</summary>
             <ul className="mt-2 space-y-0.5 break-all font-mono">
-              <li>source: {url}</li>
-              <li>media host reachable: {diagnosis.hostReachable === null ? "unknown" : diagnosis.hostReachable ? "yes" : "no"}</li>
+              <li>last source: {url}</li>
+              <li>media host reachable: {diagnosis.hostReachable === null ? "not checked" : diagnosis.hostReachable ? "yes" : "no"}</li>
               <li>
                 direct answer:{" "}
                 {diagnosis.direct === undefined
