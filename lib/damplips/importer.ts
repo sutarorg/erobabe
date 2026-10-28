@@ -1,4 +1,4 @@
-import { DAMPLIPS_BASE_URL, damplipsSlug, parseListing, parseVideoPage } from "./parse";
+import { DAMPLIPS_BASE_URL, advanceSearchPage, damplipsSlug, parseListing, parseVideoPage } from "./parse";
 import { categorySource, sourcePlan } from "./categories";
 import type { FetchDamplipsPage } from "./client";
 import { fetchHostMediaUrl, type FetchHostMedia } from "./host-media";
@@ -385,7 +385,10 @@ export async function importCategory(
         tally(await mapWithConcurrency(batch, concurrency, processCard), sourceReport);
       }
 
-      pageUrl = report.imported < target ? nextPageUrl : null;
+      pageUrl =
+        report.imported < target
+          ? nextPageUrl || (fresh.length > 0 ? advanceSearchPage(page.url || pageUrl) : null)
+          : null;
     }
 
     log(

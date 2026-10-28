@@ -8,6 +8,7 @@ import {
   isReadyMediaFile,
   parseMedia,
   parseNextPageUrl,
+  advanceSearchPage,
   parseVideoPage,
   postIdFromUrl,
   toSafeUrl,
@@ -53,6 +54,16 @@ describe("listing parsing", () => {
   it("ignores advertisements, navigation and comment anchors", () => {
     const { cards } = parseListing(LISTING_HTML);
     expect(cards.map((card) => card.sourceId)).toEqual(["67284", "67285"]);
+  });
+
+  it("pages damplips search the way the site search bar does", () => {
+    expect(advanceSearchPage("https://www.damplips.com/?s=amateur")).toBe(
+      "https://www.damplips.com/?s=amateur&paged=2",
+    );
+    expect(advanceSearchPage("https://www.damplips.com/?s=amateur&paged=2")).toBe(
+      "https://www.damplips.com/?s=amateur&paged=3",
+    );
+    expect(advanceSearchPage("https://www.damplips.com/c/hardcore/")).toBeNull();
   });
 
   it("finds the next listing page and refuses to follow it off-site", () => {
