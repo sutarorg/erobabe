@@ -183,8 +183,9 @@ export async function removeThumbnailObject(service: ServiceClient, publicUrlOrP
     // Supabase public URL: everything after the bucket marker is the object key.
     path = value.slice(markerIndex + marker.length).split("?")[0];
   } else if (/^https?:\/\//i.test(value)) {
-    // A public URL on another host (a different project, a proxy, a CDN): keep
-    // the trailing `<owner>/<file>` pair, which is the only shape this app writes.
+    // Only objects this app stored. Damplips posters live on another host and
+    // must not add a storage round-trip to every catalog delete.
+    if (!value.includes(`/${THUMBNAIL_BUCKET}/`)) return;
     const segments = new URL(value).pathname.split("/").filter(Boolean);
     path = segments.slice(-2).join("/");
   } else {

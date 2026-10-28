@@ -25,7 +25,8 @@ import { revalidatePublicTag } from "@/lib/public/revalidate";
  */
 
 export const CAROUSEL_SLOTS = 3;
-const MAX_BULK_DELETE = 200;
+/** One POST body / one SQL `IN` list. Large enough for select-all on a typical catalog page. */
+const MAX_BULK_DELETE = 500;
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -439,26 +440,37 @@ export async function DELETE(req: NextRequest) {
         provider_file_id: string | null;
       }>;
 
-      const deleted: string[] = [];
-      const failed: Array<{ id: string; error: string }> = [];
-      for (const row of found) {
-        try {
-          const { error } = await service.from("videos").delete().eq("id", row.id);
-          if (error) throw error;
-          deleted.push(row.id);
-          await removeThumbnailObject(service, row.thumbnail_url);
-          await audit(service, user.id, "video_deleted", row.id, {
-            slug: row.slug, title: row.title, provider: row.provider, bulk: true,
-          });
-        } catch {
-          failed.push({ id: row.id, error: "Deletion could not finish. Retry the request." });
-        }
-      }
+      const foundIds = found.map((row) => row.id);
+      const { error: deleteError } = foundIds.length
+        ? await service.from("videos").delete().in("id", foundIds)
+        : { error: null };
+      if (deleteError) throw deleteError;
+
+      await Promise.all([
+        ...found.map((row) => removeThumbnailObject(service, row.thumbnail_url)),
+        found.length
+          ? service.from("audit_logs").insert(
+              found.map((row) => ({
+                actor_id: user.id,
+                action: "video_deleted",
+                target_type: "video",
+                target_id: row.id,
+                level: "info",
+                metadata: {
+                  slug: row.slug,
+                  title: row.title,
+                  provider: row.provider,
+                  bulk: true,
+                },
+              })),
+            )
+          : Promise.resolve(),
+      ]);
 
       revalidatePublicTag("videos");
       return NextResponse.json({
-        deleted,
-        failed,
+        deleted: foundIds,
+        failed: [],
         missing: bulkIds.filter(
           (value) => !found.some((row) => row.id === value),
         ),

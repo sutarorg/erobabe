@@ -39,7 +39,7 @@ export type AdminVideo = {
 export type AdminCategory = { id: string; label: string };
 
 const CAROUSEL_SLOTS = [1, 2, 3];
-const DELETE_CHUNK = 200;
+const DELETE_CHUNK = 500;
 
 type RowState = {
   busy?: "thumbnail" | "remove" | "delete" | "carousel" | "carouselCopy" | "publish";
@@ -340,16 +340,28 @@ export default function VideoManager({
     setBulkNotice("");
     const ids = selectedVideos.map((video) => video.id);
     const deleted = new Set<string>();
+    // Drop the rows immediately so select-all does not sit on a spinner while
+    // the server finishes the SQL. Failed ids are put back below.
+    setVideos((current) => current.filter((video) => !ids.includes(video.id)));
+    setSelected(new Set());
     try {
+      const chunks: string[][] = [];
       for (let index = 0; index < ids.length; index += DELETE_CHUNK) {
-        const chunk = ids.slice(index, index + DELETE_CHUNK);
-        const response = await fetch("/api/admin/videos", {
-          method: "DELETE",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ids: chunk }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload?.error || "Unable to delete the selected videos");
+        chunks.push(ids.slice(index, index + DELETE_CHUNK));
+      }
+      const results = await Promise.all(
+        chunks.map(async (chunk) => {
+          const response = await fetch("/api/admin/videos", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: chunk }),
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(payload?.error || "Unable to delete the selected videos");
+          return payload as { deleted?: string[]; failed?: Array<{ id: string }> };
+        }),
+      );
+      for (const payload of results) {
         for (const id of payload.deleted || []) deleted.add(String(id));
         if (payload.failed?.length) {
           throw new Error(
@@ -357,17 +369,23 @@ export default function VideoManager({
           );
         }
       }
-      setVideos((current) => current.filter((video) => !deleted.has(video.id)));
-      setSelected((current) => {
-        const next = new Set(current);
-        for (const id of deleted) next.delete(id);
-        return next;
-      });
+      const leftover = ids.filter((id) => !deleted.has(id));
+      if (leftover.length) {
+        setSelected(new Set(leftover));
+      }
       setBulkNotice(`Deleted ${deleted.size} video${deleted.size === 1 ? "" : "s"}.`);
     } catch (error) {
       setBulkError(error instanceof Error ? error.message : "Could not delete the selected videos");
-      if (deleted.size) {
-        setVideos((current) => current.filter((video) => !deleted.has(video.id)));
+      const restore = ids.filter((id) => !deleted.has(id));
+      if (restore.length) {
+        setVideos((current) => {
+          const have = new Set(current.map((video) => video.id));
+          return [
+            ...current,
+            ...selectedVideos.filter((video) => restore.includes(video.id) && !have.has(video.id)),
+          ];
+        });
+        setSelected(new Set(restore));
       }
     } finally {
       setBulkBusy("");
