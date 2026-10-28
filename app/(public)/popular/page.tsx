@@ -8,7 +8,8 @@ export const revalidate = 30;
 
 export const metadata: Metadata = publicPageMetadata({
   title: "Popular Videos",
-  description: "Discover popular videos on Erobabe, ordered by views. Explore the collection and browse related categories. Exclusively for adults aged 18 and over.",
+  description:
+    "Most-viewed adult videos on erobabe, ordered by recorded watch-page views. 18+ only.",
   alternates: { canonical: `${SITE_URL}/popular` },
 });
 

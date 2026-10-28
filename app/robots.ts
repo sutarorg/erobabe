@@ -1,6 +1,8 @@
 import type { MetadataRoute } from "next";
 import { getSiteUrl } from "@/lib/site";
 
+const DISALLOW = ["/admin", "/checkout", "/auth", "/api/"];
+
 export default function robots(): MetadataRoute.Robots {
   const siteUrl = getSiteUrl();
 
@@ -8,15 +10,26 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: "*",
-        allow: ["/", "/video/", "/category/", "/categories", "/latest", "/popular", "/about", "/terms", "/privacy", "/contact", "/faq", "/content-removal"],
-        disallow: ["/admin", "/checkout", "/auth", "/api/"],
+        allow: "/",
+        disallow: DISALLOW,
       },
       {
         userAgent: "Googlebot",
-        allow: ["/", "/video/", "/category/", "/categories", "/latest", "/popular"],
-        disallow: ["/admin", "/checkout", "/auth", "/api/"],
+        allow: "/",
+        disallow: DISALLOW,
+      },
+      {
+        userAgent: "Googlebot-Image",
+        allow: "/",
+        disallow: DISALLOW,
+      },
+      {
+        userAgent: "Googlebot-Video",
+        allow: "/",
+        disallow: DISALLOW,
       },
     ],
     sitemap: [`${siteUrl}/sitemap.xml`, `${siteUrl}/video-sitemap.xml`],
+    host: siteUrl.replace(/^https?:\/\//, ""),
   };
 }

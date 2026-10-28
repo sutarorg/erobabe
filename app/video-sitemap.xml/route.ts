@@ -39,6 +39,10 @@ export async function GET() {
       const source = selectPlaybackSource(v.playable_url, v.embed_url, v.provider);
       if (!v.thumbnail_url || !v.title || (source.kind !== "direct" && source.kind !== "embed")) return [];
       const loc = `${siteUrl}/video/${v.slug}`;
+      const modified = v.updated_at || v.published_at;
+      const lastmod = modified
+        ? `<lastmod>${new Date(modified).toISOString()}</lastmod>`
+        : "";
       const thumb = v.thumbnail_url
         ? `<video:thumbnail_loc>${escapeXml(v.thumbnail_url)}</video:thumbnail_loc>`
         : "";
@@ -57,6 +61,7 @@ export async function GET() {
       return `
   <url>
     <loc>${escapeXml(loc)}</loc>
+    ${lastmod}
     <video:video>
       ${thumb}
       ${title}

@@ -2,6 +2,9 @@ import { publicPageMetadata } from "@/lib/metadata/page";
 import Link from "next/link";
 import { SITE_URL } from "@/lib/site";
 import { getPublicCategories } from "@/lib/public/catalog";
+import Breadcrumbs from "@/src/components/Breadcrumbs";
+import JsonLd from "@/src/components/JsonLd";
+import { collectionPageJsonLd } from "@/lib/seo/json-ld";
 import type { Metadata } from "next";
 
 export const revalidate = 60;
@@ -17,7 +20,15 @@ export default async function CategoriesPage() {
 
   return (
     <div className="pt-4">
-      <p className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">Browse</p>
+      <JsonLd
+        data={collectionPageJsonLd({
+          name: "All Categories",
+          description: "Explore Erobabe video categories to find published adult videos by interest. 18+ only.",
+          path: "/categories",
+        })}
+      />
+      <Breadcrumbs items={[{ name: "Home", path: "/" }, { name: "Categories", path: "/categories" }]} />
+      <p className="mt-3 text-[10.5px] font-semibold uppercase tracking-[0.22em] text-accent">Browse</p>
       <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 className="text-[22px] font-semibold tracking-tight">All Categories</h1>
         <span className="text-[12px] tabular-nums text-ink-3">{categories.length} categories</span>
@@ -40,7 +51,7 @@ export default async function CategoriesPage() {
             {cat.image_url ? (
               <img
                 src={cat.image_url}
-                alt=""
+                alt={`${cat.label} videos`}
                 loading="lazy"
                 className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-50 transition-opacity duration-200 group-hover:opacity-65"
               />

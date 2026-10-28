@@ -7,7 +7,8 @@ import type { Metadata } from "next";
 export const revalidate = 30;
 export const metadata: Metadata = publicPageMetadata({
   title: "Latest Videos",
-  description: "Browse the latest published videos on Erobabe in chronological order. Discover recent additions and explore categories. For adults aged 18 and over.",
+  description:
+    "Newest published adult videos on erobabe, listed in chronological order. 18+ only.",
   alternates: { canonical: `${SITE_URL}/latest` },
 });
 

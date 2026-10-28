@@ -24,12 +24,28 @@ import type { Metadata } from "next";
 
 export const revalidate = 30;
 
-export const metadata: Metadata = publicPageMetadata({
-  title: "erobabe — Premium Adult Entertainment",
-  description:
-    "Your destination for discovering premium adult entertainment. 18+ adults only.",
-  alternates: { canonical: SITE_URL },
-});
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}): Promise<Metadata> {
+  const { q } = await searchParams;
+  const query = q?.trim().slice(0, 160) || "";
+  if (query) {
+    return publicPageMetadata({
+      title: "Search",
+      description: "Search results on erobabe. Adults 18+ only.",
+      robots: { index: false, follow: true },
+      alternates: { canonical: SITE_URL },
+    });
+  }
+  return publicPageMetadata({
+    title: "erobabe — Adult Videos for 18+",
+    description:
+      "Watch adult videos on erobabe. Browse categories, latest uploads, and popular scenes. 18+ only.",
+    alternates: { canonical: SITE_URL },
+  });
+}
 
 /**
  * Preserve ranked order, then top up from the public catalog when a feed is

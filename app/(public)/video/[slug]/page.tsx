@@ -13,6 +13,9 @@ import {
   selectPlaybackSource,
 } from "@/lib/video/playback";
 import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
+import { iso8601Duration } from "@/lib/seo/duration";
+import JsonLd from "@/src/components/JsonLd";
+import Breadcrumbs from "@/src/components/Breadcrumbs";
 import { SHELF_VIDEO_LIMIT } from "@/lib/public/shelf";
 import VideoActions from "@/src/components/VideoActions";
 import VideoPlayer from "@/src/components/VideoPlayer";
@@ -36,16 +39,25 @@ export async function generateMetadata({
     notFound();
   }
 
+  const description =
+    video.description || `Watch ${video.title} on erobabe. Adult video, 18+ only.`;
+  const pageUrl = `${SITE_URL}/video/${slug}`;
   return {
     title: video.title,
-    description: video.description || `${video.title} — watch on erobabe`,
-    alternates: { canonical: `${SITE_URL}/video/${slug}` },
+    description,
+    alternates: { canonical: pageUrl },
     openGraph: {
       title: video.title,
-      description: video.description || "",
+      description,
       images: video.thumbnail_url ? [video.thumbnail_url] : [],
       type: "video.other",
-      url: `${SITE_URL}/video/${slug}`,
+      url: pageUrl,
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: video.title,
+      description,
+      images: video.thumbnail_url ? [video.thumbnail_url] : [],
     },
   };
 }
@@ -358,6 +370,7 @@ export default async function VideoPage({
     }
   })();
 
+  const watchUrl = `${SITE_URL}/video/${video.slug}`;
   const videoJsonLd = {
     "@context": "https://schema.org",
     "@type": "VideoObject",
@@ -368,9 +381,11 @@ export default async function VideoPage({
       ? new Date(video.published_at).toISOString()
       : undefined,
     duration: video.duration_seconds
-      ? `PT${video.duration_seconds}S`
+      ? iso8601Duration(video.duration_seconds)
       : undefined,
-    // Search engines want the file, not the third-party page it came from.
+    url: watchUrl,
+    mainEntityOfPage: watchUrl,
+    // Search engines want the file bytes, not the HTML watch page.
     contentUrl:
       playbackSource.kind === "direct" ? playbackSource.url : undefined,
     embedUrl: playbackSource.kind === "embed" ? playbackSource.url : undefined,
@@ -383,22 +398,22 @@ export default async function VideoPage({
       },
     },
     isFamilyFriendly: false,
+    inLanguage: "en",
   };
+
+  const crumbs = [
+    { name: "Home", path: "/" },
+    ...(video.category?.slug
+      ? [{ name: video.category.label || video.category.slug, path: `/category/${video.category.slug}` }]
+      : [{ name: "Videos", path: "/latest" }]),
+    { name: video.title, path: `/video/${video.slug}` },
+  ];
 
   return (
     <div className="pt-4">
       <ViewTracker videoId={video.id} />
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(videoJsonLd).replace(/</g, "\\u003c") }}
-      />
-
-      <Link
-        href="/"
-        className="inline-flex items-center gap-1.5 text-[12px] font-medium text-ink-3 hover:text-accent"
-      >
-        ← Back to home
-      </Link>
+      <JsonLd data={videoJsonLd} />
+      <Breadcrumbs items={crumbs} />
 
       {/* Instant play starts before React hydrates: connect to the host the
           player will use, and fetch the poster only when one is displayed. */}

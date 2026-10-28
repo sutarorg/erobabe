@@ -34,6 +34,7 @@ it("serializes empty and populated eligible-query results with escaped XML", asy
   expect(xml).toContain("<video:duration>120</video:duration>");
   expect(xml).toContain("/video/fixture");
   expect(xml).toContain("<video:content_loc>https://cdn.example.com/video.mp4</video:content_loc>");
+  expect(xml).toContain("<lastmod>2026-01-01T00:00:00.000Z</lastmod>");
 });
 
 it("paginates beyond Supabase's default row cap and reflects deletions on the next request", async () => {

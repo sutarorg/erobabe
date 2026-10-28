@@ -6,7 +6,8 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = publicPageMetadata({
   title: "About",
-  description: "About erobabe — premium adult entertainment platform",
+  description:
+    "What erobabe is: an adult video catalog for viewers 18 and older, with curated categories and third-party hosted streams.",
   alternates: { canonical: `${SITE_URL}/about` },
 });
 
