@@ -330,7 +330,7 @@ describe("DELETE /api/admin/videos — bulk delete", () => {
   it("refuses an empty or oversized bulk request", async () => {
     setup();
     expect((await DELETE(jsonRequest("/api/admin/videos", { ids: [] }, "DELETE"))).status).toBe(400);
-    const many = Array.from({ length: 201 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
+    const many = Array.from({ length: 501 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
     expect((await DELETE(jsonRequest("/api/admin/videos", { ids: many }, "DELETE"))).status).toBe(400);
   });
 });
