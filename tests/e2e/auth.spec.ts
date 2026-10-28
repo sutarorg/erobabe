@@ -1,12 +1,11 @@
 import { test, expect } from "@playwright/test";
 
 test.describe("Authentication", () => {
-  test("sign-in page loads", async ({ page }) => {
-    await page.goto("/auth/sign-in");
-    await expect(page.locator("h1")).toContainText(/sign in/i);
-    await expect(
-      page.getByRole("link", { name: /back to home/i }),
-    ).toHaveAttribute("href", "/");
+  test("public sign-in is not offered", async ({ page }) => {
+    const response = await page.goto("/auth/sign-in");
+    expect(response?.status()).toBe(404);
+    await page.goto("/");
+    await expect(page.getByRole("link", { name: /sign in/i })).toHaveCount(0);
   });
 
   test("guest advertising checkout loads without signing in", async ({ page }) => {
@@ -25,10 +24,10 @@ test.describe("Authentication", () => {
     await expect(page).toHaveURL(/\/admin\/signin/);
   });
 
-  test("unauthenticated access to /advertiser redirects to sign-in", async ({
+  test("unauthenticated access to /advertiser is not a portal", async ({
     page,
   }) => {
-    await page.goto("/advertiser");
-    await expect(page).toHaveURL(/\/auth\/sign-in/);
+    const response = await page.goto("/advertiser");
+    expect(response?.status()).toBe(404);
   });
 });
