@@ -62,11 +62,9 @@ describe("video player", () => {
     // Hotlink protection rejects a foreign referer but allows none.
     expect(video).toHaveAttribute("referrerpolicy", "no-referrer");
     expect(container.querySelector("iframe")).toBeNull();
-    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Back 10 seconds" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Forward 10 seconds" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Playback speed" })).toBeInTheDocument();
-    expect(screen.getByRole("slider", { name: "Seek" })).toBeInTheDocument();
+    expect(video).toHaveAttribute("controls");
+    expect(video).toHaveAttribute("controlslist", "nodownload noremoteplayback");
+    expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
     // The proxy is still there, second — it is not the first request.
     expect(playbackCandidates(damplipsFile)).toEqual([damplipsFile, damplipsProxy]);
   });
@@ -127,8 +125,8 @@ describe("video player", () => {
 
     expect(container.querySelector("video")).toBe(video);
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
-    expect(video).not.toHaveAttribute("controls");
-    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(video).toHaveAttribute("controls");
+    expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
 
     // A file is never "prepared": the element streams it and shows its own
     // progress, so no overlay may claim otherwise.
@@ -178,11 +176,11 @@ describe("video player", () => {
     expect(container.querySelector("video")).toBe(video);
   });
 
-  it("says what it is doing for a destination that must be resolved first", () => {
-    // A post page is HTML: the proxy has to turn it into media, and that is
-    // worth a status line.
+  it("does not show a preparing overlay while a post page streams", () => {
+    // Resolution belongs at import time; the watch page must not stall on copy.
     render(<VideoPlayer {...props} provider="damplips" embedUrl="https://www.damplips.com/p/67284/" />);
-    expect(screen.getByRole("status")).toHaveTextContent("Preparing video");
+    expect(screen.queryByText(/Preparing video/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
   });
 
   it("leaves a file that is downloading alone even past the stall deadline", () => {
@@ -359,7 +357,7 @@ describe("video player", () => {
     const { container, rerender } = render(
       <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,
     );
-    expect(container.querySelector("video")).not.toHaveAttribute("controls");
+    expect(container.querySelector("video")).toHaveAttribute("controls");
 
     rerender(
       <VideoPlayer
@@ -369,12 +367,12 @@ describe("video player", () => {
       />,
     );
 
-    expect(container.querySelector("video")).not.toHaveAttribute("controls");
+    expect(container.querySelector("video")).toHaveAttribute("controls");
     expect(container.querySelector("video")).toHaveAttribute(
       "src",
       "https://cdn.example.com/a.mp4",
     );
-    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
   });
 
   it("falls back to the stream proxy when the host refuses the direct file", async () => {
