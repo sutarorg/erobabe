@@ -327,6 +327,41 @@ damplips → proxy → browser. Deploying the app in a region close to damplips'
 CDN is the single biggest remaining lever, and the edge cache headers above let
 a CDN absorb repeat traffic instead of hitting a function per range request.
 
+## Why playback is direct-first, and why the proxy cannot rescue it
+
+Measured against production (`https://erobabe.vercel.app`), 2026-10-28:
+
+```
+GET /api/videos/stream?src=https://video.damplips.com/video7/717/43.mp4&debug=1
+profiles: chrome / firefox / chrome-cross-site / curl / plain
+  → all 403, text/html, reason "Just a moment..."
+```
+
+`Just a moment...` is **Cloudflare's managed challenge**. It is passed by running
+JavaScript in a browser and returning a `cf_clearance` cookie bound to that
+browser's IP and user-agent. A Node function cannot satisfy it — not with a
+Chrome user-agent, not with client hints, not with a TLS fingerprint, not by
+retrying. The same file answers `200 video/mp4`, `Accept-Ranges: bytes` to a
+plain HTTP client elsewhere, and loads instantly in a real browser, so the file,
+the host and hotlink rules are all fine; only our datacenter egress is
+challenged.
+
+Consequences, which the code follows:
+
+- **Playback is direct-first.** The browser fetches `video.damplips.com`
+  itself (`referrerpolicy="no-referrer"`, `preload="auto"`). That is the request
+  Cloudflare expects from a browser and the one that works.
+- **The proxy is a fallback, not a rescue.** For a visitor whose network blocks
+  the media host it will fail with `502` and `x-media-block: challenge`, because
+  our function meets the same challenge. Do not "fix" that by adding headers —
+  `?debug=1` will show the same `Just a moment...` for every client.
+- **The player explains it.** On failure it shows the destination, host
+  reachability and the element's own error, and offers *Open the video
+  directly*: a top-level navigation can solve the challenge a `<video>` cannot,
+  and after that *Retry playback* returns to the direct file.
+- **Do not chase this with fingerprints again.** Check `?debug=1` first: a
+  `challenge: true` means the host wants a browser, and no request shape helps.
+
 ## Operational notes
 
 - **Source credit.** The watch page does not display a "Source: damplips.com"

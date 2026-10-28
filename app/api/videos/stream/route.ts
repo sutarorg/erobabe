@@ -329,6 +329,9 @@ async function requestUpstream(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), upstreamTimeoutMs());
     if (typeof timer === "object" && "unref" in timer) timer.unref();
+    // Recorded for the diagnostic response; marked below when the answer is a
+    // challenge or an HTML block, so one request is always one entry.
+    const attempt: UpstreamAttempt = { profile: profile.name, status: null };
     try {
       response = await fetch(url, {
         headers: { ...base, ...profile.headers },
@@ -343,12 +346,13 @@ async function requestUpstream(
         response.ok &&
         isMediaPath(url) &&
         isHtmlContentType(response.headers.get("content-type"));
+      attempt.status = response.status;
+      log?.push(attempt);
       if (challenged) {
-        log?.push({ profile: profile.name, status: response.status, html: true });
+        attempt.html = true;
         void response.body?.cancel().catch(() => undefined);
         continue;
       }
-      log?.push({ profile: profile.name, status: response.status });
     } catch (error) {
       // A refused connection, a DNS failure and a host that never answered in
       // time all mean the same thing: this destination is dead. Failing fast
@@ -368,7 +372,7 @@ async function requestUpstream(
     // and solved by a browser, not by a header. Trying the other four clients
     // would only spend four more round trips to be told the same thing.
     if (await isChallengePage(response)) {
-      log?.push({ profile: profile.name, status: response.status, challenge: true });
+      attempt.challenge = true;
       void response.body?.cancel().catch(() => undefined);
       return CHALLENGE;
     }
@@ -446,6 +450,9 @@ async function probeProfiles(base: Record<string, string>, url: URL): Promise<Pr
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), upstreamTimeoutMs());
     if (typeof timer === "object" && "unref" in timer) timer.unref();
+    // Recorded for the diagnostic response; marked below when the answer is a
+    // challenge or an HTML block, so one request is always one entry.
+    const attempt: UpstreamAttempt = { profile: profile.name, status: null };
     try {
       const response = await fetch(url, {
         headers: { ...base, ...profile.headers },
