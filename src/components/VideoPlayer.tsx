@@ -115,7 +115,7 @@ function referrerPolicyForCandidate(url: string, index: number): Record<string, 
  * Deliberately generous: a 100+ MB file on a slow line is *downloading*, not
  * stuck, and cutting it over to the proxy would make it slower, not faster.
  */
-export const STALL_TIMEOUT_MS = 2_500;
+export const STALL_TIMEOUT_MS = 12_000;
 
 /** How long the reachability probe may take before it is treated as "blocked". */
 export const PROBE_TIMEOUT_MS = 2_500;
@@ -383,10 +383,13 @@ function NativePlayer({
       // `readyState >= HAVE_METADATA` means the element has the file's
       // information and is genuinely buffering it: leave it alone.
       if ((videoRef.current?.readyState ?? 0) >= 1) return;
+      // The last destination is still in flight — flashing the error panel
+      // over it is what the visitor saw while the edge stream was warming up.
+      if (source >= urls.length - 1) return;
       handleFailure(false);
     }, STALL_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [url, strategy, attempt, started, failed, handleFailure]);
+  }, [url, strategy, attempt, started, failed, handleFailure, source, urls.length]);
 
   // HLS in browsers without native support.
   useEffect(() => {
@@ -559,6 +562,7 @@ function NativePlayer({
         onPlaying={() => {
           dataSeen.current = true;
           setWaiting(false);
+          setFailed(false);
         }}
         onLoadedData={() => {
           dataSeen.current = true;
