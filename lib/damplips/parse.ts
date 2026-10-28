@@ -57,7 +57,18 @@ const BLOCKED_MEDIA_HOSTS = [
 /** Players that may be framed as an embed when damplips publishes one. */
 const APPROVED_EMBED_HOSTS = ["damplips.com", "youtube.com", "youtube-nocookie.com", "vimeo.com"];
 
+const FILE_EXTENSION = /\.(mp4|m4v|webm)(?:[?#]|$)/i;
 const MEDIA_EXTENSION = /\.(mp4|m4v|webm|m3u8)(?:[?#]|$)/i;
+
+/**
+ * A URL the watch page can put on `<video src>` with no extra discovery.
+ *
+ * HLS playlists and damplips post pages still have to be turned into a file at
+ * request time; those are prepared at import instead, or skipped.
+ */
+export function isReadyMediaFile(url: string): boolean {
+  return FILE_EXTENSION.test(url);
+}
 
 const NAMED_ENTITIES: Record<string, string> = {
   amp: "&",
@@ -339,19 +350,14 @@ function collectMediaCandidates(html: string, pageUrl: string): DamplipsMedia[] 
     push("embed", attribute(iframe, "src") || attribute(iframe, "data-src"));
   }
 
-  // Direct files first so import stores a ready-to-play URL (no watch-page
-  // "Preparing" step). Playlists are last among direct sources; embeds after.
-  const files = candidates.filter(
-    (candidate) => candidate.kind === "direct" && !/\.m3u8(\?|$)/i.test(candidate.url),
+  // Only ready files: import stores a URL the watch player can stream with no
+  // extra discovery. Playlists and embeds are not catalog destinations.
+  return candidates.filter(
+    (candidate) => candidate.kind === "direct" && isReadyMediaFile(candidate.url),
   );
-  const playlists = candidates.filter(
-    (candidate) => candidate.kind === "direct" && /\.m3u8(\?|$)/i.test(candidate.url),
-  );
-  const embeds = candidates.filter((candidate) => candidate.kind === "embed");
-  return [...files, ...playlists, ...embeds];
 }
 
-/** The best media destination a post page offers, prefering direct files. */
+/** The best ready file a post page offers, or none. */
 export function parseMedia(html: string, pageUrl = DAMPLIPS_BASE_URL): DamplipsMedia | null {
   return collectMediaCandidates(html, pageUrl)[0] ?? null;
 }

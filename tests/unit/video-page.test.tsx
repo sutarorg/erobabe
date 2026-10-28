@@ -288,30 +288,17 @@ describe("/video/[slug] watch page", () => {
     }
   });
 
-  it("renders the media file directly when the row stores a damplips post page", async () => {
-    // The stored URL is an HTML page; resolving it on the server means the
-    // first byte of video is requested while the document is still parsing.
-    rowState.row = {
-      ...VIDEO_ROW,
-      playable_url: "https://www.damplips.com/p/67284/",
-      embed_url: null,
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response('<html><head><meta property="og:video" content="https://video.damplips.com/videos/67284.mp4"></head></html>', {
-          status: 200,
-          headers: { "content-type": "text/html" },
-        }),
-      ),
-    );
+  it("does not fetch damplips HTML on the watch page to discover a file", async () => {
+    // Discovery belongs at import. The watch page streams whatever file URL
+    // is already stored — it must not wait on a post-page fetch.
+    const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
 
     const html = await renderPage();
     const src = new DOMParser().parseFromString(html, "text/html").querySelector("video")?.getAttribute("src") || "";
 
-    // The player was handed the file (through the proxy), never the page.
-    expect(decodeURIComponent(src)).toContain("https://video.damplips.com/videos/67284.mp4");
-    expect(decodeURIComponent(src)).not.toContain("/p/67284/");
+    expect(src).toBe(VIDEO_ROW.playable_url);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("opens the poster connection before the video is requested", async () => {

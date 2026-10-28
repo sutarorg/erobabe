@@ -102,14 +102,26 @@ describe("post page parsing", () => {
     });
   });
 
-  it("reads a videojs style player configuration", () => {
+  it("ignores a playlist-only player so import never stores HLS", () => {
     const html = `<html><head><meta property="og:title" content="A player configuration post"></head>
       <body><script>
         videojs("player", { sources: [{ file: "https://video.damplips.com/hls/67284/index.m3u8", type: "application/x-mpegURL" }] });
       </script></body></html>`;
-    expect(parseMedia(html, "https://www.damplips.com/p/67284/")?.url).toBe(
-      "https://video.damplips.com/hls/67284/index.m3u8",
-    );
+    expect(parseMedia(html, "https://www.damplips.com/p/67284/")).toBeNull();
+  });
+
+  it("prefers an mp4 when a playlist is also advertised", () => {
+    const html = `<html><head><meta property="og:title" content="Both destinations"></head>
+      <body><script>
+        videojs("player", { sources: [
+          { file: "https://video.damplips.com/hls/67284/index.m3u8", type: "application/x-mpegURL" },
+          { file: "https://video.damplips.com/videos/67284.mp4", type: "video/mp4" }
+        ] });
+      </script></body></html>`;
+    expect(parseMedia(html, "https://www.damplips.com/p/67284/")).toEqual({
+      kind: "direct",
+      url: "https://video.damplips.com/videos/67284.mp4",
+    });
   });
 
   it("prefers a direct file over a framed player", () => {
@@ -158,13 +170,10 @@ describe("post page parsing", () => {
     );
   });
 
-  it("accepts a damplips embed page when the post frames its own player", () => {
+  it("does not import a framed player as the catalog destination", () => {
     const html = `<meta property="og:title" content="A framed damplips player">
       <iframe src="https://www.damplips.com/embed/67284/"></iframe>`;
-    expect(parseMedia(html, "https://www.damplips.com/p/67284/")).toEqual({
-      kind: "embed",
-      url: "https://www.damplips.com/embed/67284/",
-    });
+    expect(parseMedia(html, "https://www.damplips.com/p/67284/")).toBeNull();
   });
 
   it("never takes media from an advertising host", () => {
