@@ -1,4 +1,6 @@
 import { NextRequest } from "next/server";
+import { request as httpsRequest, type RequestOptions } from "node:https";
+import type { ConnectionOptions } from "node:tls";
 import { isDamplipsMediaUrl } from "@/lib/video/playback";
 import { isHlsContentType, isHlsUrl, isHtmlContentType, rewriteHlsPlaylist } from "@/lib/video/hls";
 import { proxiedMediaUrl } from "@/lib/video/media-proxy";
@@ -422,6 +424,121 @@ async function isChallengePage(response: Response): Promise<boolean> {
   return CHALLENGE_MARKERS.some((marker) => marker.test(html));
 }
 
+/**
+ * The transport itself, which no request header can disguise.
+ *
+ * Cloudflare scores the TLS handshake and the HTTP framing as well as the
+ * headers — a Node `fetch` is OpenSSL with `h2`, and both have a shape of their
+ * own. That is the one variable the earlier attempts never changed: every
+ * profile was still undici. These probes ask the same file over HTTP/1.1 with
+ * curl-like and Chrome-like cipher orders, and over h2, so the diagnosis can
+ * say whether the transport is what the host objects to.
+ */
+type TransportProbe = {
+  name: string;
+  status: number | null;
+  contentType?: string | null;
+  contentLength?: string | null;
+  acceptRanges?: string | null;
+  alpn?: string | null;
+  challenge?: boolean;
+  reason?: string;
+  error?: string;
+};
+
+/** curl's default order; what a monitoring or CLI client negotiates. */
+const CURL_CIPHERS =
+  "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:EECDH+AESGCM:EDH+AESGCM";
+/** Chrome's order, GREASE aside (OpenSSL cannot emit GREASE). */
+const CHROME_CIPHERS =
+  "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384";
+
+/** A header as a single string: Node types them as string | string[]. */
+function header(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
+
+function httpsProbe(
+  name: string,
+  url: URL,
+  options: { headers: Record<string, string>; alpn: string[]; ciphers: string },
+): Promise<TransportProbe> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (probe: TransportProbe) => {
+      if (settled) return;
+      settled = true;
+      resolve(probe);
+    };
+    const connect: RequestOptions & ConnectionOptions = {
+      hostname: url.hostname,
+      port: 443,
+      path: `${url.pathname}${url.search}`,
+      method: "GET",
+      headers: options.headers,
+      servername: url.hostname,
+      ALPNProtocols: options.alpn,
+      ciphers: options.ciphers,
+      minVersion: "TLSv1.2",
+      timeout: upstreamTimeoutMs(),
+    };
+    const request = httpsRequest(connect, (response) => {
+      response.on("error", () => undefined);
+      const probe: TransportProbe = {
+        name,
+        status: response.statusCode ?? null,
+        contentType: header(response.headers["content-type"]),
+        contentLength: header(response.headers["content-length"]),
+        acceptRanges: header(response.headers["accept-ranges"]),
+        alpn: (response.socket as { alpnProtocol?: string | false } | null)?.alpnProtocol || null,
+      };
+      if (!response.statusCode || response.statusCode >= 400) {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        response.on("data", (chunk: Buffer) => {
+          // Enough of a refusal to name it; never read a body that is a file.
+          if (size > 16_384) return;
+          chunks.push(chunk);
+          size += chunk.length;
+        });
+        response.on("end", () => {
+          const html = Buffer.concat(chunks).toString("utf8");
+          probe.challenge = CHALLENGE_MARKERS.some((marker) => marker.test(html));
+          probe.reason = pageReason(html);
+          done(probe);
+        });
+        return;
+      }
+      // A 200/206 is the file: close without reading a byte of it.
+      response.destroy();
+      done(probe);
+    });
+    request.on("timeout", () => {
+      request.destroy();
+      done({ name, status: null, error: "timed out" });
+    });
+    request.on("error", (error: Error) => done({ name, status: null, error: error.message }));
+    request.end();
+  });
+}
+
+/** Ask the same file over each transport the runtime can produce. */
+async function probeTransports(url: URL): Promise<TransportProbe[]> {
+  const chrome = HEADER_PROFILES[0].headers;
+  const curl = HEADER_PROFILES[3].headers;
+  return Promise.all([
+    httpsProbe("h1+curl", url, { headers: curl, alpn: ["http/1.1"], ciphers: CURL_CIPHERS }),
+    httpsProbe("h1+chrome", url, { headers: chrome, alpn: ["http/1.1"], ciphers: CHROME_CIPHERS }),
+    httpsProbe("h2+chrome", url, { headers: chrome, alpn: ["h2", "http/1.1"], ciphers: CHROME_CIPHERS }),
+    httpsProbe("h1+curl+referer", url, {
+      headers: { ...curl, referer: MEDIA_REFERER },
+      alpn: ["http/1.1"],
+      ciphers: CURL_CIPHERS,
+    }),
+  ]);
+}
+
 /** Everything one client learned from the media host, for `?debug=1`. */
 type ProfileProbe = {
   profile: string;
@@ -579,6 +696,7 @@ async function proxy(req: NextRequest): Promise<Response> {
           attempts,
           upstream: summary,
           profiles,
+          transports: await probeTransports(current),
         },
         { headers: { "cache-control": "no-store" } },
       );
