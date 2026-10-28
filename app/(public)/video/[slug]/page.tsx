@@ -8,8 +8,9 @@ import { getPublicCategories, type PublicVideo } from "@/lib/public/catalog";
 import ViewTracker from "@/src/components/ViewTracker";
 import { createClient } from "@/lib/supabase/server";
 import {
-  isDamplipsMediaUrl,
   isDamplipsPostPage,
+  isStreamProxyUrl,
+  playbackCandidates,
   selectPlaybackSource,
 } from "@/lib/video/playback";
 import { resolvePageMedia, resolveWithin } from "@/lib/video/page-media";
@@ -327,16 +328,24 @@ export default async function VideoPage({
     video.embed_url,
     video.provider,
   );
-  let mediaOrigin: string | null = null;
-  if (playbackSource.kind === "direct" && !isDamplipsMediaUrl(playbackSource.url)) {
-    // A damplips file is fetched by our proxy, not by the browser, so there is
-    // no connection to open; any other direct host is contacted directly.
-    try {
-      mediaOrigin = new URL(playbackSource.url).origin;
-    } catch {
-      mediaOrigin = null;
-    }
-  }
+  // The player tries its candidates in order, so the first one is what the
+  // browser contacts. When that is the media host itself (a direct file) the
+  // connection can be opened while the document is still parsing; when it is
+  // our own proxy there is nothing to warm up. This is why the first frame can
+  // arrive as fast as it does — the video element is not waiting on a server
+  // hop through Cloudflare before it can buffer anything.
+  const firstCandidate =
+    playbackSource.kind === "direct" ? playbackCandidates(playbackSource.url)[0] : null;
+  const mediaOrigin =
+    firstCandidate && !isStreamProxyUrl(firstCandidate)
+      ? (() => {
+          try {
+            return new URL(firstCandidate).origin;
+          } catch {
+            return null;
+          }
+        })()
+      : null;
   // An embed plays inside someone else's player, so warm that host instead of
   // the poster: the thumbnail is not shown before playback anymore.
   const embedOrigin = (() => {

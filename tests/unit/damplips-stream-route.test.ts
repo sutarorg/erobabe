@@ -471,6 +471,81 @@ describe("fast playback", () => {
   });
 });
 
+describe("upstream safety", () => {
+  it("never leaves a request hanging on a host that does not answer", async () => {
+    // A media host that accepts the connection and then says nothing used to
+    // hold the function — and the player, on "Preparing video…" — until the
+    // platform timed it out. The deadline turns that into a normal failure.
+    process.env.MEDIA_UPSTREAM_TIMEOUT_MS = "1000";
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation(
+        (_url: unknown, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () =>
+              reject(new DOMException("The operation was aborted.", "AbortError")),
+            );
+          }),
+      );
+
+      const pending = GET(new NextRequest(PROXY));
+      await vi.advanceTimersByTimeAsync(1_100);
+      const response = await pending;
+
+      expect(response.status).toBe(502);
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      vi.useRealTimers();
+      delete process.env.MEDIA_UPSTREAM_TIMEOUT_MS;
+    }
+  });
+
+  it("names the container when the host only says application/octet-stream", async () => {
+    // Every response from this app carries `X-Content-Type-Options: nosniff`,
+    // so a `<video>` handed a generic binary type is at the mercy of sniffing.
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array([1, 2, 3, 4]), {
+        status: 200,
+        headers: { "content-type": "application/octet-stream", "content-length": "4" },
+      }),
+    );
+
+    const response = await GET(new NextRequest(PROXY));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("video/mp4");
+  });
+
+  it("keeps the type the host declared", async () => {
+    const response = await GET(new NextRequest(PROXY));
+    expect(response.headers.get("content-type")).toBe("video/mp4");
+  });
+
+  it("does not advertise range support the host never offered", async () => {
+    // Claiming `bytes` against a host that ignores Range makes a seeking player
+    // re-download the whole file on every seek and stall doing it.
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array([1, 2, 3, 4]), {
+        status: 200,
+        headers: { "content-type": "video/mp4", "content-length": "4" },
+      }),
+    );
+    const response = await GET(new NextRequest(PROXY));
+    expect(response.headers.get("accept-ranges")).toBeNull();
+
+    // But a 206 is proof the host understands ranges.
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array([1, 2, 3, 4]), {
+        status: 206,
+        headers: { "content-type": "video/mp4", "content-range": "bytes 0-3/1000" },
+      }),
+    );
+    const partial = await GET(new NextRequest(PROXY, { headers: { range: "bytes=0-3" } }));
+    expect(partial.headers.get("accept-ranges")).toBe("bytes");
+  });
+});
+
 describe("isPrivateHost", () => {
   it.each([
     "localhost",
