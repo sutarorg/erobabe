@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import type { ConnectionOptions } from "node:tls";
+import { gunzipSync } from "node:zlib";
 import { isDamplipsMediaUrl } from "@/lib/video/playback";
 import { isHlsContentType, isHlsUrl, isHtmlContentType, rewriteHlsPlaylist } from "@/lib/video/hls";
 import { proxiedMediaUrl } from "@/lib/video/media-proxy";
@@ -442,6 +443,9 @@ type TransportProbe = {
   acceptRanges?: string | null;
   alpn?: string | null;
   challenge?: boolean;
+  /** Whether the refusal may be shown in a frame at all. */
+  frameOptions?: string | null;
+  frameAncestors?: string | null;
   reason?: string;
   error?: string;
 };

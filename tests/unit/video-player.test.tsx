@@ -20,6 +20,8 @@ const props = {
 };
 const damplipsFile = "https://video.damplips.com/videos/67284.mp4";
 const damplipsProxy = `/api/videos/stream?src=${encodeURIComponent(damplipsFile)}`;
+/** A post page has no file to frame: the proxy is the only destination. */
+const damplipsPostPage = "https://www.damplips.com/p/67284/";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -258,44 +260,54 @@ describe("video player", () => {
     expect(init.referrerPolicy).toBe("no-referrer");
   });
 
-  it("reports what failed instead of a blank 'could not be loaded'", () => {
+  it("plays the host's file in a frame when the element cannot", async () => {
+    // A <video> element cannot pass a browser check: it has no document and no
+    // JavaScript. A frame does, so the same URL that failed as a source is
+    // loaded as a document instead — that is what makes a challenged host's
+    // video playable at all.
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
     const fail = (element: HTMLVideoElement) => {
-      Object.defineProperty(element, "error", { value: { code: 2 }, configurable: true });
+      Object.defineProperty(element, "error", { value: { code: 4 }, configurable: true });
       fireEvent.error(element);
     };
-    // A network failure moves straight to the next destination, then fails.
+    // Direct file fails, the other strategy fails, the proxy fails.
+    fail(container.querySelector("video")!);
     fail(container.querySelector("video")!);
     fail(container.querySelector("video")!);
 
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(/could not be loaded/i);
-    // The destination and the browser's own error code are on the page, so a
-    // report can be acted on without a screen recording.
-    expect(container.textContent).toContain(damplipsProxy);
-    expect(container.textContent).toMatch(/media error 2 \(network\)/);
-    expect(screen.getByText("Technical details")).toBeInTheDocument();
+    const frame = await waitFor(() => {
+      const found = container.querySelector("iframe");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(frame).toHaveAttribute("src", damplipsFile);
+    expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
+    // The bare failure panel is replaced, not stacked underneath.
+    expect(screen.queryByText(/could not be loaded/i)).toBeNull();
+    expect(container.textContent).toMatch(/playing the host's own file/i);
   });
 
-  it("offers the direct file when playback fails everywhere", () => {
-    // A host that only serves browsers that have proven themselves cannot be
-    // proxied; opening the file in a real navigation is the way through.
+  it("still explains a dead end when there is no frame to fall back to", () => {
+    // A proxied-only destination is our own route: there is nothing to frame,
+    // so the panel has to carry the diagnosis.
     const { container } = render(
-      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
+      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsPostPage} />,
     );
     const fail = (element: HTMLVideoElement) => {
       Object.defineProperty(element, "error", { value: { code: 2 }, configurable: true });
       fireEvent.error(element);
     };
-    // Direct file fails, then the proxy fails: nothing left to try.
-    fail(container.querySelector("video")!);
     fail(container.querySelector("video")!);
 
-    const link = screen.getByRole("link", { name: /open the video directly/i });
-    expect(link).toHaveAttribute("href", damplipsFile);
-    expect(link).toHaveAttribute("rel", "noreferrer noopener");
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent(/could not be loaded/i);
+    expect(container.textContent).toContain(
+      `/api/videos/stream?src=${encodeURIComponent(damplipsPostPage)}`,
+    );
+    expect(container.textContent).toMatch(/media error 2 \(network\)/);
+    expect(screen.getByText("Technical details")).toBeInTheDocument();
   });
 
   it("does not mount untrusted generic iframe URLs", () => {
@@ -346,9 +358,12 @@ describe("video player", () => {
     expect(retried).not.toHaveAttribute("referrerpolicy");
     expect(screen.queryByRole("alert")).toBeNull();
 
+    // Both destinations failed. The element cannot pass a browser check, but a
+    // frame can, so the host's own file is loaded as a document instead.
     fireEvent.error(retried);
-    expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
-    expect(screen.getByRole("button", { name: "Retry playback" })).toBeInTheDocument();
+    expect(container.querySelector("iframe")).toHaveAttribute("src", damplipsFile);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry in player" })).toBeInTheDocument();
   });
 
   it("returns to the first destination when the visitor retries", () => {
@@ -357,7 +372,8 @@ describe("video player", () => {
     );
     fireEvent.error(container.querySelector("video")!);
     fireEvent.error(container.querySelector("video")!);
-    fireEvent.click(screen.getByRole("button", { name: "Retry playback" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry in player" }));
+    expect(container.querySelector("iframe")).toBeNull();
     expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
   });
 

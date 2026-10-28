@@ -136,6 +136,44 @@ export const PROBE_TIMEOUT_MS = 2_500;
  * means the direct file is not an option for this visitor, and the proxy behind
  * it is tried instead.
  */
+/**
+ * What the media host actually answered the *browser*, not just "reachable".
+ *
+ * A `no-cors` request cannot read a status, so a block page and a real file look
+ * identical — which is exactly how a visitor ends up with "media host reachable:
+ * yes" and a dead player. damplips' media host sends `Access-Control-Allow-Origin:
+ * *`, so a CORS `HEAD` can be read: a `video/*` answer means the bytes are
+ * available to this browser, an `text/html` one means the host (or the visitor's
+ * ISP) answered with a document instead of the file.
+ */
+export type DirectProbe = { status: number | null; contentType: string | null };
+
+export async function probeDirectSource(
+  url: string,
+  timeoutMs = PROBE_TIMEOUT_MS,
+): Promise<DirectProbe | null> {
+  if (typeof fetch !== "function") return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: "HEAD",
+      mode: "cors",
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      signal: controller.signal,
+    });
+    return { status: response.status, contentType: response.headers.get("content-type") };
+  } catch {
+    // No CORS grant, a connection reset or a timeout: the browser cannot read
+    // this resource, which is itself the answer.
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function mediaHostReachable(url: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
   if (typeof fetch !== "function") return true;
   const controller = new AbortController();
@@ -207,10 +245,11 @@ function NativePlayer({
   const [waiting, setWaiting] = useState(false);
   const [failed, setFailed] = useState(false);
   /** What actually went wrong, for the "Technical details" block. */
-  const [diagnosis, setDiagnosis] = useState<{ error: string | null; hostReachable: boolean | null }>({
-    error: null,
-    hostReachable: null,
-  });
+  const [diagnosis, setDiagnosis] = useState<{
+    error: string | null;
+    hostReachable: boolean | null;
+    direct: DirectProbe | null | undefined;
+  }>({ error: null, hostReachable: null, direct: undefined });
 
   // Media events fire outside React's render cycle, so the handlers below read
   // "has the visitor pressed play" from a ref.
@@ -219,6 +258,13 @@ function NativePlayer({
   }, [started]);
 
   const url = urls[Math.min(source, urls.length - 1)];
+  /**
+   * The destination that can be loaded as a *document* when the element fails.
+   * A proxied URL is our own route and has nothing to show in a frame; a direct
+   * host file is exactly what the frame is for.
+   */
+  const frameUrl =
+    urls.length > 1 && isDamplipsMediaUrl(urls[0]) ? urls[0] : null;
 
   /**
    * A source that fails is retried in the other strategy, then replaced by the
@@ -254,7 +300,15 @@ function NativePlayer({
 
     setFailed(true);
     onTrack("playback_error");
-  }, [isHls, onTrack, source, triedAlternative, urls.length]);
+    // Ask the browser once what the direct file actually returns, so the panel
+    // can say "403 text/html" instead of "could not be loaded".
+    const direct = urls[0];
+    if (direct && !isStreamProxyUrl(direct)) {
+      void probeDirectSource(direct).then((answer) =>
+        setDiagnosis((current) => ({ ...current, direct: answer })),
+      );
+    }
+  }, [isHls, onTrack, source, triedAlternative, urls]);
 
   /**
    * Ask the media host whether it is reachable at all, and if it is not, move
@@ -546,7 +600,47 @@ function NativePlayer({
         </p>
       )}
 
-      {failed && (
+      {/*
+        A media element cannot pass a browser check — it has no JavaScript and
+        no document. A frame can. When everything in the element has failed but
+        the host publishes the file at a URL this page may frame, the file is
+        loaded *as a document* instead: the check runs in the frame, and the
+        browser's own player takes over. This is what makes a challenged host's
+        video playable at all.
+      */}
+      {failed && frameUrl && (
+        <div className="absolute inset-0 flex flex-col bg-black">
+          <iframe
+            src={frameUrl}
+            title={title}
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            referrerPolicy="no-referrer"
+            className="h-full w-full border-0 bg-black"
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2 bg-black/95 px-3 py-2 text-[11px] text-white/80">
+            <span role="status">
+              Playing the host&apos;s own file. If a browser check appears, complete it.
+            </span>
+            <span className="flex items-center gap-3">
+              <button type="button" onClick={retry} className="inline-flex items-center gap-1 underline">
+                <RotateCcw className="h-3 w-3" aria-hidden />
+                Retry in player
+              </button>
+              <a
+                href={frameUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="inline-flex items-center gap-1 underline"
+              >
+                <ExternalLink className="h-3 w-3" aria-hidden />
+                Open
+              </a>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {failed && !frameUrl && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/90 p-4 text-center text-sm text-white">
           <p role="alert">
             The video could not be loaded. The source may be unavailable or
@@ -590,6 +684,14 @@ function NativePlayer({
             <ul className="mt-2 space-y-0.5 break-all font-mono">
               <li>source: {url}</li>
               <li>media host reachable: {diagnosis.hostReachable === null ? "unknown" : diagnosis.hostReachable ? "yes" : "no"}</li>
+              <li>
+                direct answer:{" "}
+                {diagnosis.direct === undefined
+                  ? "not checked"
+                  : diagnosis.direct === null
+                    ? "unreadable (blocked, or no CORS grant)"
+                    : `${diagnosis.direct.status ?? "?"} ${diagnosis.direct.contentType ?? ""}`.trim()}
+              </li>
               <li>last error: {diagnosis.error || "none reported by the browser"}</li>
               <li>destinations tried: {urls.length}</li>
             </ul>
