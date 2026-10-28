@@ -171,15 +171,15 @@ describe("GET /api/videos/stream-edge", () => {
     expect(await response.text()).toBe("");
   });
 
-  it("passes a conditional request through and keeps a 304 cheap", async () => {
-    fetchMock.mockResolvedValueOnce(
+  it("does not hand a 304 to the player", async () => {
+    fetchMock.mockResolvedValue(
       new Response(null, { status: 304, headers: { etag: '"abc"' } }),
     );
     const { GET } = await route();
 
     const response = await GET(new NextRequest(PROXY, { headers: { "if-none-match": '"abc"' } }));
 
-    expect(response.status).toBe(304);
-    expect(response.headers.get("etag")).toBe('"abc"');
+    expect(response.status).toBe(502);
+    expect(fetchMock.mock.calls[0][1].headers["if-none-match"]).toBeUndefined();
   });
 });

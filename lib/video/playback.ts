@@ -113,7 +113,9 @@ export function playbackCandidates(url: string): string[] {
   // player spinning for many seconds. The edge proxy already has the right
   // referer and is not challenged, so it is the first request; the raw file
   // stays as a fallback.
-  return [edgeStreamUrl(url), url];
+  // Only the edge proxy: a raw host request from this origin is what produced
+  // "media error 4" after the proxy already failed (hotlink / no referer).
+  return [edgeStreamUrl(url)];
 }
 
 function safeUrl(raw: string | null | undefined, allowedProtocols: RegExp): URL | null {

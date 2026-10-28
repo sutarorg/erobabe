@@ -63,9 +63,6 @@ const MEDIA_CACHE_CONTROL = "public, max-age=86400, s-maxage=604800, stale-while
 /** Response headers worth passing through untouched. */
 const PASS_THROUGH = ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"];
 
-/** Request headers that let the host answer "you already have this". */
-const CONDITIONAL = ["if-none-match", "if-modified-since", "if-range"];
-
 function badRequest(message: string, status = 400, block?: string): Response {
   const headers: Record<string, string> = {
     "content-type": "text/plain; charset=utf-8",
@@ -92,9 +89,12 @@ function contentTypeFor(path: string, upstreamType: string | null): string | nul
 
 function isUsableMedia(upstream: Response, target: URL): boolean {
   if (looksBlocked(target, upstream)) return false;
-  if (upstream.status === 206 || upstream.status === 200 || upstream.status === 304) return true;
-  return false;
+  // 304 is cheap for browsers with a cache, but a <video> element handed an
+  // empty 304 has nothing to decode — that is MEDIA_ERR_SRC_NOT_SUPPORTED.
+  return upstream.status === 206 || upstream.status === 200;
 }
+
+const RANGE_REJECTED = new Set([400, 403, 416, 501]);
 
 async function handle(req: NextRequest, headOnly: boolean): Promise<Response> {
   const raw = req.nextUrl.searchParams.get("src");
@@ -120,22 +120,29 @@ async function handle(req: NextRequest, headOnly: boolean): Promise<Response> {
   else if (Number.isFinite(bounded) && bounded > 0) {
     extra.range = `bytes=0-${Math.min(bounded, 4_000_000) - 1}`;
   }
-  for (const name of CONDITIONAL) {
-    const value = req.headers.get(name);
-    if (value) extra[name] = value;
+  // Validators are not forwarded: a 304 with no body is unplayable.
+
+  const extrasToTry: Record<string, string>[] = [extra];
+  if (extra.range) {
+    const { range: _range, ...withoutRange } = extra;
+    extrasToTry.push(withoutRange);
   }
 
   let upstream: Response | null = null;
   try {
-    for (const profile of UPSTREAM_PROFILES) {
-      const headers = { ...profile, ...extra };
-      const attempt = await fetch(target, { headers, redirect: "follow", cache: "no-store" });
-      if (isUsableMedia(attempt, target)) {
+    for (const extraHeaders of extrasToTry) {
+      for (const profile of UPSTREAM_PROFILES) {
+        const headers = { ...profile, ...extraHeaders };
+        const attempt = await fetch(target, { headers, redirect: "follow", cache: "no-store" });
+        if (isUsableMedia(attempt, target)) {
+          upstream = attempt;
+          break;
+        }
+        void attempt.body?.cancel().catch(() => undefined);
         upstream = attempt;
-        break;
+        if (extraHeaders.range && RANGE_REJECTED.has(attempt.status)) break;
       }
-      void attempt.body?.cancel().catch(() => undefined);
-      upstream = attempt;
+      if (upstream && isUsableMedia(upstream, target)) break;
     }
   } catch {
     return badRequest("The media host could not be reached", 502, "unreachable");
@@ -180,17 +187,6 @@ async function handle(req: NextRequest, headOnly: boolean): Promise<Response> {
       streamed === undefined ? summary : { ...summary, streamed },
       { headers: { "cache-control": "no-store" } },
     );
-  }
-
-  if (upstream.status === 304) {
-    void upstream.body?.cancel().catch(() => undefined);
-    const notModified = new Headers();
-    for (const name of ["etag", "last-modified"]) {
-      const value = upstream.headers.get(name);
-      if (value) notModified.set(name, value);
-    }
-    notModified.set("cache-control", MEDIA_CACHE_CONTROL);
-    return new Response(null, { status: 304, headers: notModified });
   }
 
   if (!upstream.ok) {

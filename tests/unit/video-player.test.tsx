@@ -63,7 +63,7 @@ describe("video player", () => {
     expect(video).toHaveAttribute("controls");
     expect(video).toHaveAttribute("controlslist", "nodownload noremoteplayback");
     expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
-    expect(playbackCandidates(damplipsFile)).toEqual([damplipsProxy, damplipsFile]);
+    expect(playbackCandidates(damplipsFile)).toEqual([damplipsProxy]);
   });
 
   it("plays a damplips post page in our own player instead of framing it", () => {
@@ -223,21 +223,6 @@ describe("video player", () => {
     expect(init.referrerPolicy).toBe("no-referrer");
   });
 
-  it("falls back to the host file when the proxy cannot serve it", () => {
-    const { container } = render(
-      <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
-    );
-    const first = container.querySelector("video")!;
-    expect(first).toHaveAttribute("src", damplipsProxy);
-
-    fireEvent.error(first);
-
-    const retried = container.querySelector("video")!;
-    expect(retried).not.toBe(first);
-    expect(retried).toHaveAttribute("src", damplipsFile);
-    expect(retried).toHaveAttribute("referrerpolicy", "no-referrer");
-  });
-
   it("does not treat a damplips mp4 as an HLS playlist when the element cannot decode it", () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
@@ -245,7 +230,8 @@ describe("video player", () => {
     const video = container.querySelector("video")!;
     Object.defineProperty(video, "error", { value: { code: 4 }, configurable: true });
     fireEvent.error(video);
-    expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
   });
 
   it("never downloads the film in the browser after import", async () => {
@@ -312,26 +298,16 @@ describe("video player", () => {
     expect(screen.queryByRole("button", { name: "Play video" })).toBeNull();
   });
 
-  it("falls back to the stream proxy when the host refuses the direct file", async () => {
+  it("offers the host file when the proxy cannot play", async () => {
     const { container } = render(
       <VideoPlayer {...props} provider="damplips" playableUrl={damplipsFile} />,
     );
     const video = container.querySelector("video")!;
     expect(video).toHaveAttribute("src", damplipsProxy);
-
     fireEvent.error(video);
-
-    const retried = container.querySelector("video")!;
-    expect(retried).not.toBe(video);
-    expect(retried).toHaveAttribute("src", damplipsFile);
-    expect(screen.queryByRole("alert")).toBeNull();
-
-    fireEvent.error(retried);
-    fireEvent.error(container.querySelector("video")!);
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded"),
     );
-    // The one action that can still work for a challenged host is offered.
     expect(screen.getByRole("link", { name: /open the video directly/i })).toHaveAttribute(
       "href",
       damplipsFile,
@@ -386,18 +362,17 @@ describe("video player", () => {
 
     fireEvent.error(video);
 
-    // No HLS attempt (the content was never the problem) — the host file is
-    // next after the proxy.
-    expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
+    expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
   });
 
   it("offers exactly one destination for a non-damplips file", () => {
     expect(playbackCandidates("https://cdn.example.com/a.mp4")).toEqual([
       "https://cdn.example.com/a.mp4",
     ]);
-    // A damplips file plays straight from its host, with the edge proxy behind
-    // it — the Node proxy cannot fetch this host at all.
-    expect(playbackCandidates(damplipsFile)).toEqual([damplipsProxy, damplipsFile]);
+    // A damplips file plays through the edge proxy only — a raw host request
+    // from this origin is what produced media error 4.
+    expect(playbackCandidates(damplipsFile)).toEqual([damplipsProxy]);
     // A playlist is a document: it has to be rewritten before a frame can play.
     const playlist = "https://video.damplips.com/video7/717/79.m3u8";
     expect(playbackCandidates(playlist)).toEqual([
@@ -427,8 +402,8 @@ describe("video player", () => {
         vi.advanceTimersByTime(STALL_TIMEOUT_MS + 100);
       });
 
-      // The deadline moves on to the host file rather than waiting forever.
-      expect(container.querySelector("video")).toHaveAttribute("src", damplipsFile);
+      expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
+      expect(container.querySelector("video")).toHaveAttribute("src", damplipsProxy);
     } finally {
       vi.useRealTimers();
     }

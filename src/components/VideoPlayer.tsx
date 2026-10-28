@@ -266,7 +266,17 @@ function NativePlayer({
 
   const url = urls[Math.min(source, urls.length - 1)];
   /** The direct host file, if this row has one — never a proxied URL. */
-  const directUrl = urls.find((candidate) => !isStreamProxyUrl(candidate)) ?? null;
+  const directUrl =
+    urls.find((candidate) => !isStreamProxyUrl(candidate)) ??
+    (() => {
+      const proxy = urls.find((candidate) => isStreamProxyUrl(candidate));
+      if (!proxy) return null;
+      try {
+        return new URL(proxy, "https://erobabe.local").searchParams.get("src");
+      } catch {
+        return null;
+      }
+    })();
 
   /**
    * A source that fails is retried in the other strategy, then replaced by the
