@@ -20,7 +20,7 @@ export const MIN_VIDEOS_PER_CATEGORY = 100;
 /** Default target: the minimum plus a buffer for posts that cannot resolve. */
 export const DEFAULT_VIDEOS_PER_CATEGORY = 110;
 /** Hard ceiling per request, so one operator action stays bounded. */
-export const MAX_VIDEOS_PER_CATEGORY = 200;
+export const MAX_VIDEOS_PER_CATEGORY = 500;
 
 export type RightsStatus = "cleared" | "pending";
 
