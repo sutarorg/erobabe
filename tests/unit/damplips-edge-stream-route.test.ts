@@ -40,6 +40,8 @@ describe("GET /api/videos/stream-edge", () => {
     expect(response.headers.get("content-type")).toBe("video/mp4");
     expect(response.headers.get("content-range")).toBe("bytes 0-3/118811167");
     expect(response.headers.get("accept-ranges")).toBe("bytes");
+    expect(response.headers.get("etag")).toBeNull();
+    expect(response.headers.get("cache-control")).toMatch(/no-store/);
     expect(await response.text()).toBe("abcd");
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [URL | string, RequestInit];

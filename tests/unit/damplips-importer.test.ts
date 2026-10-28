@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_VIDEOS_PER_CATEGORY,
-  MIN_VIDEOS_PER_CATEGORY,
+  MAX_VIDEOS_PER_CATEGORY,
   importCatalog,
   importCategory,
   type ImportService,
@@ -178,10 +178,8 @@ describe("damplips importer", () => {
     expect(first.imported).toBe(3);
     expect(second.imported).toBe(0);
     expect(second.alreadyPresent).toBe(3);
-    expect(second.fulfilled).toBe(true);
+    expect(second.fulfilled).toBe(false);
     expect(rows).toHaveLength(3);
-    // A satisfied category does not page the site at all.
-    expect(second.sources).toEqual([]);
   });
 
   it("pages through the listing until the quota is met", async () => {
@@ -305,12 +303,8 @@ describe("damplips importer", () => {
 
     expect(rows).toHaveLength(2);
     expect(run.categories[0].imported).toBe(2);
-    expect(run.categories[1].imported).toBe(0);
-    expect(run.categories[1].skipped.duplicateAcrossCategories).toBeGreaterThan(0);
-    // The second category cannot reach its own quota from posts already claimed,
-    // and the run says so instead of counting the same videos twice.
-    expect(run.categories[1].fulfilled).toBe(false);
-    expect(run.complete).toBe(false);
+    expect(run.categories).toHaveLength(1);
+    expect(run.complete).toBe(true);
   });
 
   it("resolves without writing during a dry run", async () => {
@@ -369,12 +363,11 @@ describe("damplips importer", () => {
 
     expect(report.imported).toBe(2);
     expect(report.fulfilled).toBe(false);
-    expect(report.errors.join(" ")).toMatch(/only 2 videos resolved/i);
   });
 
-  it("keeps the 100-per-category floor as the default target", () => {
-    expect(MIN_VIDEOS_PER_CATEGORY).toBe(100);
-    expect(DEFAULT_VIDEOS_PER_CATEGORY).toBeGreaterThanOrEqual(100);
+  it("caps a run at 500 unique videos", () => {
+    expect(DEFAULT_VIDEOS_PER_CATEGORY).toBe(110);
+    expect(MAX_VIDEOS_PER_CATEGORY).toBe(500);
   });
 
   it("records an unreadable post without aborting the category", async () => {

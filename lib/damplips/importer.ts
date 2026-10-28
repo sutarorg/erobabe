@@ -15,12 +15,12 @@ import { fetchHostMediaUrl, type FetchHostMedia } from "./host-media";
  * serves, which the player then reads.
  */
 
-/** Minimum number of videos the default run must leave in every category. */
-export const MIN_VIDEOS_PER_CATEGORY = 100;
-/** Default target: the minimum plus a buffer for posts that cannot resolve. */
+/** Default unique videos to add in one operator run. */
 export const DEFAULT_VIDEOS_PER_CATEGORY = 110;
 /** Hard ceiling per request, so one operator action stays bounded. */
 export const MAX_VIDEOS_PER_CATEGORY = 500;
+/** @deprecated Kept so older reports still type-check; quota is unique new rows. */
+export const MIN_VIDEOS_PER_CATEGORY = 0;
 
 export type RightsStatus = "cleared" | "pending";
 
@@ -146,7 +146,7 @@ export async function importCategory(
   const target = clampTarget(options.perCategory);
   const concurrency = Math.max(1, Math.min(8, options.concurrency ?? 4));
   const delayMs = Math.max(0, options.delayMs ?? 120);
-  const maxPages = Math.max(1, Math.min(80, options.maxPages ?? 40));
+  const maxPages = Math.max(1, Math.min(120, options.maxPages ?? 80));
   const rightsStatus: RightsStatus = options.rightsStatus === "pending" ? "pending" : "cleared";
   const dryRun = Boolean(options.dryRun);
 
@@ -158,7 +158,7 @@ export async function importCategory(
     category: options.categorySlug,
     categoryId: deps.categoryId,
     target,
-    minimum: Math.min(MIN_VIDEOS_PER_CATEGORY, target),
+    minimum: target,
     imported: 0,
     updated: 0,
     alreadyPresent: 0,
@@ -317,35 +317,28 @@ export async function importCategory(
     }
   }
 
-  // Everything already in this category counts towards the target and stops
-  // another category from claiming the same post in the same run.
+  // Every damplips post already in the catalog is unique site-wide: never
+  // import it again, in this category or another.
   const { data: existingRows, error: existingError } = await deps.service
     .from("videos")
-    .select("provider_file_id")
-    .eq("provider", "damplips")
-    .eq("category_id", deps.categoryId);
+    .select("provider_file_id, category_id")
+    .eq("provider", "damplips");
   if (existingError) throw new Error(existingError.message || "Unable to read the category catalog");
-  for (const row of (existingRows as Array<{ provider_file_id?: string | null }> | null) || []) {
+  for (const row of (existingRows as Array<{ provider_file_id?: string | null; category_id?: string | null }> | null) || []) {
     if (!row.provider_file_id) continue;
     claimed.add(String(row.provider_file_id));
-    report.alreadyPresent += 1;
+    if (String(row.category_id) === String(deps.categoryId)) report.alreadyPresent += 1;
   }
   report.total = report.alreadyPresent;
 
-  if (report.total >= target) {
-    report.fulfilled = true;
-    log(`${options.categorySlug}: already holds ${report.total} videos`);
-    return report;
-  }
-
   for (const sourceUrl of sourcePlan(options.categorySlug, baseUrl)) {
-    if (report.total >= target) break;
+    if (report.imported >= target) break;
     const sourceReport: ImportSourceReport = { url: sourceUrl, pages: 0, cards: 0, imported: 0 };
     report.sources.push(sourceReport);
     const seenOnSource = new Set<string>();
     let pageUrl: string | null = sourceUrl;
 
-    while (pageUrl && report.total < target && sourceReport.pages < maxPages) {
+    while (pageUrl && report.imported < target && sourceReport.pages < maxPages) {
       let page;
       try {
         page = await deps.fetchPage(pageUrl);
@@ -371,8 +364,8 @@ export async function importCategory(
       // that turns out to be unusable frees its slot, so the loop takes the next
       // cards on the same page instead of leaving the category short.
       let cursor = 0;
-      while (cursor < fresh.length && report.total < target) {
-        const remaining = target - report.total;
+      while (cursor < fresh.length && report.imported < target) {
+        const remaining = target - report.imported;
         const batch: typeof fresh = [];
         while (cursor < fresh.length && batch.length < remaining) {
           const card = fresh[cursor];
@@ -392,7 +385,7 @@ export async function importCategory(
         tally(await mapWithConcurrency(batch, concurrency, processCard), sourceReport);
       }
 
-      pageUrl = report.total < target ? nextPageUrl : null;
+      pageUrl = report.imported < target ? nextPageUrl : null;
     }
 
     log(
@@ -401,11 +394,9 @@ export async function importCategory(
     );
   }
 
-  report.fulfilled = report.total >= report.minimum;
-  if (!report.fulfilled) {
-    report.errors.push(
-      `Only ${report.total} videos resolved for ${options.categorySlug}; ${report.minimum} required.`,
-    );
+  report.fulfilled = report.imported >= target;
+  if (!report.fulfilled && report.imported === 0) {
+    log(`${options.categorySlug}: no new unique videos (already ${report.alreadyPresent} in catalog)`);
   }
   return report;
 }
@@ -443,13 +434,15 @@ export async function importCatalog(
   const claimed = new Set<string>();
   const reports: CategoryImportReport[] = [];
   const perCategory = clampTarget(options.perCategory);
+  let remaining = perCategory;
 
   for (const category of options.categories) {
+    if (remaining <= 0) break;
     reports.push(
       await importCategory(
         {
           categorySlug: category.slug,
-          perCategory,
+          perCategory: remaining,
           dryRun: options.dryRun,
           rightsStatus: options.rightsStatus,
           concurrency: options.concurrency,
@@ -469,11 +462,12 @@ export async function importCatalog(
         },
       ),
     );
+    remaining -= reports[reports.length - 1].imported;
   }
 
   return {
     categories: reports,
-    minimum: Math.min(MIN_VIDEOS_PER_CATEGORY, perCategory),
+    minimum: perCategory,
     perCategory,
     dryRun: Boolean(options.dryRun),
     complete: reports.every((report) => report.fulfilled),

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_VIDEOS_PER_CATEGORY,
-  MIN_VIDEOS_PER_CATEGORY,
   importCategory,
   importCatalog,
   type ImportService,
@@ -220,7 +219,7 @@ describe("damplips importer", () => {
     expect(second.imported).toBe(0);
     expect(second.alreadyPresent).toBe(3);
     expect(second.total).toBe(3);
-    expect(second.fulfilled).toBe(true);
+    expect(second.fulfilled).toBe(false);
   });
 
   it("skips posts with no thumbnail or no media and keeps filling the quota", async () => {
@@ -263,8 +262,7 @@ describe("damplips importer", () => {
     );
 
     expect(run.categories[0].imported).toBe(3);
-    expect(run.categories[1].imported).toBe(0);
-    expect(run.categories[1].skipped.duplicateAcrossCategories).toBeGreaterThan(0);
+    expect(run.categories).toHaveLength(1);
     expect(service.rows).toHaveLength(3);
   });
 
@@ -308,10 +306,9 @@ describe("damplips importer", () => {
       { fetchPage, service, categoryId: CATEGORY_ID, sleep: async () => {} },
     );
     expect(report.target).toBe(DEFAULT_VIDEOS_PER_CATEGORY);
-    expect(report.minimum).toBe(MIN_VIDEOS_PER_CATEGORY);
+    expect(report.imported).toBe(3);
     expect(report.total).toBe(3);
     expect(report.fulfilled).toBe(false);
-    expect(report.errors.join(" ")).toContain(`${MIN_VIDEOS_PER_CATEGORY} required`);
   });
 
   it("records a listing failure and moves on to the next source", async () => {
