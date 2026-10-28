@@ -115,7 +115,7 @@ function referrerPolicyForCandidate(url: string, index: number): Record<string, 
  * Deliberately generous: a 100+ MB file on a slow line is *downloading*, not
  * stuck, and cutting it over to the proxy would make it slower, not faster.
  */
-export const STALL_TIMEOUT_MS = 12_000;
+export const STALL_TIMEOUT_MS = 2_500;
 
 /** How long the reachability probe may take before it is treated as "blocked". */
 export const PROBE_TIMEOUT_MS = 2_500;
@@ -277,7 +277,7 @@ function NativePlayer({
 
   const url = urls[Math.min(source, urls.length - 1)];
   /** The direct host file, if this row has one — never a proxied URL. */
-  const directUrl = urls.length > 0 && !isStreamProxyUrl(urls[0]) ? urls[0] : null;
+  const directUrl = urls.find((candidate) => !isStreamProxyUrl(candidate)) ?? null;
 
   /**
    * Fetch the file with the browser and hand the element its own copy.
@@ -378,7 +378,15 @@ function NativePlayer({
     // element cannot take it — fetch it and play the browser's own copy. That
     // is the only path that works when the host refuses media requests but
     // allows CORS ones.
-    if (directUrl && !localUrl && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+    // A whole-file download is slower than waiting on the proxy. Only try it
+    // when there is no same-origin stream to fall back to.
+    if (
+      directUrl &&
+      !localUrl &&
+      !urls.some((candidate) => isStreamProxyUrl(candidate)) &&
+      typeof URL !== "undefined" &&
+      typeof URL.createObjectURL === "function"
+    ) {
       void loadOwnCopy();
       return;
     }

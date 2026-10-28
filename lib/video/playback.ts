@@ -108,9 +108,12 @@ export function playbackCandidates(url: string): string[] {
   // its segment URIs rewritten: both need the Node proxy's parser.
   if (isDamplipsPostPage(url)) return [damplipsProxyUrl(url)];
   if (isHlsUrl(url)) return [damplipsProxyUrl(url), url];
-  // A plain file plays straight from its host, and falls back to the edge
-  // proxy — the only one that can actually fetch it.
-  return [url, edgeStreamUrl(url)];
+  // The visitor's browser often cannot take the host file (hotlink rules,
+  // missing referer, ISP filters). Waiting on that request is what left the
+  // player spinning for many seconds. The edge proxy already has the right
+  // referer and is not challenged, so it is the first request; the raw file
+  // stays as a fallback.
+  return [edgeStreamUrl(url), url];
 }
 
 function safeUrl(raw: string | null | undefined, allowedProtocols: RegExp): URL | null {
