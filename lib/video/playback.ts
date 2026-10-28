@@ -77,7 +77,8 @@ export function streamProxyUrl(url: string): string {
 export const EDGE_STREAM_PATH = "/api/videos/stream-edge";
 
 export function edgeStreamUrl(url: string): string {
-  return `${EDGE_STREAM_PATH}?src=${encodeURIComponent(url)}`;
+  // `v=2` drops browsers that cached a 206 under the previous CDN policy.
+  return `${EDGE_STREAM_PATH}?src=${encodeURIComponent(url)}&v=2`;
 }
 
 /** Kept as the name the rest of the player and its tests use. */

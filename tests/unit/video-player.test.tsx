@@ -23,7 +23,7 @@ const damplipsFile = "https://video.damplips.com/videos/67284.mp4";
  * The fallback for a damplips *file* is the edge proxy — the only runtime that
  * can fetch the host (the Node one is challenged on every attempt).
  */
-const damplipsProxy = `/api/videos/stream-edge?src=${encodeURIComponent(damplipsFile)}`;
+const damplipsProxy = `/api/videos/stream-edge?src=${encodeURIComponent(damplipsFile)}&v=2`;
 /** A post page has no file to frame: the proxy is the only destination. */
 const damplipsPostPage = "https://www.damplips.com/p/67284/";
 

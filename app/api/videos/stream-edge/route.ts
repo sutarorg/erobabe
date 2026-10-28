@@ -48,11 +48,14 @@ const GENERIC_TYPES = new Set([
   "",
 ]);
 
-/** Media is immutable enough to cache hard at the CDN. */
-const MEDIA_CACHE_CONTROL = "public, max-age=86400, s-maxage=604800, stale-while-revalidate=86400";
+/**
+ * Never let the browser keep a Range 206. A cached slice replayed as the
+ * whole file is MEDIA_ERR_SRC_NOT_SUPPORTED the next time the watch page opens.
+ */
+const MEDIA_CACHE_CONTROL = "private, no-store, no-cache, max-age=0, must-revalidate";
 
 /** Response headers worth passing through untouched. */
-const PASS_THROUGH = ["content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"];
+const PASS_THROUGH = ["content-type", "content-length", "content-range", "accept-ranges"];
 
 function badRequest(message: string, status = 400, block?: string): Response {
   const headers: Record<string, string> = {

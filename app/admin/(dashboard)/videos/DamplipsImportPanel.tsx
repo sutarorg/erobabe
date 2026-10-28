@@ -63,15 +63,19 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
     setError("");
     setReports([]);
     let collected: CategoryReport[] = [];
+    let remaining = perCategory;
     try {
-      for (const category of queue) {
+      for (let index = 0; index < queue.length; index += 1) {
+        if (remaining <= 0) break;
+        const category = queue[index];
+        const share = Math.max(1, Math.ceil(remaining / (queue.length - index)));
         setCurrent(category.slug);
         const response = await fetch("/api/admin/damplips/import", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             category: category.slug,
-            perCategory,
+            perCategory: share,
             dryRun,
             rightsStatus: stageForReview ? "pending" : "cleared",
           }),
@@ -83,6 +87,7 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
         const report = payload.report as CategoryReport;
         collected = [...collected, report];
         setReports([...collected]);
+        remaining -= Math.max(0, Number(report.imported) || 0);
       }
       if (!dryRun) router.refresh();
     } catch (failure) {
@@ -114,19 +119,19 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
             Sync from damplips
           </h2>
           <p className="mt-0.5 max-w-[720px] text-[11.5px] text-ink-3">
-            Reads damplips.com and stores each video as an embed: title, poster,
-            duration, source page and the media destination the page serves. No
-            file is uploaded or copied. Posts already in the catalog are skipped,
-            so it is safe to run again. {short > 0
-              ? `${short} of ${counts.length} categories are below ${perCategory}.`
-              : `Every category already holds at least ${perCategory}.`}
+            Reads damplips.com and stores unique videos only (never the same
+            post twice). The number is the total to add this run, spread across
+            the selected categories. Run again to keep filling until damplips
+            has nothing new. {short > 0
+              ? `${counts.reduce((sum, entry) => sum + entry.count, 0)} unique videos in the catalog.`
+              : `Catalog already has videos in every selected category.`}
           </p>
         </div>
         <label className="flex items-center gap-2 text-[11.5px]">
-          Videos per category
+          Unique videos this run
           <input
             type="number"
-            aria-label="Videos per category"
+            aria-label="Unique videos this run"
             min={1}
             max={MAX_VIDEOS_PER_CATEGORY}
             value={perCategory}
