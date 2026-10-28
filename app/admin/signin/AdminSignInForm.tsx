@@ -8,9 +8,8 @@ import { Eye, EyeOff, ShieldAlert } from "lucide-react";
 /**
  * Administrator sign-in.
  *
- * Deliberately separate from `/auth/sign-in`. This page is staff-only — it
- * accepts an account only after the server-side profile says `role = admin`
- * and `status = active`, and it offers no self-service account creation.
+ * Staff-only. There is no public sign-in. An account is accepted only after
+ * the server-side profile says `role = admin` and `status = active`.
  */
 function AdminSignInCard() {
   const [email, setEmail] = useState("");

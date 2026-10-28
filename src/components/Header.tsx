@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { LayoutDashboard, LogOut, Menu, Search, User, X } from "lucide-react";
+import { LayoutDashboard, LogOut, Menu, Search, X } from "lucide-react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { LOGO_URL } from "../data/content";
 import { cn } from "../utils/cn";
@@ -42,11 +42,10 @@ interface HeaderProps {
   onSearchOpenChange: (open: boolean) => void;
   menuOpen: boolean;
   onMenuOpenChange: (open: boolean) => void;
-  user: HeaderUser | null;
+  user?: HeaderUser | null;
   /** Optional explicit staff-dashboard destination. */
   dashboardHref?: string;
-  onSignInClick: () => void;
-  onSignOut: () => void;
+  onSignOut?: () => void;
   /** Prefetching <Link> navigation for the Next.js site. */
   useLinks?: boolean;
 }
@@ -65,9 +64,8 @@ export default function Header({
   onSearchOpenChange,
   menuOpen,
   onMenuOpenChange,
-  user,
+  user = null,
   dashboardHref,
-  onSignInClick,
   onSignOut,
   useLinks = false,
 }: HeaderProps) {
@@ -212,9 +210,8 @@ export default function Header({
             </button>
           )}
 
-          <div className={cn("flex items-center gap-2", searchOpen && "max-sm:hidden")}>
           {user ? (
-            <>
+            <div className={cn("flex items-center gap-2", searchOpen && "max-sm:hidden")}>
               {dashboardTo && (
                 <Link
                   href={dashboardTo}
@@ -225,40 +222,22 @@ export default function Header({
                   Dashboard
                 </Link>
               )}
-              <button
-                type="button"
-                onClick={onSignOut}
-                title={`Signed in as ${user.name} — click to sign out`}
-                aria-label={`Sign out (${user.name})`}
-                className="flex h-8 items-center gap-2 rounded-md border border-line bg-card px-2 transition-colors hover:border-zinc-600"
-              >
-                <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-white">
-                  {user.name.charAt(0).toUpperCase()}
-                </span>
-                <LogOut className="h-3.5 w-3.5 text-ink-3" aria-hidden />
-              </button>
-            </>
-          ) : useLinks ? (
-            <Link
-              href="/auth/sign-in"
-              prefetch
-              className="flex h-8 items-center gap-1.5 rounded-md border border-line bg-card px-2.5 text-[13px] font-medium text-ink transition-colors hover:border-zinc-600 @sm:px-3"
-            >
-              <User className="h-3.5 w-3.5 text-ink-2" aria-hidden />
-              <span className="hidden @sm:inline">Sign In</span>
-            </Link>
-          ) : (
-            <button
-              type="button"
-              onClick={onSignInClick}
-              className="flex h-8 items-center gap-1.5 rounded-md border border-line bg-card px-2.5 text-[13px] font-medium text-ink transition-colors hover:border-zinc-600 @sm:px-3"
-            >
-              <User className="h-3.5 w-3.5 text-ink-2" aria-hidden />
-              <span className="hidden @sm:inline">Sign In</span>
-            </button>
-          )}
-
-          </div>
+              {onSignOut && (
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  title={`Signed in as ${user.name} — click to sign out`}
+                  aria-label={`Sign out (${user.name})`}
+                  className="flex h-8 items-center gap-2 rounded-md border border-line bg-card px-2 transition-colors hover:border-zinc-600"
+                >
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent text-[10px] font-bold text-white">
+                    {user.name.charAt(0).toUpperCase()}
+                  </span>
+                  <LogOut className="h-3.5 w-3.5 text-ink-3" aria-hidden />
+                </button>
+              )}
+            </div>
+          ) : null}
 
           {/* Compact menu toggle (narrow center panel / mobile) */}
           <button

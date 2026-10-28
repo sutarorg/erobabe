@@ -48,7 +48,7 @@ test("production sidebar components: mobile drawer focus, groups, active route a
   );
   await page.goto("/__navigation_fixture");
   // Load the production design tokens/utility CSS emitted by the running Next app.
-  const html = await (await page.request.get("/auth/sign-in")).text();
+  const html = await (await page.request.get("/admin/signin")).text();
   for (const match of html.matchAll(/href="([^"]+\.css(?:\?[^"]*)?)"/g))
     await page.addStyleTag({ url: match[1] });
   await page.addScriptTag({ content: bundle });
@@ -101,8 +101,6 @@ test("all real portal destinations protect unauthenticated requests", async ({
   ]) {
     const response = await request.get(path, { maxRedirects: 0 });
     expect(response.status(), path).toBe(307);
-    expect(response.headers().location, path).toContain(
-      path.startsWith("/admin") ? "/admin/signin" : "/auth/sign-in",
-    );
+    expect(response.headers().location, path).toContain("/admin/signin");
   }
 });

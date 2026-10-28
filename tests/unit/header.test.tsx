@@ -22,7 +22,6 @@ function renderHeader(
       menuOpen={menuOpen}
       onMenuOpenChange={vi.fn()}
       user={user}
-      onSignInClick={vi.fn()}
       onSignOut={vi.fn()}
       useLinks
     />,
@@ -71,9 +70,10 @@ describe("public header navigation", () => {
     expect(document.querySelector('[aria-current="page"]')).toBeNull();
   });
 
-  it("offers Sign in when nobody is signed in", () => {
+  it("does not offer Sign in on the public header", () => {
     renderHeader({ user: null });
-    expect(screen.getByRole("link", { name: /sign in/i })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /sign in/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /sign in/i })).toBeNull();
     expect(screen.queryByRole("link", { name: /dashboard/i })).toBeNull();
   });
 
@@ -103,9 +103,8 @@ describe("dashboardHrefFor", () => {
   });
 });
 
-it("hides account and menu controls only below sm while search is open", () => {
+it("hides the menu control only below sm while search is open", () => {
   renderHeader({ searchOpen: true, menuOpen: true });
-  expect(screen.getByRole("link", { name: /sign in/i }).parentElement?.className).toContain("max-sm:hidden");
   expect(screen.getByRole("button", { name: "Close menu" }).className).toContain("max-sm:hidden");
   expect(screen.queryByRole("navigation", { name: "Mobile" })).toBeNull();
 });
