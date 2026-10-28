@@ -168,11 +168,10 @@ describe("damplips importer", () => {
       { fetchPage, service, categoryId: CATEGORY_ID, now: NOW, sleep: async () => {} },
     );
 
-    // The importer reads a small buffer of extra posts, so the quota is a floor.
-    expect(report.imported).toBeGreaterThanOrEqual(5);
-    expect(report.total).toBeGreaterThanOrEqual(5);
+    expect(report.imported).toBe(5);
+    expect(report.total).toBe(5);
     expect(report.fulfilled).toBe(true);
-    expect(service.rows.length).toBeGreaterThanOrEqual(5);
+    expect(service.rows).toHaveLength(5);
     expect(service.rows[0]).toMatchObject({
       provider: "damplips",
       provider_file_id: "1",
@@ -261,7 +260,8 @@ describe("damplips importer", () => {
     );
 
     expect(run.categories[0].imported).toBe(3);
-    expect(run.categories).toHaveLength(1);
+    expect(run.categories).toHaveLength(2);
+    expect(run.categories[1].imported).toBe(0);
     expect(service.rows).toHaveLength(3);
   });
 

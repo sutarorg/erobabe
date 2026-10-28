@@ -15,8 +15,10 @@ import { fetchHostMediaUrl, type FetchHostMedia } from "./host-media";
  * serves, which the player then reads.
  */
 
-/** Default unique videos to add in one operator run. */
+/** Default unique videos to add per selected category in one operator run. */
 export const DEFAULT_VIDEOS_PER_CATEGORY = 110;
+/** Nightly autopilot: new unique videos per category at 00:00 IST. */
+export const AUTOPILOT_VIDEOS_PER_CATEGORY = 100;
 /** Hard ceiling per request, so one operator action stays bounded. */
 export const MAX_VIDEOS_PER_CATEGORY = 500;
 /** @deprecated Kept so older reports still type-check; quota is unique new rows. */
@@ -437,15 +439,13 @@ export async function importCatalog(
   const claimed = new Set<string>();
   const reports: CategoryImportReport[] = [];
   const perCategory = clampTarget(options.perCategory);
-  let remaining = perCategory;
 
   for (const category of options.categories) {
-    if (remaining <= 0) break;
     reports.push(
       await importCategory(
         {
           categorySlug: category.slug,
-          perCategory: remaining,
+          perCategory,
           dryRun: options.dryRun,
           rightsStatus: options.rightsStatus,
           concurrency: options.concurrency,
@@ -465,7 +465,6 @@ export async function importCatalog(
         },
       ),
     );
-    remaining -= reports[reports.length - 1].imported;
   }
 
   return {

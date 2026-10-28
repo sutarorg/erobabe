@@ -63,19 +63,15 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
     setError("");
     setReports([]);
     let collected: CategoryReport[] = [];
-    let remaining = perCategory;
     try {
-      for (let index = 0; index < queue.length; index += 1) {
-        if (remaining <= 0) break;
-        const category = queue[index];
-        const share = Math.max(1, Math.ceil(remaining / (queue.length - index)));
+      for (const category of queue) {
         setCurrent(category.slug);
         const response = await fetch("/api/admin/damplips/import", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             category: category.slug,
-            perCategory: share,
+            perCategory,
             dryRun,
             rightsStatus: stageForReview ? "pending" : "cleared",
           }),
@@ -87,7 +83,6 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
         const report = payload.report as CategoryReport;
         collected = [...collected, report];
         setReports([...collected]);
-        remaining -= Math.max(0, Number(report.imported) || 0);
       }
       if (!dryRun) router.refresh();
     } catch (failure) {
@@ -122,18 +117,19 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
             Searches damplips.com for each selected category (the same query as
             its search bar, e.g. “amateur”) and stores unique posts only.
             Duplicates and rows already in the catalog are skipped. The number
-            is how many new videos to add this run; run again until search
-            results are exhausted.{" "}
+            is how many new unique videos to add in each selected category —
+            500 means 500 new videos per category, not a split across them.
+            Nightly autopilot at 00:00 IST adds 100 per category.{" "}
             {short > 0
               ? `${counts.reduce((sum, entry) => sum + entry.count, 0)} unique videos in the catalog.`
               : "Catalog already has videos in every selected category."}
           </p>
         </div>
         <label className="flex items-center gap-2 text-[11.5px]">
-          Unique videos this run
+          New videos per category
           <input
             type="number"
-            aria-label="Unique videos this run"
+            aria-label="New videos per category"
             min={1}
             max={MAX_VIDEOS_PER_CATEGORY}
             value={perCategory}
