@@ -327,40 +327,40 @@ damplips → proxy → browser. Deploying the app in a region close to damplips'
 CDN is the single biggest remaining lever, and the edge cache headers above let
 a CDN absorb repeat traffic instead of hitting a function per range request.
 
-## Why playback is direct-first, and why the proxy cannot rescue it
+## Playback: direct first, edge proxy behind it
 
-Measured against production (`https://erobabe.vercel.app`), 2026-10-28:
+Measured against production, 2026-10-28. The media host is behind Cloudflare and
+its answer depends on **who asks**, not how:
 
-```
-GET /api/videos/stream?src=https://video.damplips.com/video7/717/43.mp4&debug=1
-profiles: chrome / firefox / chrome-cross-site / curl / plain
-  → all 403, text/html, reason "Just a moment..."
-```
+| caller | answer for `video7/686/01.mp4` |
+|---|---|
+| a browser on the watch page | `200 video/mp4`, 118,811,167 B, 600 s, 1280×720 |
+| Node serverless function (`/api/videos/stream`) | `403 text/html` — `"Just a moment..."` (managed challenge), for every user-agent, client-hint set, cipher order and HTTP version tried |
+| **edge function (`/api/videos/stream-edge`)** | **`206 video/mp4`**, `content-range: bytes 0-1048575/118811167` |
 
-`Just a moment...` is **Cloudflare's managed challenge**. It is passed by running
-JavaScript in a browser and returning a `cf_clearance` cookie bound to that
-browser's IP and user-agent. A Node function cannot satisfy it — not with a
-Chrome user-agent, not with client hints, not with a TLS fingerprint, not by
-retrying. The same file answers `200 video/mp4`, `Accept-Ranges: bytes` to a
-plain HTTP client elsewhere, and loads instantly in a real browser, so the file,
-the host and hotlink rules are all fine; only our datacenter egress is
-challenged.
+So the challenge is a decision about the **egress IP**, and no header can
+engineer around it. Consequences the code follows:
 
-Consequences, which the code follows:
+- **Playback is direct-first.** The `<video>` gets the host's own file
+  (`referrerpolicy="no-referrer"`, `preload="auto"`): no proxy hop, no
+  "Preparing video" screen, instant start for anyone whose network allows it.
+- **The fallback is the edge route, not the Node one.** When the browser's own
+  request is refused — an ISP block, a DNS filter, an ad-blocker, Cloudflare
+  scoring the visitor — a `HEAD` probe fails within ~2.5 s and the player
+  switches to `/api/videos/stream-edge`, which does reach the host. The Node
+  route stays for what needs a parser: post page → media, and HLS playlist
+  rewriting (segments can live on other hosts and are signed).
+- **Everything else is a last resort.** The same file is retried in CORS mode,
+  then the page fetches the bytes itself and plays a blob, and only then does the
+  panel appear — with the last source, whether the host answered, the element's
+  media error code and the status/content type the host returned.
+- **Verifying a deployment:** `GET /api/videos/stream-edge?src=<file>&probe=1&len=1048576`
+  returns the upstream status plus the number of bytes actually read through the
+  stream. A healthy deployment answers `206`, `video/mp4`, `streamed: 1048576`.
 
-- **Playback is direct-first.** The browser fetches `video.damplips.com`
-  itself (`referrerpolicy="no-referrer"`, `preload="auto"`). That is the request
-  Cloudflare expects from a browser and the one that works.
-- **The proxy is a fallback, not a rescue.** For a visitor whose network blocks
-  the media host it will fail with `502` and `x-media-block: challenge`, because
-  our function meets the same challenge. Do not "fix" that by adding headers —
-  `?debug=1` will show the same `Just a moment...` for every client.
-- **The player explains it.** On failure it shows the destination, host
-  reachability and the element's own error, and offers *Open the video
-  directly*: a top-level navigation can solve the challenge a `<video>` cannot,
-  and after that *Retry playback* returns to the direct file.
-- **Do not chase this with fingerprints again.** Check `?debug=1` first: a
-  `challenge: true` means the host wants a browser, and no request shape helps.
+Do not re-litigate the Node proxy: `?debug=1` on `/api/videos/stream` reports
+`challenge: true` per client, and `x-frame-options: SAMEORIGIN` means the
+challenge page cannot be framed either.
 
 ## Operational notes
 
