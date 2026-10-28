@@ -5,6 +5,7 @@ import {
   parseCategoryLinks,
   parseDuration,
   parseListing,
+  isReadyMediaFile,
   parseMedia,
   parseNextPageUrl,
   parseVideoPage,
@@ -174,6 +175,17 @@ describe("post page parsing", () => {
     const html = `<meta property="og:title" content="A framed damplips player">
       <iframe src="https://www.damplips.com/embed/67284/"></iframe>`;
     expect(parseMedia(html, "https://www.damplips.com/p/67284/")).toBeNull();
+  });
+
+  it("accepts a damplips media path that has no file extension", () => {
+    const html = `<html><head><meta property="og:title" content="Extensionless file">
+      <meta property="og:video" content="https://video.damplips.com/videos/67284"></head></html>`;
+    expect(parseMedia(html, "https://www.damplips.com/p/67284/")).toEqual({
+      kind: "direct",
+      url: "https://video.damplips.com/videos/67284",
+    });
+    expect(isReadyMediaFile("https://video.damplips.com/videos/67284")).toBe(true);
+    expect(isReadyMediaFile("https://video.damplips.com/hls/67284/index.m3u8")).toBe(false);
   });
 
   it("never takes media from an advertising host", () => {
