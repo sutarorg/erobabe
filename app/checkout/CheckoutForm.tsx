@@ -2,34 +2,45 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   ArrowRight,
   Check,
+  ChevronLeft,
+  CreditCard,
   ImagePlus,
   LoaderCircle,
   LockKeyhole,
-  QrCode,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import { CREATIVE_ACCEPT, MAX_CREATIVE_BYTES } from "@/lib/ads/creative";
+import type { InventorySlot } from "@/lib/ads/inventory";
+import {
+  AD_REVIEW_FLAG_KEY,
+  CHECKOUT_DURATION_MONTHS,
+  PAYPAL_PAYMENT_URL,
+} from "@/lib/ads/payment";
 import { LOGO_URL } from "@/src/data/content";
+import PaymentPanel from "./PaymentPanel";
+import SlotPicker from "./SlotPicker";
 
-export type CheckoutSlot = {
-  id: number;
-  name: string;
-  side: "left" | "right";
-  position: number;
-  price_cents: number;
-  status: string;
-  description: string | null;
-  available: boolean;
-};
+/** One sellable placement as the wizard sees it. */
+export type CheckoutSlot = InventorySlot;
+
+type Step = 1 | 2 | 3;
+
+const STEPS: Array<{ id: Step; title: string }> = [
+  { id: 1, title: "Ads Details" },
+  { id: 2, title: "Advertiser details" },
+  { id: 3, title: "Payment" },
+];
 
 const inputClass =
   "mt-2 h-11 w-full rounded-lg border border-line bg-void px-3.5 text-[13px] text-ink outline-none transition placeholder:text-ink-3 focus:border-accent/70";
 const labelClass = "block text-[12px] font-medium text-ink-2";
+const textareaClass =
+  "mt-2 w-full resize-none rounded-lg border border-line bg-void px-3.5 py-3 text-[13px] leading-relaxed text-ink outline-none transition placeholder:text-ink-3 focus:border-accent/70";
 
 function money(cents: number) {
   return new Intl.NumberFormat("en-US", {
@@ -38,6 +49,80 @@ function money(cents: number) {
   }).format(cents / 100);
 }
 
+type AdvertiserFields = {
+  destinationUrl: string;
+  contactName: string;
+  companyName: string;
+  email: string;
+  adName: string;
+  aboutAdvertiser: string;
+};
+
+const EMPTY_FIELDS: AdvertiserFields = {
+  destinationUrl: "",
+  contactName: "",
+  companyName: "",
+  email: "",
+  adName: "",
+  aboutAdvertiser: "",
+};
+
+function StepIndicator({
+  step,
+  onGoTo,
+}: {
+  step: Step;
+  onGoTo: (step: Step) => void;
+}) {
+  return (
+    <ol
+      aria-label="Checkout steps"
+      className="mt-7 flex flex-wrap items-center gap-x-3 gap-y-2 text-[10px] font-medium uppercase tracking-wider text-ink-3"
+    >
+      {STEPS.map((item, index) => {
+        const done = step > item.id;
+        const current = step === item.id;
+        return (
+          <li key={item.id} className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => (done ? onGoTo(item.id) : undefined)}
+              disabled={!done}
+              aria-current={current ? "step" : undefined}
+              className={`flex items-center gap-1.5 ${
+                done ? "cursor-pointer hover:text-ink" : "cursor-default"
+              } ${current ? "text-ink" : ""}`}
+            >
+              <span
+                className={`flex h-5 w-5 items-center justify-center rounded-full text-[9px] ${
+                  done
+                    ? "bg-emerald-500/20 text-emerald-300"
+                    : current
+                      ? "bg-accent text-white"
+                      : "border border-line"
+                }`}
+              >
+                {done ? <Check aria-hidden className="h-3 w-3" /> : item.id}
+              </span>
+              {item.title}
+            </button>
+            {index < STEPS.length - 1 && <span aria-hidden className="h-px w-5 bg-line sm:w-8" />}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/**
+ * Account-free advertising checkout.
+ *
+ * Three wizard steps in the left panel — Ads Details → Advertiser details →
+ * Payment — while the right panel stays fixed on the payment artwork. The
+ * order is written to `/api/ads/submit` and the visitor is handed to the hosted
+ * PayPal page; PayPal returns to the homepage, where the “In review” card
+ * (see `AdReviewNotice`) confirms the submission.
+ */
 export default function CheckoutForm({
   slots,
   initialSlot = 0,
@@ -47,28 +132,51 @@ export default function CheckoutForm({
   initialSlot?: number;
   loadError?: string;
 }) {
-  const router = useRouter();
   const fileInput = useRef<HTMLInputElement>(null);
   const requestedSlot = slots.find((slot) => slot.id === initialSlot && slot.available);
+  const [step, setStep] = useState<Step>(requestedSlot ? 2 : 1);
   const [slotId, setSlotId] = useState(requestedSlot?.id || 0);
-  const [durationMonths, setDurationMonths] = useState(1);
+  const [fields, setFields] = useState<AdvertiserFields>(EMPTY_FIELDS);
   const [creative, setCreative] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [dimensions, setDimensions] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(
-    initialSlot && !requestedSlot ? "That ad slot is no longer available. Choose another placement." : "",
+    initialSlot && !requestedSlot
+      ? "That ad slot is no longer available. Choose another placement."
+      : "",
   );
 
-  const availableSlots = useMemo(() => slots.filter((slot) => slot.available), [slots]);
+  const availableCount = useMemo(
+    () => slots.filter((slot) => slot.available).length,
+    [slots],
+  );
   const selectedSlot = slots.find((slot) => slot.id === slotId);
-  const totalCents = (selectedSlot?.price_cents || 0) * durationMonths;
+  const totalCents = selectedSlot?.price_cents || 0;
 
   useEffect(() => {
     return () => {
       if (preview) URL.revokeObjectURL(preview);
     };
   }, [preview]);
+
+  function goToStep(next: Step) {
+    setError("");
+    setStep(next);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function chooseSlot(slot: CheckoutSlot) {
+    setSlotId(slot.id);
+    setError("");
+    setStep(2);
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function setField<K extends keyof AdvertiserFields>(key: K, value: AdvertiserFields[K]) {
+    setFields((current) => ({ ...current, [key]: value }));
+    setError("");
+  }
 
   function chooseCreative(file: File | null) {
     setError("");
@@ -117,28 +225,67 @@ export default function CheckoutForm({
     image.src = nextPreview;
   }
 
-  async function submitAd(event: React.FormEvent<HTMLFormElement>) {
+  /** Step 2 → 3. The browser has already enforced the required text fields. */
+  function continueToPayment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError("");
     if (!selectedSlot?.available) {
       setError("Choose an available ad slot.");
+      goToStep(1);
       return;
     }
     if (!creative) {
-      setError("Upload your 16:9 ad banner before submitting.");
+      setError("Upload your 16:9 ad banner before continuing.");
+      return;
+    }
+    goToStep(3);
+  }
+
+  /** Step 3: create the in-review order, then hand over to PayPal. */
+  async function payWithPayPal() {
+    setError("");
+    if (!selectedSlot?.available) {
+      setError("Choose an available ad slot.");
+      goToStep(1);
+      return;
+    }
+    if (!creative) {
+      setError("Upload your 16:9 ad banner before paying.");
+      goToStep(2);
       return;
     }
 
     setSubmitting(true);
     try {
-      const body = new FormData(event.currentTarget);
+      const body = new FormData();
       body.set("slotId", String(slotId));
-      body.set("durationMonths", String(durationMonths));
+      body.set("durationMonths", String(CHECKOUT_DURATION_MONTHS));
+      body.set("adName", fields.adName);
+      body.set("contactName", fields.contactName);
+      body.set("companyName", fields.companyName);
+      body.set("email", fields.email);
+      body.set("aboutAdvertiser", fields.aboutAdvertiser);
+      body.set("destinationUrl", fields.destinationUrl);
       body.set("creative", creative);
+
       const response = await fetch("/api/ads/submit", { method: "POST", body });
       const result = await response.json().catch(() => null);
       if (!response.ok) throw new Error(result?.error || "Unable to submit your ad.");
-      router.push("/checkout/review");
+
+      // PayPal returns to the homepage; this flag makes the “In review” card
+      // appear there exactly once, for ten seconds.
+      try {
+        window.localStorage.setItem(
+          AD_REVIEW_FLAG_KEY,
+          JSON.stringify({
+            at: Date.now(),
+            orderId: result?.orderId ?? null,
+            adName: fields.adName,
+          }),
+        );
+      } catch {
+        /* storage disabled — the visitor still reaches PayPal */
+      }
+      window.location.assign(PAYPAL_PAYMENT_URL);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to submit your ad.");
       setSubmitting(false);
@@ -146,235 +293,354 @@ export default function CheckoutForm({
   }
 
   return (
-    <form onSubmit={submitAd} className="grid min-h-screen bg-void lg:grid-cols-2">
-      <section className="px-5 py-6 sm:px-8 lg:px-10 xl:px-16">
-        <div className="mx-auto max-w-[620px]">
-          <div className="flex items-center justify-between">
+    <form
+      onSubmit={continueToPayment}
+      className="grid min-h-screen items-start bg-void lg:grid-cols-2"
+    >
+      <section className="px-5 pb-16 pt-6 sm:px-8 lg:px-10 xl:px-14">
+        <div className="mx-auto w-full max-w-[720px]">
+          <div className="flex items-center justify-between gap-3">
             <Link href="/" className="flex items-center gap-2" aria-label="erobabe home">
               <img src={LOGO_URL} alt="" className="h-7 w-auto" />
-              <span className="text-[15px] font-bold">erobabe<span className="text-accent">.</span></span>
+              <span className="text-[15px] font-bold">
+                erobabe<span className="text-accent">.</span>
+              </span>
             </Link>
-            <Link href="/" className="inline-flex items-center gap-1.5 text-[12px] text-ink-3 transition hover:text-ink">
+            <Link
+              href="/"
+              className="inline-flex items-center gap-1.5 text-[12px] text-ink-3 transition hover:text-ink"
+            >
               <ArrowLeft aria-hidden className="h-3.5 w-3.5" /> Back to website
             </Link>
           </div>
 
-          <div className="mt-10 sm:mt-14">
+          <div className="mt-8 sm:mt-10">
             <p className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-accent">
               <span className="h-px w-6 bg-accent" /> Advertiser checkout
             </p>
-            <h1 className="mt-3 text-[30px] font-semibold tracking-[-0.035em] text-ink sm:text-[38px]">
+            <h1 className="mt-3 text-[26px] font-semibold tracking-[-0.035em] text-ink sm:text-[32px]">
               Your brand, in the spotlight.
             </h1>
-            <p className="mt-3 max-w-[500px] text-[13px] leading-relaxed text-ink-3">
-              Tell us about your ad and upload your creative. No account or advertiser dashboard needed.
+            <p className="mt-2 max-w-[520px] text-[12.5px] leading-relaxed text-ink-3">
+              Pick a 16:9 placement, tell us about your ad, and pay with PayPal. No account needed.
             </p>
           </div>
 
-          <div className="mt-8 flex items-center gap-3 text-[10px] font-medium uppercase tracking-wider text-ink-3">
-            <span className="flex items-center gap-1.5 text-ink"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent text-[9px] text-white">1</span> Ad details</span>
-            <span className="h-px flex-1 bg-line" />
-            <span className="flex items-center gap-1.5"><span className="flex h-5 w-5 items-center justify-center rounded-full border border-line">2</span> PayPal</span>
-            <span className="h-px flex-1 bg-line" />
-            <span className="flex items-center gap-1.5"><span className="flex h-5 w-5 items-center justify-center rounded-full border border-line">3</span> Review</span>
-          </div>
+          <StepIndicator
+            step={step}
+            onGoTo={(target) => {
+              if (target === 1) {
+                goToStep(1);
+                return;
+              }
+              if (!slotId) {
+                setError("Choose an available ad slot first.");
+                goToStep(1);
+                return;
+              }
+              goToStep(target);
+            }}
+          />
 
           {(loadError || error) && (
-            <p role="alert" className="mt-7 rounded-lg border border-red-500/25 bg-red-500/10 p-3.5 text-[12px] leading-relaxed text-red-300">
+            <p
+              role="alert"
+              className="mt-5 rounded-lg border border-red-500/25 bg-red-500/10 p-3.5 text-[12px] leading-relaxed text-red-300"
+            >
               {loadError || error}
             </p>
           )}
 
-          <div className="mt-8 space-y-6">
-            <section aria-labelledby="placement-heading">
-              <div className="flex items-baseline justify-between gap-3">
-                <h2 id="placement-heading" className="text-[14px] font-semibold">Choose your placement</h2>
-                <span className="text-[11px] text-ink-3">16:9 sidebar banner</span>
+          {step === 1 && (
+            <section aria-labelledby="ads-details-heading" className="mt-7">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 id="ads-details-heading" className="text-[15px] font-semibold">
+                  1. Ads Details
+                </h2>
+                <span className="text-[11px] text-ink-3">
+                  {availableCount} of {slots.length || 10} placements available
+                </span>
               </div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
-                <label className={labelClass}>
-                  <span className="sr-only">Ad slot</span>
-                  <select
-                    name="slotId"
-                    value={slotId}
-                    onChange={(event) => { setSlotId(Number(event.target.value)); setError(""); }}
-                    required
-                    className={`${inputClass} mt-0`}
+              <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
+                Ten fixed 16:9 placements, 1 month each. Taken placements show the running ad and
+                cannot be selected.
+              </p>
+              <SlotPicker slots={slots} onSelect={chooseSlot} />
+              {selectedSlot?.available && (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-card px-4 py-3">
+                  <span className="text-[12px] text-ink-2">
+                    Slot {selectedSlot.id} · {selectedSlot.name} selected
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => goToStep(2)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md bg-accent px-4 text-[12px] font-semibold text-white transition hover:bg-accent-soft"
                   >
-                    <option value={0} disabled>Select an available ad slot</option>
-                    {availableSlots.map((slot) => (
-                      <option key={slot.id} value={slot.id}>Slot {slot.id} — {slot.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className={labelClass}>
-                  <span className="sr-only">Campaign duration</span>
-                  <select
-                    name="durationMonths"
-                    value={durationMonths}
-                    onChange={(event) => setDurationMonths(Number(event.target.value))}
-                    className={`${inputClass} mt-0`}
-                  >
-                    {[1, 2, 3, 6, 12].map((months) => (
-                      <option key={months} value={months}>{months} {months === 1 ? "month" : "months"}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              {selectedSlot && (
-                <div className="mt-3 flex items-center justify-between rounded-lg border border-accent/20 bg-accent/[0.06] px-3.5 py-3">
-                  <div>
-                    <p className="text-[12px] font-medium">Slot {selectedSlot.id} · {selectedSlot.side} rail, position {selectedSlot.position}</p>
-                    <p className="mt-0.5 text-[10.5px] text-ink-3">{selectedSlot.description}</p>
-                  </div>
-                  <span className="ml-3 shrink-0 text-[12px] font-semibold text-accent">{money(selectedSlot.price_cents)}/mo</span>
+                    Continue <ArrowRight aria-hidden className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               )}
-              {!availableSlots.length && !loadError && (
-                <p className="mt-3 rounded-lg border border-dashed border-line p-4 text-[12px] text-ink-3">No ad slots are available right now. Please check back soon.</p>
-              )}
             </section>
+          )}
 
-            <section aria-labelledby="advertiser-heading" className="border-t border-line pt-6">
-              <h2 id="advertiser-heading" className="text-[14px] font-semibold">About you & your advertisement</h2>
-              <p className="mt-1 text-[11px] text-ink-3">We’ll use your email only for this order and its live notification.</p>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          {step === 2 && (
+            <section aria-labelledby="advertiser-heading" className="mt-7">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 id="advertiser-heading" className="text-[15px] font-semibold">
+                  2. Advertiser details
+                </h2>
+                <span className="text-[11px] text-ink-3">
+                  {selectedSlot ? `Slot ${selectedSlot.id} · ${money(totalCents)}` : "No slot selected"}
+                </span>
+              </div>
+
+              {/* 1 — Media upload (required) */}
+              <div className="mt-4">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="text-[12px] font-medium text-ink-2">
+                    Media upload <span className="text-accent">*</span>
+                  </span>
+                  <span className="text-[10.5px] text-ink-3">JPG or PNG · 16:9 · max 5 MB</span>
+                </div>
+                <label className="group relative mt-2 block cursor-pointer overflow-hidden rounded-xl border border-dashed border-line bg-card transition hover:border-accent/60">
+                  {preview ? (
+                    <span className="relative block aspect-video bg-black">
+                      <img src={preview} alt="Ad banner preview" className="h-full w-full object-contain" />
+                      <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/90 to-transparent px-4 pb-3 pt-8 text-[11px]">
+                        <span className="max-w-[70%] truncate">{creative?.name}</span>
+                        <span className="text-emerald-300">{dimensions || "16:9 banner"}</span>
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="flex aspect-video flex-col items-center justify-center px-5 text-center">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-full border border-accent/25 bg-accent/10 text-accent transition group-hover:bg-accent/15">
+                        <ImagePlus aria-hidden className="h-5 w-5" />
+                      </span>
+                      <span className="mt-3 text-[13px] font-medium">Drop in your 16:9 creative</span>
+                      <span className="mt-1 text-[11px] text-ink-3">Click to browse · 1200 × 675 recommended</span>
+                    </span>
+                  )}
+                  <input
+                    ref={fileInput}
+                    name="creative"
+                    type="file"
+                    accept={CREATIVE_ACCEPT}
+                    onChange={(event) => chooseCreative(event.target.files?.[0] || null)}
+                    className="sr-only"
+                  />
+                </label>
+                {creative && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      chooseCreative(null);
+                      if (fileInput.current) fileInput.current.value = "";
+                    }}
+                    className="mt-2 inline-flex items-center gap-1 text-[10.5px] text-ink-3 transition hover:text-ink"
+                  >
+                    <X aria-hidden className="h-3 w-3" /> Remove banner
+                  </button>
+                )}
+              </div>
+
+              {/* 2 — Destination URL (required, highlighted) */}
+              <label className="mt-5 block rounded-xl border border-accent/45 bg-accent/[0.06] p-3.5">
+                <span className="flex items-center justify-between gap-2 text-[12px] font-medium text-ink-2">
+                  <span>
+                    Destination URL <span className="text-accent">*</span>
+                  </span>
+                  <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-accent">
+                    Most important
+                  </span>
+                </span>
+                <input
+                  name="destinationUrl"
+                  type="url"
+                  required
+                  maxLength={2048}
+                  value={fields.destinationUrl}
+                  onChange={(event) => setField("destinationUrl", event.target.value)}
+                  placeholder="https://your-website.com/landing-page"
+                  className={`${inputClass} border-accent/35 bg-void`}
+                />
+                <span className="mt-1.5 block text-[10.5px] leading-relaxed text-ink-3">
+                  Where every click on your banner goes. Use the full https:// address.
+                </span>
+              </label>
+
+              <div className="mt-5 grid gap-4 sm:grid-cols-2">
                 <label className={labelClass}>
-                  Contact name <span className="text-accent">*</span>
-                  <input name="contactName" required maxLength={120} autoComplete="name" placeholder="Alex Morgan" className={inputClass} />
+                  Your name <span className="text-accent">*</span>
+                  <input
+                    name="contactName"
+                    required
+                    maxLength={120}
+                    autoComplete="name"
+                    value={fields.contactName}
+                    onChange={(event) => setField("contactName", event.target.value)}
+                    placeholder="Alex Morgan"
+                    className={inputClass}
+                  />
                 </label>
                 <label className={labelClass}>
                   Company / brand
-                  <input name="companyName" maxLength={160} autoComplete="organization" placeholder="Your brand (optional)" className={inputClass} />
+                  <input
+                    name="companyName"
+                    maxLength={160}
+                    autoComplete="organization"
+                    value={fields.companyName}
+                    onChange={(event) => setField("companyName", event.target.value)}
+                    placeholder="Your brand (optional)"
+                    className={inputClass}
+                  />
                 </label>
               </div>
+
               <label className={`${labelClass} mt-4`}>
                 Email address <span className="text-accent">*</span>
-                <input name="email" type="email" required maxLength={320} autoComplete="email" placeholder="you@company.com" className={inputClass} />
+                <input
+                  name="email"
+                  type="email"
+                  required
+                  maxLength={320}
+                  autoComplete="email"
+                  value={fields.email}
+                  onChange={(event) => setField("email", event.target.value)}
+                  placeholder="you@company.com"
+                  className={inputClass}
+                />
               </label>
+
               <label className={`${labelClass} mt-4`}>
                 Ad name <span className="text-accent">*</span>
-                <input name="adName" required maxLength={160} placeholder="e.g. Summer collection launch" className={inputClass} />
+                <input
+                  name="adName"
+                  required
+                  maxLength={160}
+                  value={fields.adName}
+                  onChange={(event) => setField("adName", event.target.value)}
+                  placeholder="e.g. Summer collection launch"
+                  className={inputClass}
+                />
               </label>
+
               <label className={`${labelClass} mt-4`}>
-                Destination URL <span className="text-accent">*</span>
-                <input name="destinationUrl" type="url" required maxLength={2048} placeholder="https://your-website.com/landing-page" className={inputClass} />
-              </label>
-              <label className={`${labelClass} mt-4`}>
-                About the advertiser <span className="text-accent">*</span>
+                About you
                 <textarea
                   name="aboutAdvertiser"
-                  required
                   maxLength={2000}
-                  rows={4}
-                  placeholder="Briefly describe your business and what you’re promoting…"
-                  className="mt-2 w-full resize-none rounded-lg border border-line bg-void px-3.5 py-3 text-[13px] leading-relaxed text-ink outline-none transition placeholder:text-ink-3 focus:border-accent/70"
+                  rows={3}
+                  value={fields.aboutAdvertiser}
+                  onChange={(event) => setField("aboutAdvertiser", event.target.value)}
+                  placeholder="A sentence about your business (optional)"
+                  className={textareaClass}
                 />
               </label>
-            </section>
 
-            <section aria-labelledby="creative-heading" className="border-t border-line pt-6">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h2 id="creative-heading" className="text-[14px] font-semibold">Upload your ad banner <span className="text-accent">*</span></h2>
-                <span className="text-[10.5px] text-ink-3">JPG or PNG · max 5 MB</span>
+              <p className="mt-3 text-[10.5px] leading-relaxed text-ink-3">
+                We use your email only for this order and its live notification. Your creative and
+                destination are reviewed before anything appears on erobabe.
+              </p>
+
+              <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => goToStep(1)}
+                  className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-line bg-card px-4 text-[12.5px] font-medium text-ink-2 transition hover:text-ink"
+                >
+                  <ChevronLeft aria-hidden className="h-3.5 w-3.5" /> Ads Details
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex h-11 items-center gap-1.5 rounded-lg bg-accent px-5 text-[13px] font-semibold text-white transition hover:bg-accent-soft"
+                >
+                  Continue to payment <ArrowRight aria-hidden className="h-4 w-4" />
+                </button>
               </div>
-              <label className="group relative mt-3 block cursor-pointer overflow-hidden rounded-xl border border-dashed border-line bg-card transition hover:border-accent/60">
-                {preview ? (
-                  <span className="relative block aspect-video bg-black">
-                    <img src={preview} alt="Ad banner preview" className="h-full w-full object-contain" />
-                    <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/90 to-transparent px-4 pb-3 pt-8 text-[11px]">
-                      <span className="max-w-[70%] truncate">{creative?.name}</span>
-                      <span className="text-emerald-300">{dimensions || "16:9 banner"}</span>
-                    </span>
-                  </span>
-                ) : (
-                  <span className="flex aspect-video flex-col items-center justify-center px-5 text-center">
-                    <span className="flex h-11 w-11 items-center justify-center rounded-full border border-accent/25 bg-accent/10 text-accent transition group-hover:bg-accent/15">
-                      <ImagePlus aria-hidden className="h-5 w-5" />
-                    </span>
-                    <span className="mt-3 text-[13px] font-medium">Drop in your 16:9 creative</span>
-                    <span className="mt-1 text-[11px] text-ink-3">Click to browse · 1200 × 675 recommended</span>
-                  </span>
-                )}
-                <input
-                  ref={fileInput}
-                  name="creative"
-                  type="file"
-                  accept={CREATIVE_ACCEPT}
-                  required
-                  onChange={(event) => chooseCreative(event.target.files?.[0] || null)}
-                  className="sr-only"
-                />
-              </label>
-              <p className="mt-2 text-[10.5px] leading-relaxed text-ink-3">Your creative and destination are reviewed before anything appears on erobabe.</p>
             </section>
-          </div>
+          )}
+
+          {step === 3 && (
+            <section aria-labelledby="payment-heading" className="mt-7">
+              <h2 id="payment-heading" className="text-[15px] font-semibold">
+                3. Payment
+              </h2>
+              <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
+                You’ll pay {money(totalCents)} for 1 month on PayPal’s secure page, then come back
+                here while we review your ad.
+              </p>
+
+              <div className="mt-4 rounded-xl border border-line bg-card p-4">
+                <div className="flex justify-between gap-4 text-[12px]">
+                  <span className="text-ink-3">Placement</span>
+                  <span className="text-right font-medium">
+                    {selectedSlot ? `Slot ${selectedSlot.id} · ${selectedSlot.name}` : "Not selected"}
+                  </span>
+                </div>
+                <div className="mt-3 flex justify-between text-[12px]">
+                  <span className="text-ink-3">Duration</span>
+                  <span>
+                    {CHECKOUT_DURATION_MONTHS} {CHECKOUT_DURATION_MONTHS === 1 ? "month" : "months"}
+                  </span>
+                </div>
+                <div className="mt-4 flex items-end justify-between border-t border-line pt-4">
+                  <span className="text-[12px] text-ink-2">Total due</span>
+                  <span className="text-[26px] font-semibold tracking-tight">
+                    {money(totalCents)}{" "}
+                    <small className="text-[11px] font-normal text-ink-3">USD</small>
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-line bg-card p-4 text-[11.5px] leading-relaxed text-ink-2">
+                <p className="flex items-center gap-2 font-medium text-ink">
+                  <CreditCard aria-hidden className="h-4 w-4 text-accent" /> How payment works
+                </p>
+                <ol className="mt-2 space-y-1 pl-5 text-ink-3">
+                  <li>1. We save your ad as “In review”.</li>
+                  <li>2. PayPal opens in this tab for the {money(totalCents)} payment.</li>
+                  <li>3. PayPal returns you to the homepage while we approve the ad.</li>
+                </ol>
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => goToStep(2)}
+                  className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-line bg-card px-4 text-[12.5px] font-medium text-ink-2 transition hover:text-ink disabled:opacity-50"
+                >
+                  <ChevronLeft aria-hidden className="h-3.5 w-3.5" /> Advertiser details
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void payWithPayPal()}
+                  disabled={submitting || !selectedSlot?.available}
+                  className="inline-flex h-12 items-center gap-2 rounded-lg bg-accent px-5 text-[14px] font-semibold text-white transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  {submitting ? (
+                    <LoaderCircle aria-hidden className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <LockKeyhole aria-hidden className="h-4 w-4" />
+                  )}
+                  {submitting ? "Preparing your order…" : `Pay ${money(totalCents)} with PayPal`}
+                  {!submitting && <ArrowRight aria-hidden className="h-4 w-4" />}
+                </button>
+              </div>
+
+              <div className="mt-4 flex items-start gap-2 text-[10.5px] leading-relaxed text-ink-3">
+                <ShieldCheck aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                <p>
+                  Your ad stays <strong className="text-ink-2">In review</strong> until our team
+                  confirms the PayPal payment and approves the creative.
+                </p>
+              </div>
+            </section>
+          )}
         </div>
       </section>
 
-      <aside className="border-t border-line bg-[#0e0f12] px-5 py-8 sm:px-8 lg:border-l lg:border-t-0 lg:px-10 xl:px-14">
-        <div className="mx-auto flex w-full max-w-[440px] flex-col lg:sticky lg:top-0 lg:min-h-screen lg:justify-center lg:py-10">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-ink-3">Order summary</p>
-              <h2 className="mt-1 text-[20px] font-semibold">Pay with PayPal</h2>
-            </div>
-            <span className="flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-accent"><QrCode aria-hidden className="h-5 w-5" /></span>
-          </div>
-
-          <div className="mt-6 rounded-xl border border-line bg-card p-4">
-            <div className="flex justify-between gap-4 text-[12px]">
-              <span className="text-ink-3">Placement</span>
-              <span className="text-right font-medium">{selectedSlot ? `Slot ${selectedSlot.id} · ${selectedSlot.name}` : "Not selected"}</span>
-            </div>
-            <div className="mt-3 flex justify-between text-[12px]">
-              <span className="text-ink-3">Duration</span>
-              <span>{durationMonths} {durationMonths === 1 ? "month" : "months"}</span>
-            </div>
-            <div className="mt-4 flex items-end justify-between border-t border-line pt-4">
-              <span className="text-[12px] text-ink-2">Total due</span>
-              <span className="text-[28px] font-semibold tracking-tight">{money(totalCents)} <small className="text-[11px] font-normal text-ink-3">USD</small></span>
-            </div>
-          </div>
-
-          <div className="mt-5 rounded-xl border border-line bg-card p-5 text-center">
-            <p className="text-[12px] font-medium">Scan with your PayPal app</p>
-            <p className="mt-1 text-[11px] text-ink-3">Send exactly {money(totalCents)} USD after scanning.</p>
-            <a href="/paypal-qr.png" target="_blank" rel="noopener noreferrer" aria-label="Open PayPal QR code in a new tab" className="mx-auto mt-4 block w-fit rounded-xl bg-white p-3 shadow-[0_12px_40px_rgba(0,0,0,0.35)] transition hover:scale-[1.01]">
-              <img src="/paypal-qr.png" alt="Erobabe PayPal payment QR code" className="h-auto w-full max-w-[270px]" />
-            </a>
-            <p className="mt-3 text-[10px] text-ink-3">Tap the QR to open a larger image.</p>
-          </div>
-
-          <label className={`${labelClass} mt-5`}>
-            PayPal transaction ID <span className="font-normal text-ink-3">(optional)</span>
-            <input name="paypalTransactionId" maxLength={128} autoComplete="off" placeholder="Helps us find your payment" className={`${inputClass} bg-card`} />
-          </label>
-
-          <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-lg border border-line bg-card p-3.5 text-[11.5px] leading-relaxed text-ink-2">
-            <input name="paymentConfirmed" type="checkbox" value="true" required className="mt-0.5 h-4 w-4 shrink-0 accent-[#f51655]" />
-            <span>I confirm that I have sent <strong className="text-ink">{money(totalCents)} USD</strong> using the PayPal QR above. <span className="text-accent">*</span></span>
-          </label>
-
-          {error && <p role="alert" className="mt-4 text-[11.5px] leading-relaxed text-red-300 lg:hidden">{error}</p>}
-
-          <button
-            type="submit"
-            disabled={submitting || !selectedSlot?.available || !availableSlots.length}
-            className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-5 text-[14px] font-semibold text-white transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-45"
-          >
-            {submitting ? <LoaderCircle aria-hidden className="h-4 w-4 animate-spin" /> : <Check aria-hidden className="h-4 w-4" />}
-            {submitting ? "Submitting for review…" : "Submit"}
-            {!submitting && <ArrowRight aria-hidden className="h-4 w-4" />}
-          </button>
-
-          <div className="mt-4 flex items-start gap-2 text-[10.5px] leading-relaxed text-ink-3">
-            <ShieldCheck aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
-            <p>Your ad will be <strong className="text-ink-2">In review</strong> while our team manually confirms your PayPal payment and approves the creative.</p>
-          </div>
-          <p className="mt-3 flex items-center justify-center gap-1.5 text-[10px] text-ink-3"><LockKeyhole aria-hidden className="h-3 w-3" /> Secure submission · no account required</p>
-        </div>
-      </aside>
+      <PaymentPanel />
     </form>
   );
 }

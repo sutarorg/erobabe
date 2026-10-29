@@ -1,7 +1,9 @@
+import { Fragment } from "react";
 import { publicPageMetadata } from "@/lib/metadata/page";
 import { SITE_URL } from "@/lib/site";
 import { getPopularVideos } from "@/lib/public/catalog";
 import PublicVideoCard from "@/src/components/PublicVideoCard";
+import MobileAdSlot from "@/src/components/ads/MobileAdSlot";
 import type { Metadata } from "next";
 
 export const revalidate = 30;
@@ -42,8 +44,14 @@ export default async function PopularPage() {
         </div>
       ) : (
         <div className="mt-6 grid grid-cols-1 gap-4 @md:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4">
-          {videos.map((video) => (
-            <PublicVideoCard key={video.slug} video={video} />
+          {videos.map((video, index) => (
+            <Fragment key={video.slug}>
+              <PublicVideoCard video={video} />
+              {/* Phones only: one 16:9 banner after every eight videos. */}
+              {(index + 1) % 8 === 0 && (
+                <MobileAdSlot position={Math.floor(index / 8)} inGrid />
+              )}
+            </Fragment>
           ))}
         </div>
       )}

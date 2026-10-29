@@ -1,4 +1,6 @@
 import VideoComments from "@/src/components/VideoComments";
+import MobileAdSlot from "@/src/components/ads/MobileAdSlot";
+import MobileAdBreak from "@/src/components/ads/MobileAdBreak";
 import LatestVideoFeed from "@/src/components/LatestVideoFeed";
 import WatchCategories from "@/src/components/WatchCategories";
 import { getRecommendationFeed } from "@/lib/recommendations/service";
@@ -217,6 +219,8 @@ export async function RelatedVideos({ video }: { video: WatchVideo }) {
         ))}
       </FourRowVideoGrid>
       {!videos.length && <p className="mt-3 text-sm text-ink-3">No videos available yet.</p>}
+      {/* Phones only: one 16:9 banner under this section. */}
+      <MobileAdSlot position={1} />
     </section>
   );
 }
@@ -225,13 +229,16 @@ export async function RelatedVideos({ video }: { video: WatchVideo }) {
 export async function RecommendedForYou({ video }: { video: WatchVideo }) {
   const recommended = await loadShelf(video, "recommended");
   return (
-    <RecommendationShelf
-      title={recommended.personalized ? "Recommended for you" : "Discover videos"}
-      videos={recommended.videos}
-      surface="recommended"
-      correlationId={recommended.correlationId}
-      algorithmVersion={recommended.algorithmVersion}
-    />
+    <>
+      <RecommendationShelf
+        title={recommended.personalized ? "Recommended for you" : "Discover videos"}
+        videos={recommended.videos}
+        surface="recommended"
+        correlationId={recommended.correlationId}
+        algorithmVersion={recommended.algorithmVersion}
+      />
+      <MobileAdSlot position={2} />
+    </>
   );
 }
 
@@ -239,13 +246,16 @@ export async function RecommendedForYou({ video }: { video: WatchVideo }) {
 export async function MostLiked({ video }: { video: WatchVideo }) {
   const mostLiked = await loadShelf(video, "most_liked");
   return (
-    <RecommendationShelf
-      title="Most Liked"
-      videos={mostLiked.videos}
-      surface="most_liked"
-      correlationId={mostLiked.correlationId}
-      algorithmVersion={mostLiked.algorithmVersion}
-    />
+    <>
+      <RecommendationShelf
+        title="Most Liked"
+        videos={mostLiked.videos}
+        surface="most_liked"
+        correlationId={mostLiked.correlationId}
+        algorithmVersion={mostLiked.algorithmVersion}
+      />
+      <MobileAdSlot position={3} />
+    </>
   );
 }
 
@@ -494,6 +504,10 @@ export default async function VideoPage({
       )}
 
       <VideoComments key={video.id} videoId={video.id} />
+      {/* Phones only: one 16:9 banner directly under the comments. */}
+      <MobileAdSlot position={0} />
+      {/* Every third video a phone opens gets a full-screen ad break. */}
+      <MobileAdBreak key={`break-${video.id}`} slug={video.slug} position={9} />
       {/* Each shelf has its own boundary: a slow feed streams in late instead
           of holding up the player or the other shelves. */}
       <Suspense fallback={<WatchShelfFallback title="More like this" />}>
@@ -508,7 +522,7 @@ export default async function VideoPage({
       <Suspense fallback={<WatchShelfFallback title="Top Categories" />}>
         <TopCategories video={video} />
       </Suspense>
-      <LatestVideoFeed key={video.id} videoId={video.id} />
+      <LatestVideoFeed key={video.id} videoId={video.id} adBase={4} />
     </div>
   );
 }

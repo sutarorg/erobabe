@@ -169,6 +169,53 @@ body {
   .review-card, .review-check, .review-pulse, .review-orbit { animation: none; }
 }
 
+/* ------------------------------------------------------------------ */
+/* “In review” confirmation after the PayPal round trip                */
+/* Cards animate in, hold for ten seconds, then animate out.           */
+/* ------------------------------------------------------------------ */
+@keyframes ad-review-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ad-review-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(-10px) scale(0.97); }
+}
+@keyframes ad-review-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ad-review-backdrop-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes ad-review-halo {
+  0% { opacity: 0.55; transform: scale(0.75); }
+  70%, 100% { opacity: 0; transform: scale(1.55); }
+}
+@keyframes ad-review-progress {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.ad-review-in { animation: ad-review-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.ad-review-out { animation: ad-review-out 0.7s cubic-bezier(0.4, 0, 1, 1) both; }
+.ad-review-backdrop-in { animation: ad-review-backdrop-in 0.3s ease-out both; }
+.ad-review-backdrop-out { animation: ad-review-backdrop-out 0.7s ease-in both; }
+.ad-review-halo { animation: ad-review-halo 2.2s ease-out infinite; }
+.ad-review-progress { animation: ad-review-progress 10s linear forwards; }
+
+/* Mobile ad-break close button pops in once the 3s countdown ends */
+@keyframes ad-break-close-in {
+  from { opacity: 0; transform: scale(0.7) rotate(-8deg); }
+  to { opacity: 1; transform: scale(1) rotate(0); }
+}
+.ad-break-close { animation: ad-break-close-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ad-review-in, .ad-review-out, .ad-review-backdrop-in,
+  .ad-review-backdrop-out, .ad-review-halo, .ad-break-close { animation: none; }
+}
+
 input::placeholder {
   color: var(--color-ink-3);
   opacity: 1;
