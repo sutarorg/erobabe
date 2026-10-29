@@ -88,11 +88,16 @@ holds the word budget, so every path (AI prompt, API, public card) agrees.
 ## Advertising checkout
 
 Clicking a vacant banner opens `/checkout?slot=<id>` directly; no advertiser account,
-billing modal, or dashboard is involved. The split checkout collects campaign/contact
-details and a 16:9 JPG or PNG banner (maximum 5 MB), and displays the PayPal QR from
-`public/paypal-qr.png`. Prices are recalculated from `ad_slots` on the server. Submitting
-creates an `in_review` order and shows an animated review screen before returning to the
-public site after five seconds. A client payment assertion never verifies payment.
+billing modal, or dashboard is involved. The checkout is a three-step wizard in the left
+panel — **Ads Details** (the ten 16:9 placements, five per row, with sold slots showing the
+running creative and locked), **Advertiser details** (16:9 banner upload, destination URL,
+name, company, email, ad name, about), then **Payment** — while the right panel stays
+fixed on the advertiser payment artwork (`NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL`, bundled
+`public/paypal-qr.png` fallback). Prices are recalculated from `ad_slots` on the server.
+Paying writes an `in_review` order and hands the visitor to the hosted PayPal page
+(`https://www.paypal.com/ncp/payment/AZP63KXT9FUNL`). PayPal returns them to the
+homepage, where the compact **In review** card animates in, holds for ten seconds and
+returns to the homepage. A client payment assertion never verifies payment.
 
 Staff inspect the creative and destination in **Admin → Ad Review**, manually confirm the
 payment in their PayPal account, then choose **Approve & make live**. Going live triggers
@@ -105,9 +110,18 @@ APIs and the advertiser portal have been removed.
 
 Public: `/`, `/categories`, `/category/[slug]`, `/latest`, `/popular`, `/video/[slug]`, `/about`, `/terms`, `/privacy`, `/contact`, `/faq`, `/content-removal`
 
-Guest advertising: `/checkout`, `/checkout/review`, `POST /api/ads/submit`
+Guest advertising: `/checkout`, `POST /api/ads/submit`
 
-Admin: `/admin`, `/admin/videos`, `/admin/videos/upload`, `/admin/categories`, `/admin/advertisements`, `/admin/ad-slots`, `/admin/campaigns`, `/admin/payments`, `/admin/reports`, `/admin/users`, `/admin/logs`, `/admin/system-health`
+Admin: `/admin`, `/admin/videos`, `/admin/categories`, `/admin/advertisements`, `/admin/ad-slots`, `/admin/payments`, `/admin/reports`, `/admin/logs`, `/admin/system-health`
+
+Staff-only dashboard: there are no advertiser accounts, so `/admin/campaigns` and
+`/admin/users` no longer exist. Deleting an advertisement in **Ad Review** frees its slot
+immediately and removes it from **Verified Ad Revenue**.
+
+Mobile advertising: the desktop rails are hidden below 1000px, so the same ten creatives
+rotate through in-flow 16:9 banners (home sections, every eighth listing/search/popular
+video, the watch-page sections and its Latest feed) plus a mobile-only ad break on every
+third video. `lib/ads/rotation.ts` gives each visitor their own even rotation.
 
 SEO: `/sitemap.xml`, `/video-sitemap.xml`, `/robots.txt`
 

@@ -91,7 +91,7 @@ describe("per-request admin authorization and public guest checkout", () => {
   });
 
   it("leaves checkout, public pages, removed portal URLs, and admin sign-in outside auth", async () => {
-    for (const path of ["/", "/popular", "/checkout?slot=1", "/checkout/review", "/advertiser", "/admin/signin"]) {
+    for (const path of ["/", "/popular", "/checkout?slot=1", "/advertiser", "/admin/signin"]) {
       expect((await middleware(request(path))).headers.get("x-middleware-next")).toBe("1");
     }
     expect(state.getUser).not.toHaveBeenCalled();

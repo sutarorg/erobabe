@@ -60,7 +60,7 @@ test("production sidebar components: mobile drawer focus, groups, active route a
     dialog.getByRole("button", { name: "Content", exact: true }),
   ).toHaveAttribute("aria-expanded", "true");
   await expect(
-    dialog.getByRole("link", { name: "Upload Videos", exact: true }),
+    dialog.getByRole("link", { name: "Videos", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   await dialog
     .getByRole("button", { name: "Advertising", exact: true })
@@ -80,8 +80,11 @@ test("production sidebar components: mobile drawer focus, groups, active route a
   await desktop
     .getByRole("button", { name: "Management", exact: true })
     .click();
-  await desktop.getByRole("link", { name: "Users", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/users$/);
+  // User management is gone: staff are the only accounts, so the Management
+  // group now ends at Activity Logs and System Health.
+  await expect(desktop.getByRole("link", { name: "Users", exact: true })).toHaveCount(0);
+  await desktop.getByRole("link", { name: "Activity Logs", exact: true }).click();
+  await expect(page).toHaveURL(/\/admin\/logs$/);
 });
 test("all real portal destinations protect unauthenticated requests", async ({
   request,
@@ -92,10 +95,8 @@ test("all real portal destinations protect unauthenticated requests", async ({
     "/admin/categories",
     "/admin/ad-slots",
     "/admin/advertisements",
-    "/admin/campaigns",
     "/admin/payments",
     "/admin/reports",
-    "/admin/users",
     "/admin/logs",
     "/admin/system-health",
   ]) {

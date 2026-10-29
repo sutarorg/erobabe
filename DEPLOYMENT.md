@@ -173,15 +173,21 @@ no advertiser registration, advertiser dashboard, crypto checkout, payment IPN,
 or automatic payment confirmation. Historical campaign/payment tables and their
 migrations remain for audit compatibility only.
 
-### 1. Publish the authoritative QR
+### 1. Publish the authoritative payment artwork and PayPal page
 
-The operator-supplied source is:
-`https://drive.google.com/file/d/1g7ZcbfasWHlD3OClYRxCZy1-B9lHilAl/view?usp=sharing`
+The checkout's fixed right-hand panel shows the operator-supplied artwork:
+`https://drive.google.com/file/d/1l1dIKZHIXguLYPmJ0QpAWEe6eHkRYsNq/view?usp=sharing`
 
-The verified image is stored at `public/paypal-qr.png` and served as
-`/paypal-qr.png`. Confirm that this is the intended PayPal destination before
-deployment. If the destination changes, replace that public image deliberately;
-do not accept a QR URL or payment destination from a checkout visitor.
+It is referenced through `NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` (default: the Drive
+thumbnail for that file) with `public/paypal-qr.png` served as `/paypal-qr.png` as the
+bundled fallback. Download the artwork into `public/` and point the variable at that local
+file if you prefer not to depend on Google Drive at runtime. Do not accept an image URL or
+payment destination from a checkout visitor.
+
+Payment itself is the hosted PayPal page
+`https://www.paypal.com/ncp/payment/AZP63KXT9FUNL` (`lib/ads/payment.ts`). Configure that
+PayPal page to return the payer to the site homepage: the homepage shows the ten-second
+**In review** confirmation when the checkout's local flag is present.
 
 ### 2. Apply the advertising migration
 
@@ -507,12 +513,12 @@ npx playwright test
 - [ ] A published damplips video plays on `/video/<slug>` through `/api/videos/stream`, seeks (range request), and an HLS row plays every segment through the same route (playlists are rewritten; no request goes to damplips from the browser).
 - [ ] `curl -o /dev/null -w '%{http_code}' 'https://your-domain/api/videos/stream?src=https://example.com/x.mp4'` returns 403.
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
-- [ ] Ad slots at `/admin/ad-slots` → shows exactly 10 slots, no create/delete
-- [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject
-- [ ] Campaigns at `/admin/campaigns` → list real campaigns
+- [ ] Ad slots at `/admin/ad-slots` → the homepage rail layout: five slot cards left, five plus the inventory summary right; sold slots show the live creative, open slots carry the **Available** tag
+- [ ] Advertisements at `/admin/advertisements` → review creative, approve/reject, delete permanently
+- [ ] Deleting a live ad frees its slot and removes its $99 from **Verified Ad Revenue** on `/admin`
+- [ ] `/admin/campaigns` and `/admin/users` return 404 (pages removed with their API actions)
 - [ ] Payments at `/admin/payments` → list real payments, no fake
 - [ ] Reports at `/admin/reports` → list real reports, resolve
-- [ ] Users at `/admin/users` → list real profiles
 - [ ] Logs at `/admin/logs` → shows real audit_logs
 - [ ] System health at `/admin/system-health` → shows real checks, Unknown if not configured, not hardcoded green
 

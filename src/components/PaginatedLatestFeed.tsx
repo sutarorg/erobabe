@@ -1,7 +1,8 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { PublicVideo } from "@/lib/public/catalog";
 import PublicVideoCard from "./PublicVideoCard";
+import MobileAdSlot from "./ads/MobileAdSlot";
 
 type Cursor = { date: string; id: string } | null;
 export default function PaginatedLatestFeed({ initialVideos, initialCursor }: { initialVideos: PublicVideo[]; initialCursor: Cursor }) {
@@ -40,7 +41,13 @@ export default function PaginatedLatestFeed({ initialVideos, initialCursor }: { 
 
   return <>
     <div className="mt-6 grid grid-cols-1 gap-4 @md:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4">
-      {videos.map((video) => <PublicVideoCard key={video.id} video={video} />)}
+      {videos.map((video, index) => (
+        <Fragment key={video.id}>
+          <PublicVideoCard video={video} />
+          {/* Phones only: one 16:9 banner after every eight videos, to the end. */}
+          {(index + 1) % 8 === 0 && <MobileAdSlot position={Math.floor(index / 8)} inGrid />}
+        </Fragment>
+      ))}
     </div>
     <div ref={sentinel} className="flex min-h-16 flex-col items-center justify-center py-5 text-center text-[12px] text-ink-3">
       {busy && <span role="status">Loading more videos…</span>}

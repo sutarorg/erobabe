@@ -1,7 +1,9 @@
+import { Fragment } from "react";
 import { publicPageMetadata } from "@/lib/metadata/page";
 import { homeSections } from "@/lib/public/selection";
 import { getRecommendationFeed } from "@/lib/recommendations/service";
 import RecommendationShelf from "@/src/components/RecommendationShelf";
+import MobileAdSlot from "@/src/components/ads/MobileAdSlot";
 
 import { heroSlidesFromCarousel } from "@/lib/public/hero-slides";
 import { SITE_URL } from "@/lib/site";
@@ -136,8 +138,14 @@ export default async function HomePage({
           </div>
         ) : (
           <div className="mt-6 grid grid-cols-1 gap-4 @md:grid-cols-2 @lg:grid-cols-3 @2xl:grid-cols-4">
-            {mappedVideos.map((video) => (
-              <PublicVideoCard key={video.slug} video={video} />
+            {mappedVideos.map((video, index) => (
+              <Fragment key={video.slug}>
+                <PublicVideoCard video={video} />
+                {/* Phones only: one 16:9 banner after every eight results. */}
+                {(index + 1) % 8 === 0 && (
+                  <MobileAdSlot position={Math.floor(index / 8)} inGrid />
+                )}
+              </Fragment>
             ))}
           </div>
         )}
@@ -205,7 +213,11 @@ export default async function HomePage({
         algorithmVersion={recommendedFeed.algorithmVersion}
         trackEvents={rankedRecommended.length > 0}
       />
+      {/* Phones have no side rails: the same ten creatives appear in-flow,
+          one under each home section. */}
+      <MobileAdSlot position={0} />
       <RecommendationShelf title="Featured Videos" videos={featuredVideos} surface="featured" correlationId={featuredFeed.correlationId} algorithmVersion={featuredFeed.algorithmVersion} />
+      <MobileAdSlot position={1} />
       <section className="mt-8">
         <VideoSection title="Latest Videos">
           <FourRowVideoGrid className="video-grid mt-3.5">
@@ -215,6 +227,7 @@ export default async function HomePage({
           </FourRowVideoGrid>
         </VideoSection>
       </section>
+      <MobileAdSlot position={2} />
     </div>
   );
 }

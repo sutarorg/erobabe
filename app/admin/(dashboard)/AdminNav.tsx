@@ -8,13 +8,18 @@ import {
   LayoutDashboard,
   Megaphone,
   PanelsTopLeft,
-  Radio,
   ScrollText,
   Settings,
   Tag,
-  Users,
 } from "lucide-react";
 import DashboardNav from "@/src/components/DashboardNav";
+
+/**
+ * Staff-only navigation.
+ *
+ * There are no public accounts and no advertiser portal: the dashboard is the
+ * only signed-in surface, so user management and legacy campaign pages are gone.
+ */
 const items = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
   {
@@ -35,7 +40,6 @@ const items = [
         label: "Ad Review",
         icon: Megaphone,
       },
-      { href: "/admin/campaigns", label: "Legacy Campaigns", icon: Radio },
     ],
   },
   { href: "/admin/payments", label: "Payments", icon: CreditCard },
@@ -44,7 +48,6 @@ const items = [
     label: "Management",
     icon: Settings,
     children: [
-      { href: "/admin/users", label: "Users", icon: Users },
       { href: "/admin/logs", label: "Activity Logs", icon: ScrollText },
       { href: "/admin/system-health", label: "System Health", icon: Activity },
     ],

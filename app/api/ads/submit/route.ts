@@ -19,7 +19,8 @@ const submissionSchema = z
     contactName: z.string().trim().min(1).max(120),
     companyName: z.string().trim().max(160).optional().default(""),
     email: z.string().trim().email().max(320),
-    aboutAdvertiser: z.string().trim().min(1).max(2000),
+    // Optional: the checkout labels “About you” as optional.
+    aboutAdvertiser: z.string().trim().max(2000).optional().default(""),
     destinationUrl: z
       .string()
       .trim()
@@ -27,7 +28,10 @@ const submissionSchema = z
       .max(2048)
       .refine((value) => /^https?:\/\//i.test(value), "Use an http or https URL"),
     paypalTransactionId: z.string().trim().max(128).optional().default(""),
-    paymentConfirmed: z.literal("true"),
+    // Payment now happens on the hosted PayPal page after the order exists, so
+    // the confirmation is recorded by the operator during review. The flag is
+    // still accepted (and must be "true") when a client sends it.
+    paymentConfirmed: z.literal("true").optional(),
   })
   .strict();
 
@@ -73,7 +77,7 @@ export async function POST(req: Request) {
     });
     if (!parsed.success) {
       return NextResponse.json(
-        { error: "Complete every required field and confirm that you paid with PayPal." },
+        { error: "Complete every required field, attach a 16:9 banner, and try again." },
         { status: 400 },
       );
     }

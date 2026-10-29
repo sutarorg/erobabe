@@ -1,6 +1,6 @@
 "use client";
 import { Loader2, RotateCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { PublicVideo } from "@/lib/public/catalog";
 import type { FeedCursor } from "@/lib/public/watch-feed";
 import {
@@ -9,7 +9,15 @@ import {
 } from "@/lib/public/shelf";
 import { gridStyle, useContainerColumns, useResponsiveGridRows } from "../hooks/useGridColumns";
 import PublicVideoCard from "./PublicVideoCard";
-export default function LatestVideoFeed({ videoId }: { videoId: string }) {
+import MobileAdSlot from "./ads/MobileAdSlot";
+export default function LatestVideoFeed({
+  videoId,
+  adBase = 0,
+}: {
+  videoId: string;
+  /** First mobile banner position, so feeds sharing a page never collide. */
+  adBase?: number;
+}) {
   const grid = useRef<HTMLDivElement>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const columns = useContainerColumns(grid);
@@ -49,7 +57,17 @@ export default function LatestVideoFeed({ videoId }: { videoId: string }) {
   }, [load, done, error, videos.length]);
   return <section className="mt-8 border-t border-line pt-5">
     <h2 className="text-[15px] font-semibold">Latest</h2>
-    <div ref={grid} className="video-grid mt-3.5" style={gridStyle(columns)}>{videos.map(v => <PublicVideoCard key={v.id} video={v} />)}</div>
+    <div ref={grid} className="video-grid mt-3.5" style={gridStyle(columns)}>
+      {videos.map((video, index) => (
+        <Fragment key={video.id}>
+          <PublicVideoCard video={video} />
+          {/* Phones only: one 16:9 banner after every eight videos of the feed. */}
+          {(index + 1) % 8 === 0 && (
+            <MobileAdSlot position={adBase + Math.floor(index / 8)} inGrid />
+          )}
+        </Fragment>
+      ))}
+    </div>
     <div ref={sentinel} className="flex min-h-12 flex-col items-center justify-center py-6 text-center text-sm text-ink-3">
       {busy && (
         <span role="status" aria-label="Fetching more videos">

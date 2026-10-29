@@ -3,23 +3,23 @@ import { z } from "zod";
 import { requireActiveAdmin, errorStatusFrom } from "@/lib/video/publishing";
 import { boundedJson, RequestError } from "@/lib/http/safety";
 import { revalidatePublicTag } from "@/lib/public/revalidate";
+
+/**
+ * Operator transitions that are still part of the product.
+ *
+ * The legacy campaign and advertiser-account actions (pause/resume/cancel a
+ * campaign, suspend/restore a user, approve/reject a portal creative) were
+ * removed together with the /admin/campaigns and /admin/users pages: there are
+ * no advertiser accounts, and guest advertising orders are handled by
+ * /api/admin/advertisements instead.
+ */
 const schema = z
   .object({
     id: z.string().uuid(),
-    action: z.enum([
-      "approve_creative",
-      "reject_creative",
-      "pause_campaign",
-      "resume_campaign",
-      "cancel_campaign",
-      "review_report",
-      "resolve_report",
-      "dismiss_report",
-      "suspend_user",
-      "restore_user",
-    ]),
+    action: z.enum(["review_report", "resolve_report", "dismiss_report"]),
   })
   .strict();
+
 export async function POST(req: Request) {
   try {
     const { user, service } = await requireActiveAdmin();
