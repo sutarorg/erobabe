@@ -1,6 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import Link from "next/link";
-import { MIN_VIDEOS_PER_CATEGORY, categoryCounts, type ImportService } from "@/lib/damplips/importer";
+import { categoryCounts, type ImportService } from "@/lib/damplips/importer";
 import DamplipsImportPanel from "./DamplipsImportPanel";
 import VideoManager, {
   type AdminCategory,
@@ -81,7 +81,7 @@ export default async function AdminVideosPage() {
   } catch {
     counts = [];
   }
-  const filled = counts.filter((entry) => entry.count >= MIN_VIDEOS_PER_CATEGORY).length;
+  const live = counts.filter((entry) => entry.published > 0).length;
   const withThumbnails = rows.filter((video) => video.thumbnail_url).length;
 
   return (
@@ -96,7 +96,7 @@ export default async function AdminVideosPage() {
             {rows.length > 0 && (
               <span className="tabular-nums">
                 {rows.length} videos · {withThumbnails} with a thumbnail
-                {counts.length ? ` · ${filled}/${counts.length} categories at ${MIN_VIDEOS_PER_CATEGORY}+` : ""}
+                {counts.length ? ` · ${live}/${counts.length} categories live` : ""}
               </span>
             )}
           </p>
@@ -115,8 +115,8 @@ export default async function AdminVideosPage() {
         <div className="mt-8 rounded-lg border border-dashed border-line bg-pcard p-12 text-center">
           <p className="text-[14px] font-medium">No videos in the library yet</p>
           <p className="mt-1 text-[12px] text-ink-3">
-            Run the damplips import above to fill each category with at least{" "}
-            {MIN_VIDEOS_PER_CATEGORY} embedded videos.
+            Run the damplips import above to fill each category with embedded
+            videos.
           </p>
         </div>
       ) : (

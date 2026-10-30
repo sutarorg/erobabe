@@ -1,6 +1,6 @@
 import { tryCreateServiceClient } from "@/lib/supabase/server";
 import { openRouterDiagnostics } from "@/lib/metadata/openrouter";
-import { categoryCounts, MIN_VIDEOS_PER_CATEGORY, type ImportService } from "@/lib/damplips/importer";
+import { categoryCounts, type ImportService } from "@/lib/damplips/importer";
 import { loadInventory } from "@/lib/ads/inventory";
 import OpenRouterCheck from "./OpenRouterCheck";
 
@@ -120,9 +120,11 @@ export default async function SystemHealthAdmin() {
   if (supabase) {
     try {
       const counts = await categoryCounts(supabase as unknown as ImportService);
-      const filled = counts.filter((entry) => entry.count >= MIN_VIDEOS_PER_CATEGORY);
-      catalogStatus = `${filled.length}/${counts.length} categories at ${MIN_VIDEOS_PER_CATEGORY}+`;
-      catalogDetail = counts.map((entry) => `${entry.label}: ${entry.count}`).join(" · ");
+      const live = counts.filter((entry) => entry.published > 0);
+      catalogStatus = `${live.length}/${counts.length} categories live`;
+      catalogDetail = counts
+        .map((entry) => `${entry.label}: ${entry.published} published of ${entry.total}`)
+        .join(" · ");
     } catch {
       /* honest unknown, never fabricated availability */
     }
