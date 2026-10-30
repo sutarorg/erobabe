@@ -72,6 +72,37 @@ body {
   width: min(100%, calc((100dvh - 80px) * 16 / 45));
 }
 
+/* ------------------------------------------------------------------ */
+/* Admin frame: exactly one scrollbar                                  */
+/* ------------------------------------------------------------------ */
+/* The dashboard's content column scrolls; the document must not. Without
+   this the page could overflow the viewport by a few pixels and the browser
+   drew a second, outer scrollbar beside the column's own. */
+.admin-shell {
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+/* Dynamic viewport: on a phone the browser chrome comes and goes, and `100vh`
+   is taller than what you can actually see. */
+@supports (height: 100dvh) {
+  .admin-shell {
+    height: 100dvh;
+  }
+}
+
+.admin-viewport-lock,
+.admin-viewport-lock body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Keep the column's width constant whether or not it is currently scrolling. */
+.admin-shell > main {
+  scrollbar-gutter: stable;
+}
+
 /* Thin custom scrollbar for the independently scrolling center panel */
 .center-scroll {
   scrollbar-width: thin;

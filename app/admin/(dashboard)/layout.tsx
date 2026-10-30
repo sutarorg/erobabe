@@ -1,7 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import PortalSidebar from "@/src/components/PortalSidebar";
-import AdminNav from "./AdminNav";
+import AdminShell from "./AdminShell";
 
 export default async function AdminLayout({
   children,
@@ -24,14 +23,5 @@ export default async function AdminLayout({
     redirect("/admin/signin?next=/admin");
   }
 
-  return (
-    <div className="flex h-screen overflow-hidden bg-void text-ink">
-      <PortalSidebar portal="Admin" email={user.email || "Account"}>
-        <AdminNav />
-      </PortalSidebar>
-      <main className="center-scroll min-h-0 min-w-0 flex-1 overflow-y-auto">
-        <div className="px-4 pb-10 pt-16 lg:px-6 lg:pt-5">{children}</div>
-      </main>
-    </div>
-  );
+  return <AdminShell email={user.email || "Account"}>{children}</AdminShell>;
 }
