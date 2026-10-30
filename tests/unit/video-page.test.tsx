@@ -88,6 +88,7 @@ vi.mock("@/lib/recommendations/service", () => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  usePathname: () => "/video/test-slug",
   notFound: () => {
     throw new Error("not found");
   },
@@ -138,6 +139,14 @@ afterEach(() => {
 });
 
 describe("/video/[slug] watch page", () => {
+  it("wraps the page so a click on another video takes over at once", async () => {
+    const html = await renderPage();
+    // The transition boundary has to contain the shelves: that is where the
+    // next video is clicked, and where the in-flight player must be replaced.
+    expect(html).toContain("data-watch-transition");
+    expect(html.indexOf("data-watch-transition")).toBeLessThan(html.lastIndexOf("video-grid"));
+  });
+
   it("shows a views icon next to the view count", async () => {
     const html = await renderPage();
     expect(html).toContain("lucide-eye");

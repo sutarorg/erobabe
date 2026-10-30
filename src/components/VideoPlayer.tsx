@@ -148,13 +148,34 @@ export const PROBE_TIMEOUT_MS = 2_500;
  */
 export type DirectProbe = { status: number | null; contentType: string | null };
 
+/**
+ * One signal that aborts when either input does.
+ *
+ * A probe is cancelled by *two* things: its own timeout, and the visitor moving
+ * on to another video. `AbortSignal.any` does this natively where available;
+ * older engines get the same behaviour by forwarding the abort by hand.
+ */
+function combineSignals(timeout: AbortSignal, cancelled: AbortSignal): AbortSignal {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.any === "function") {
+    return AbortSignal.any([timeout, cancelled]);
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (timeout.aborted || cancelled.aborted) abort();
+  timeout.addEventListener("abort", abort, { once: true });
+  cancelled.addEventListener("abort", abort, { once: true });
+  return controller.signal;
+}
+
 export async function probeDirectSource(
   url: string,
   timeoutMs = PROBE_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<DirectProbe | null> {
   if (typeof fetch !== "function") return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const combined = signal ? combineSignals(controller.signal, signal) : controller.signal;
   try {
     const response = await fetch(url, {
       method: "HEAD",
@@ -162,7 +183,7 @@ export async function probeDirectSource(
       cache: "no-store",
       credentials: "omit",
       referrerPolicy: "no-referrer",
-      signal: controller.signal,
+      signal: combined,
     });
     return { status: response.status, contentType: response.headers.get("content-type") };
   } catch {
@@ -174,17 +195,22 @@ export async function probeDirectSource(
   }
 }
 
-export async function mediaHostReachable(url: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
+export async function mediaHostReachable(
+  url: string,
+  timeoutMs = PROBE_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<boolean> {
   if (typeof fetch !== "function") return true;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const combined = signal ? combineSignals(controller.signal, signal) : controller.signal;
   try {
     await fetch(url, {
       method: "HEAD",
       mode: "no-cors",
       cache: "no-store",
       referrerPolicy: "no-referrer",
-      signal: controller.signal,
+      signal: combined,
     });
     return true;
   } catch {
@@ -263,6 +289,34 @@ function NativePlayer({
   useEffect(() => {
     startedRef.current = started;
   }, [started]);
+
+  /**
+   * Leaving this video stops its download immediately.
+   *
+   * A `<video>` keeps fetching while it is mounted, so a visitor who opens a
+   * second video from the shelf while the first is still loading would have two
+   * transfers competing for the same bandwidth — the new one slower precisely
+   * because of the one they abandoned. Dropping `src` and reloading the element
+   * tells the browser to cancel the request instead of finishing it in the
+   * background; the element is unmounted a moment later anyway (the player is
+   * keyed by video id), so this is the hook that makes the switch instant
+   * rather than merely eventual.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+    return () => {
+      if (!video) return;
+      try {
+        video.pause();
+        video.removeAttribute("src");
+        // `load()` with no source aborts the in-flight transfer and releases the
+        // decoder, which is what actually frees the connection.
+        video.load();
+      } catch {
+        /* The element may already be detached by the browser. */
+      }
+    };
+  }, []);
 
   const url = urls[Math.min(source, urls.length - 1)];
   /** The direct host file, if this row has one — never a proxied URL. */
@@ -346,7 +400,11 @@ function NativePlayer({
     if (!probeTarget || probed.current === probeTarget) return;
     probed.current = probeTarget;
     let cancelled = false;
-    void mediaHostReachable(probeTarget).then((reachable) => {
+    // Switching to another video must not leave a HEAD request running against
+    // the media host: the answer is now useless, and the new video's player
+    // starts its own probe.
+    const controller = new AbortController();
+    void mediaHostReachable(probeTarget, PROBE_TIMEOUT_MS, controller.signal).then((reachable) => {
       if (cancelled) return;
       setDiagnosis((current) => ({ ...current, hostReachable: reachable }));
       if (reachable) return;
@@ -358,6 +416,7 @@ function NativePlayer({
     });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [probeTarget]);
 

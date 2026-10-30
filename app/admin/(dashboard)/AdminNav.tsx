@@ -1,6 +1,7 @@
 "use client";
 import {
   Activity,
+  BarChart3,
   Clapperboard,
   CreditCard,
   Film,
@@ -22,6 +23,7 @@ import DashboardNav from "@/src/components/DashboardNav";
  */
 const items = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/admin/analytics", label: "Analytics", icon: BarChart3 },
   {
     label: "Content",
     icon: Clapperboard,

@@ -24,6 +24,8 @@ export type RotatableAd = {
   id: string;
   /** Analytics campaign id — only legacy campaigns have one. */
   campaign_id?: string;
+  /** Guest PayPal order id — what a current placement is measured on. */
+  order_id?: string;
   title: string;
   image_url: string;
   destination_url: string;

@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { tryCreateServiceClient } from "@/lib/supabase/server";
+import { parseAnalyticsRange } from "@/lib/analytics/range";
+import { loadAnalyticsToday } from "@/lib/analytics/queries";
 import {
   loadAdRevenueSummary,
   loadInventory,
@@ -59,6 +61,10 @@ export default async function AdminDashboard() {
     /* the cards below stay at zero and say so */
   }
 
+  // Today's measured traffic. The loader never throws: an unconfigured or
+  // un-migrated database reports its status and the card says "—".
+  const today = await loadAnalyticsToday(parseAnalyticsRange({ range: "today" }));
+
   const availableSlots = slots.filter((slot) => !slot.taken).length;
 
   return (
@@ -70,6 +76,22 @@ export default async function AdminDashboard() {
         <div className="rounded-lg border border-line bg-pcard p-4"><p className="text-[11px] uppercase tracking-wider text-ink-3">Total Videos</p><p className="mt-1 text-[22px] font-semibold">{videoCount || 0}</p><p className="mt-1 text-[11px] text-ink-3">{publishedCount || 0} published</p></div>
         <div className="rounded-lg border border-line bg-pcard p-4"><p className="text-[11px] uppercase tracking-wider text-ink-3">Ad Slots</p><p className="mt-1 text-[22px] font-semibold">{slots.length ? `${availableSlots}/${slots.length}` : "—"}</p><p className="mt-1 text-[11px] text-ink-3">Available · fixed inventory</p></div>
         <Link href="/admin/advertisements" className="rounded-lg border border-line bg-pcard p-4 transition hover:border-accent/40"><p className="text-[11px] uppercase tracking-wider text-ink-3">Ads In Review</p><p className="mt-1 text-[22px] font-semibold">{reviewCount || 0}</p><p className="mt-1 text-[11px] text-accent">Review payments & creatives</p></Link>
+        <Link
+          href="/admin/analytics?range=today"
+          className="rounded-lg border border-line bg-pcard p-4 transition hover:border-accent/40"
+        >
+          <p className="text-[11px] uppercase tracking-wider text-ink-3">Visitors Today</p>
+          <p className="mt-1 text-[22px] font-semibold">
+            {today.status === "ok" && today.data ? today.data.visitors.toLocaleString("en-US") : "—"}
+          </p>
+          <p className="mt-1 text-[11px] text-ink-3">
+            {today.status === "ok" && today.data
+              ? `${today.data.pageviews.toLocaleString("en-US")} pageviews · ${today.data.sessions.toLocaleString("en-US")} sessions`
+              : today.status === "unavailable"
+                ? "Apply the analytics migration"
+                : "Analytics unavailable"}
+          </p>
+        </Link>
         <div className="rounded-lg border border-line bg-pcard p-4">
           <p className="text-[11px] uppercase tracking-wider text-ink-3">Verified Ad Revenue</p>
           <p className="mt-1 text-[22px] font-semibold">${(revenue.verifiedCents / 100).toFixed(2)}</p>

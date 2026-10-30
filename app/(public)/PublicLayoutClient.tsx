@@ -7,11 +7,13 @@ import Footer from "@/src/components/Footer";
 import AgeGate from "@/src/components/AgeGate";
 import MobileAdsProvider from "@/src/components/ads/MobileAdsProvider";
 import AdReviewNotice from "@/src/components/ads/AdReviewNotice";
+import AnalyticsBeacon from "@/src/components/analytics/AnalyticsBeacon";
 import type { RotatableAd } from "@/lib/ads/rotation";
 import { useRouter, usePathname } from "next/navigation";
 
 interface ActiveCampaign {
   campaign_id?: string;
+  order_id?: string;
   slot_id: number;
   creative: {
     id: string;
@@ -45,6 +47,7 @@ export function mobileRotationPool(activeCampaigns: ActiveCampaign[]): Rotatable
     .map((campaign) => ({
       id: campaign.creative.id,
       campaign_id: campaign.campaign_id,
+      order_id: campaign.order_id,
       title: campaign.creative.title || "Sponsored",
       image_url: campaign.creative.image_url,
       destination_url: campaign.creative.destination_url,
@@ -126,6 +129,8 @@ export default function PublicLayoutClient({
         {/* PayPal sends the advertiser back to the homepage; this shows the
             “In review” card once, for ten seconds, and then returns home. */}
         {skipAgeGate ? null : <AdReviewNotice />}
+        {/* First-party pageview collector for the admin traffic report. */}
+        <AnalyticsBeacon />
       </div>
     </MobileAdsProvider>
   );

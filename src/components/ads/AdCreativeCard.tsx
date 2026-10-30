@@ -32,6 +32,7 @@ export default function AdCreativeCard({
   creative,
   slotId,
   campaignId,
+  orderId,
   className = "",
   imageClassName = "h-full w-full object-cover",
   showBadge = true,
@@ -41,7 +42,10 @@ export default function AdCreativeCard({
   creative: AdCreativeView;
   /** 1–10; used by the analytics event and the accessible label. */
   slotId: number;
+  /** Legacy campaign id; guest PayPal placements have none. */
   campaignId?: string;
+  /** Guest order id — the key a PayPal placement's measurement is stored on. */
+  orderId?: string;
   className?: string;
   imageClassName?: string;
   showBadge?: boolean;
@@ -52,18 +56,27 @@ export default function AdCreativeCard({
   const ref = useRef<HTMLAnchorElement>(null);
   const [loaded, setLoaded] = useState(false);
 
+  /**
+   * Both ad models are measurable: a guest PayPal placement posts its order id
+   * to `/api/track/ad`, a legacy campaign keeps the original creative endpoint.
+   */
   const send = (kind: "impression" | "click") => {
+    const eventId = crypto.randomUUID();
+    if (orderId) {
+      void fetch("/api/track/ad", {
+        method: "POST",
+        keepalive: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventId, orderId, slotId, kind }),
+      }).catch(() => {});
+      return;
+    }
     if (!campaignId || !creative.id) return;
     void fetch(`/api/track/${kind}`, {
       method: "POST",
       keepalive: true,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        eventId: crypto.randomUUID(),
-        campaignId,
-        creativeId: creative.id,
-        slotId,
-      }),
+      body: JSON.stringify({ eventId, campaignId, creativeId: creative.id, slotId }),
     }).catch(() => {});
   };
 
@@ -71,8 +84,7 @@ export default function AdCreativeCard({
     if (
       !loaded ||
       !ref.current ||
-      !campaignId ||
-      !creative.id ||
+      (!orderId && (!campaignId || !creative.id)) ||
       !window.IntersectionObserver
     )
       return;
@@ -110,7 +122,7 @@ export default function AdCreativeCard({
     };
     // A loaded image, >=50% visible continuously for 1s in a foreground tab.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, campaignId, creative.id, slotId]);
+  }, [loaded, campaignId, orderId, creative.id, slotId]);
 
   return (
     <a

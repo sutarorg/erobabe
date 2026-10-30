@@ -53,6 +53,7 @@ export default function MobileAdSlot({
           creative={ad}
           slotId={slotId}
           campaignId={ad.campaign_id}
+          orderId={ad.order_id}
           className="aspect-video w-full rounded-xl"
           imageClassName="h-full w-full object-cover"
           eager={eager}

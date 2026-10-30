@@ -5,6 +5,8 @@ import VacantAdCard from "./ads/VacantAdCard";
 interface AdSlotProps {
   index: number;
   campaignId?: string;
+  /** Guest PayPal order occupying the placement, when there is one. */
+  orderId?: string;
   creative?: {
     id?: string;
     image_url?: string;
@@ -19,7 +21,7 @@ interface AdSlotProps {
  * the `.ad-slot` class — never stretch or squash it.
  * If an approved creative exists, render it; otherwise show the vacant card.
  */
-export default function AdSlot({ index, creative, campaignId }: AdSlotProps) {
+export default function AdSlot({ index, creative, campaignId, orderId }: AdSlotProps) {
   if (
     creative?.image_url &&
     creative?.destination_url &&
@@ -30,6 +32,7 @@ export default function AdSlot({ index, creative, campaignId }: AdSlotProps) {
         creative={creative}
         slotId={index}
         campaignId={campaignId}
+        orderId={orderId}
         className="ad-slot"
       />
     );
