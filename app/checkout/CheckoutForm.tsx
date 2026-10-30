@@ -147,6 +147,10 @@ export default function CheckoutForm({
       : "",
   );
 
+  // The wizard lives in its own scroll container, so a step change scrolls the
+  // panel rather than the page (mobile still scrolls the document).
+  const panelRef = useRef<HTMLElement>(null);
+
   const availableCount = useMemo(
     () => slots.filter((slot) => slot.available).length,
     [slots],
@@ -160,17 +164,32 @@ export default function CheckoutForm({
     };
   }, [preview]);
 
+  function scrollWizardToTop() {
+    try {
+      panelRef.current?.scrollTo?.({ top: 0, behavior: "smooth" });
+    } catch {
+      /* older browsers: the panel simply keeps its position */
+    }
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function") {
+      try {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } catch {
+        /* jsdom and locked-down browsers do not implement scrolling */
+      }
+    }
+  }
+
   function goToStep(next: Step) {
     setError("");
     setStep(next);
-    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    scrollWizardToTop();
   }
 
   function chooseSlot(slot: CheckoutSlot) {
     setSlotId(slot.id);
     setError("");
     setStep(2);
-    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    scrollWizardToTop();
   }
 
   function setField<K extends keyof AdvertiserFields>(key: K, value: AdvertiserFields[K]) {
@@ -295,9 +314,16 @@ export default function CheckoutForm({
   return (
     <form
       onSubmit={continueToPayment}
-      className="grid min-h-screen items-start bg-void lg:grid-cols-2"
+      className="grid min-h-screen items-start bg-void lg:h-screen lg:overflow-hidden lg:grid-cols-2"
     >
-      <section className="px-5 pb-16 pt-6 sm:px-8 lg:px-10 xl:px-14">
+      {/* Desktop: the wizard is its own scroll area, with a thin themed
+          scrollbar on its right edge, while the payment panel stays fixed.
+          Mobile: the document keeps scrolling as before. */}
+      <section
+        ref={panelRef}
+        aria-label="Checkout steps"
+        className="checkout-scroll px-5 pb-16 pt-6 sm:px-8 lg:h-screen lg:overflow-y-auto lg:overflow-x-hidden lg:px-10 xl:px-14"
+      >
         <div className="mx-auto w-full max-w-[720px]">
           <div className="flex items-center justify-between gap-3">
             <Link href="/" className="flex items-center gap-2" aria-label="erobabe home">

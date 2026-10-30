@@ -34,13 +34,20 @@ first public page load consumes it and shows the **In review** card:
 
 `/checkout/review` no longer exists — the confirmation lives on the homepage.
 
-### Payment artwork
+### Layout and scrolling
+
+On desktop the page itself does not scroll: the wizard is its own scroll area
+(`lg:h-screen lg:overflow-y-auto`, class `.checkout-scroll`) with a thin,
+theme-matching scrollbar on its right edge, while the artwork panel stays fixed
+in the right column. Below `lg` the document scrolls normally and the artwork
+panel follows the wizard.
 
 `NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` (default:
 `https://i.ibb.co/SXhzQ4ZQ/Untitled-Design-18-1.png`) is rendered in the fixed
 panel, scaled to fit (`max-h-[82vh]`, `object-contain`) so it can never overflow
-or scroll. `public/paypal-qr.png` is the bundled fallback if the hosted image
-fails.
+or scroll. The same artwork committed at
+`public/Untitled Design (18) (1).png` is the bundled fallback if the hosted
+image fails.
 
 ## 2. Admin panel
 
@@ -118,7 +125,9 @@ If no advertisement is active, every one of these renders the plain
 
 Every mobile placement — paid creative, vacant card and the ad break — also
 prints a faded, underlined **“Advertise with us”** line underneath it that opens
-`/checkout`. The mobile card no longer carries the “Advertisement” tag in its
+`/checkout`. The ad-break page prints that line only: its three-second countdown
+is shown as a small counter beside the close button, with no countdown caption
+under the slot. The mobile card no longer carries the “Advertisement” tag in its
 top-right corner; the “Ad” marker on paid creatives (top-left) stays.
 
 ### Rotation (`lib/ads/rotation.ts`)
@@ -175,4 +184,4 @@ New/updated tests:
 The payment artwork is referenced from its host (`i.ibb.co`) because outbound
 downloads are blocked in this environment. To make it self-hosted, save the
 image into `public/` and set `NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` to that path;
-`public/paypal-qr.png` remains the bundled fallback.
+the local copy in `public/` remains the bundled fallback.

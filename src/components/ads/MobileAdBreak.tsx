@@ -20,10 +20,12 @@ type Phase = "idle" | "counting" | "closable";
  * The mobile-only ad-break page.
  *
  * Every third video a visitor opens, the watch page is covered by a single
- * 16:9 placement. A three-second countdown runs first; only then does the close
- * button appear, and closing it lands on the video the visitor actually
- * selected. Two videos then play uninterrupted before the next break
- * (1, 2, 3 → ad → 4, 5, 6 → ad …).
+ * 16:9 placement. The three-second countdown is shown only as a small counter
+ * beside the close button; only after it reaches zero does the close button
+ * appear, and closing it lands on the video the visitor actually selected.
+ * Under the slot the page prints the same faded “Advertise with us” line as
+ * every other mobile placement — no countdown caption. Two videos then play
+ * uninterrupted before the next break (1, 2, 3 → ad → 4, 5, 6 → ad …).
  *
  * It is client-side only and matches the `max-width: 999px` boundary the desktop
  * rails use, so the desktop watch page never sees it.
@@ -138,7 +140,8 @@ export default function MobileAdBreak({
           </button>
         ) : (
           <span
-            aria-hidden
+            role="timer"
+            aria-label={`Close button appears in ${seconds} second${seconds === 1 ? "" : "s"}`}
             className="flex h-10 w-10 items-center justify-center rounded-full border border-line/70 bg-card/60 text-[12px] font-semibold tabular-nums text-ink-3"
           >
             {seconds}
@@ -162,13 +165,9 @@ export default function MobileAdBreak({
         )}
       </div>
 
-      <AdvertiseWithUsLink className="mt-4" tone="dim" />
-
-      <p className="mt-3 text-center text-[11.5px] text-ink-3" aria-live="polite">
-        {phase === "closable"
-          ? "Continue to your video"
-          : `Your video starts in ${seconds} second${seconds === 1 ? "" : "s"}`}
-      </p>
+      {/* Same caption as every other mobile placement — the countdown lives in
+          the corner counter, never as text under the slot. */}
+      <AdvertiseWithUsLink className="mt-3" />
     </div>
   );
 }

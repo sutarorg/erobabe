@@ -147,10 +147,14 @@ describe("mobile ad break", () => {
     );
 
     expect(screen.getByRole("dialog", { name: "Advertisement break" })).toBeTruthy();
-    // The ad-break placement carries the same checkout link.
+    // The ad-break placement carries the same checkout link …
     expect(screen.getByRole("link", { name: "Advertise with us" })).toHaveAttribute("href", "/checkout");
+    // … and no countdown caption under the slot: the timer lives in the corner
+    // counter only.
+    expect(screen.getByLabelText("Close button appears in 3 seconds")).toBeTruthy();
+    expect(screen.queryByText(/Your video starts in/i)).toBeNull();
+    expect(screen.queryByText(/Continue to your video/i)).toBeNull();
     expect(screen.queryByRole("button", { name: "Close advertisement" })).toBeNull();
-    expect(screen.getByText(/Your video starts in 3 seconds/i)).toBeTruthy();
 
     // One tick per act(): the next countdown timer is scheduled after React
     // commits the new second.

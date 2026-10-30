@@ -16,8 +16,11 @@ export const PAYMENT_PANEL_IMAGE_URL =
   process.env.NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL ||
   "https://i.ibb.co/SXhzQ4ZQ/Untitled-Design-18-1.png";
 
-/** Bundled fallback if the hosted artwork cannot be reached. */
-export const PAYMENT_PANEL_IMAGE_FALLBACK = "/paypal-qr.png";
+/**
+ * Bundled copy of the same artwork (`public/Untitled Design (18) (1).png`),
+ * shown if the hosted image cannot be reached.
+ */
+export const PAYMENT_PANEL_IMAGE_FALLBACK = "/Untitled%20Design%20(18)%20(1).png";
 
 /**
  * Local flag written just before the visitor leaves for PayPal. When they come

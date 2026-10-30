@@ -179,8 +179,8 @@ The checkout's fixed right-hand panel shows the operator-supplied artwork:
 `https://ibb.co/MDYm8xJ8` (direct image: `https://i.ibb.co/SXhzQ4ZQ/Untitled-Design-18-1.png`)
 
 It is referenced through `NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` (default: that direct
-image URL) with `public/paypal-qr.png` served as `/paypal-qr.png` as the bundled
-fallback. Download the artwork into `public/` and point the variable at that local
+image URL) with the local copy at `public/Untitled Design (18) (1).png` as the
+bundled fallback. Download the artwork into `public/` and point the variable at that local
 file if you prefer not to depend on Google Drive at runtime. Do not accept an image URL or
 payment destination from a checkout visitor.
 

@@ -94,6 +94,19 @@ describe("guest PayPal checkout", () => {
     expect(screen.queryByAltText("Erobabe PayPal payment QR code")).toBeNull();
   });
 
+  it("scrolls the wizard in its own thin-scrollbar panel while the artwork panel stays fixed", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    const form = container.querySelector("form")!;
+    const panel = container.querySelector("section.checkout-scroll") as HTMLElement;
+    expect(panel).toBeTruthy();
+    // The document no longer scrolls on desktop; the left panel does.
+    expect(form.className).toContain("lg:h-screen");
+    expect(form.className).toContain("lg:overflow-hidden");
+    expect(panel.className).toContain("lg:h-screen");
+    expect(panel.className).toContain("lg:overflow-y-auto");
+    expect(panel.getAttribute("aria-label")).toBe("Checkout steps");
+  });
+
   it("never renders more than ten placements", () => {
     render(<CheckoutForm slots={tenSlots()} />);
     expect(screen.getAllByRole("button", { name: /Select ad slot/i })).toHaveLength(10);

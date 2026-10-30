@@ -10,8 +10,9 @@ import {
  * The fixed right-hand panel of the checkout.
  *
  * It replaces the old order-summary QR block: the panel is pinned to the
- * viewport (it never scrolls with the wizard), and it contains only the
- * advertiser payment artwork, scaled to fit so it can never overflow.
+ * viewport (it never scrolls, the wizard scrolls in its own column), and it
+ * contains only the advertiser payment artwork, scaled to fit so it can never
+ * overflow.
  */
 export default function PaymentPanel() {
   const [src, setSrc] = useState(PAYMENT_PANEL_IMAGE_URL);
@@ -31,7 +32,7 @@ export default function PaymentPanel() {
           className="max-h-[70vh] w-auto max-w-full rounded-xl object-contain shadow-[0_24px_80px_rgba(0,0,0,0.45)] lg:max-h-[82vh]"
           loading="eager"
           decoding="async"
-          // Google Drive thumbnails reject a foreign referrer for some files.
+          // Image hosts sometimes reject a foreign referrer.
           referrerPolicy="no-referrer"
         />
       </div>
