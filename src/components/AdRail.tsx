@@ -3,6 +3,7 @@ import AdSlot from "./AdSlot";
 
 interface ActiveCampaign {
   campaign_id?: string;
+  order_id?: string;
   slot_id: number;
   creative?: {
     id?: string;
@@ -49,6 +50,7 @@ export default function AdRail({
           key={`${n}:${activeCampaigns.find((c) => c.slot_id === n)?.creative?.id || "vacant"}`}
           index={n}
           campaignId={activeCampaigns.find((c) => c.slot_id === n)?.campaign_id}
+          orderId={activeCampaigns.find((c) => c.slot_id === n)?.order_id}
           creative={getCreativeForSlot(n)}
         />
       ))}

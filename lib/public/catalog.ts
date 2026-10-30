@@ -34,8 +34,10 @@ export type PublicCategory = {
 };
 
 export type PublicAd = {
-  /** Legacy campaigns have analytics IDs; guest PayPal orders do not. */
+  /** Legacy campaigns have analytics IDs; guest PayPal orders have `order_id`. */
   campaign_id?: string;
+  /** Guest PayPal order id, used by the ad-performance measurement. */
+  order_id?: string;
   slot_id: number;
   creative: {
     id: string;
@@ -219,6 +221,7 @@ async function loadActiveAds(): Promise<PublicAd[]> {
     for (const row of orderResult.data || []) {
       bySlot.set(Number(row.slot_id), {
         slot_id: Number(row.slot_id),
+        order_id: row.id,
         creative: {
           id: row.id,
           title: row.ad_name,

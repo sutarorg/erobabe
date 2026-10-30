@@ -23,6 +23,7 @@ import VideoActions from "@/src/components/VideoActions";
 import VideoPlayer from "@/src/components/VideoPlayer";
 import FourRowVideoGrid from "@/src/components/FourRowVideoGrid";
 import PublicVideoCard from "@/src/components/PublicVideoCard";
+import WatchTransition from "@/src/components/watch/WatchTransition";
 import { Eye } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -420,109 +421,111 @@ export default async function VideoPage({
   ];
 
   return (
-    <div className="pt-4">
-      <ViewTracker videoId={video.id} />
-      <JsonLd data={videoJsonLd} />
-      <Breadcrumbs items={crumbs} />
+    <WatchTransition>
+      <div className="pt-4">
+        <ViewTracker videoId={video.id} />
+        <JsonLd data={videoJsonLd} />
+        <Breadcrumbs items={crumbs} />
 
-      {/* Instant play starts before React hydrates: connect to the host the
-          player will use, and fetch the poster only when one is displayed. */}
-      {posterOrigin && <link rel="preconnect" href={posterOrigin} />}
-      {posterOrigin && <link rel="dns-prefetch" href={posterOrigin} />}
-      {mediaOrigin && <link rel="preconnect" href={mediaOrigin} />}
-      {firstCandidate && !isStreamProxyUrl(firstCandidate) && (
-        <link
-          rel="preload"
-          as="video"
-          href={firstCandidate}
-          fetchPriority="high"
-          {...{ referrerPolicy: "no-referrer" }}
-        />
-      )}
-      {embedOrigin && <link rel="preconnect" href={embedOrigin} />}
-      {showsPoster && video.thumbnail_url && (
-        <link
-          rel="preload"
-          as="image"
-          href={video.thumbnail_url}
-          fetchPriority="high"
-        />
-      )}
-
-      <VideoPlayer
-        provider={video.provider}
-        id={video.id}
-        title={video.title}
-        poster={video.thumbnail_url}
-        playableUrl={playableUrl}
-        embedUrl={video.embed_url}
-      />
-
-      <h1 className="mt-4 text-[19px] font-semibold tracking-tight text-ink">
-        {video.title}
-      </h1>
-      <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-3">
-        <span className="flex items-center gap-1.5">
-          <Eye className="h-3.5 w-3.5" aria-hidden />
-          <span className="tabular-nums">
-            {(video.view_count || 0).toLocaleString("en-US")} views
-          </span>
-        </span>
-        <span aria-hidden>•</span>
-        <span>{formatTimeAgo(video.published_at)}</span>
-        {video.duration_seconds && (
-          <>
-            <span aria-hidden>•</span>
-            <span>{formatDuration(video.duration_seconds)}</span>
-          </>
+        {/* Instant play starts before React hydrates: connect to the host the
+            player will use, and fetch the poster only when one is displayed. */}
+        {posterOrigin && <link rel="preconnect" href={posterOrigin} />}
+        {posterOrigin && <link rel="dns-prefetch" href={posterOrigin} />}
+        {mediaOrigin && <link rel="preconnect" href={mediaOrigin} />}
+        {firstCandidate && !isStreamProxyUrl(firstCandidate) && (
+          <link
+            rel="preload"
+            as="video"
+            href={firstCandidate}
+            fetchPriority="high"
+            {...{ referrerPolicy: "no-referrer" }}
+          />
         )}
-      </p>
+        {embedOrigin && <link rel="preconnect" href={embedOrigin} />}
+        {showsPoster && video.thumbnail_url && (
+          <link
+            rel="preload"
+            as="image"
+            href={video.thumbnail_url}
+            fetchPriority="high"
+          />
+        )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <VideoActions title={video.title} videoId={video.id} />
-        <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
-          {video.category && (
-            <Link
-              href={`/category/${video.category.slug}`}
-              className="rounded-full border border-accent/45 bg-accent/8 px-2.5 py-[3px] text-[10.5px] font-semibold text-accent"
-            >
-              {video.category.label}
-            </Link>
-          )}
-          {video.quality && (
-            <span className="rounded-full border border-white/10 bg-card px-2.5 py-[3px] text-[10.5px] font-semibold text-ink-2">
-              {video.quality}
+        <VideoPlayer
+          provider={video.provider}
+          id={video.id}
+          title={video.title}
+          poster={video.thumbnail_url}
+          playableUrl={playableUrl}
+          embedUrl={video.embed_url}
+        />
+
+        <h1 className="mt-4 text-[19px] font-semibold tracking-tight text-ink">
+          {video.title}
+        </h1>
+        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-3">
+          <span className="flex items-center gap-1.5">
+            <Eye className="h-3.5 w-3.5" aria-hidden />
+            <span className="tabular-nums">
+              {(video.view_count || 0).toLocaleString("en-US")} views
             </span>
+          </span>
+          <span aria-hidden>•</span>
+          <span>{formatTimeAgo(video.published_at)}</span>
+          {video.duration_seconds && (
+            <>
+              <span aria-hidden>•</span>
+              <span>{formatDuration(video.duration_seconds)}</span>
+            </>
           )}
-        </span>
-      </div>
-
-      {video.description && (
-        <p className="mt-4 max-w-[640px] text-[13px] leading-relaxed text-ink-2">
-          {video.description}
         </p>
-      )}
 
-      <VideoComments key={video.id} videoId={video.id} />
-      {/* Phones only: one 16:9 banner directly under the comments. */}
-      <MobileAdSlot position={0} />
-      {/* Every third video a phone opens gets a full-screen ad break. */}
-      <MobileAdBreak key={`break-${video.id}`} slug={video.slug} position={9} />
-      {/* Each shelf has its own boundary: a slow feed streams in late instead
-          of holding up the player or the other shelves. */}
-      <Suspense fallback={<WatchShelfFallback title="More like this" />}>
-        <RelatedVideos video={video} />
-      </Suspense>
-      <Suspense fallback={<WatchShelfFallback title="Recommended for you" />}>
-        <RecommendedForYou video={video} />
-      </Suspense>
-      <Suspense fallback={<WatchShelfFallback title="Most Liked" />}>
-        <MostLiked video={video} />
-      </Suspense>
-      <Suspense fallback={<WatchShelfFallback title="Top Categories" />}>
-        <TopCategories video={video} />
-      </Suspense>
-      <LatestVideoFeed key={video.id} videoId={video.id} adBase={4} />
-    </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <VideoActions title={video.title} videoId={video.id} />
+          <span className="flex flex-wrap items-center gap-2 sm:ml-auto">
+            {video.category && (
+              <Link
+                href={`/category/${video.category.slug}`}
+                className="rounded-full border border-accent/45 bg-accent/8 px-2.5 py-[3px] text-[10.5px] font-semibold text-accent"
+              >
+                {video.category.label}
+              </Link>
+            )}
+            {video.quality && (
+              <span className="rounded-full border border-white/10 bg-card px-2.5 py-[3px] text-[10.5px] font-semibold text-ink-2">
+                {video.quality}
+              </span>
+            )}
+          </span>
+        </div>
+
+        {video.description && (
+          <p className="mt-4 max-w-[640px] text-[13px] leading-relaxed text-ink-2">
+            {video.description}
+          </p>
+        )}
+
+        <VideoComments key={video.id} videoId={video.id} />
+        {/* Phones only: one 16:9 banner directly under the comments. */}
+        <MobileAdSlot position={0} />
+        {/* Every third video a phone opens gets a full-screen ad break. */}
+        <MobileAdBreak key={`break-${video.id}`} slug={video.slug} position={9} />
+        {/* Each shelf has its own boundary: a slow feed streams in late instead
+            of holding up the player or the other shelves. */}
+        <Suspense fallback={<WatchShelfFallback title="More like this" />}>
+          <RelatedVideos video={video} />
+        </Suspense>
+        <Suspense fallback={<WatchShelfFallback title="Recommended for you" />}>
+          <RecommendedForYou video={video} />
+        </Suspense>
+        <Suspense fallback={<WatchShelfFallback title="Most Liked" />}>
+          <MostLiked video={video} />
+        </Suspense>
+        <Suspense fallback={<WatchShelfFallback title="Top Categories" />}>
+          <TopCategories video={video} />
+        </Suspense>
+        <LatestVideoFeed key={video.id} videoId={video.id} adBase={4} />
+      </div>
+    </WatchTransition>
   );
 }

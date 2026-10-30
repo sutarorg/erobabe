@@ -6,13 +6,21 @@ const nextConfig = {
   allowedDevOrigins: ["*.e2b.app"],
   poweredByHeader: false,
   compress: true,
+  // Ship only the icons a page imports instead of the whole lucide barrel, and
+  // keep source maps out of the production payload.
   experimental: {
     staleTimes: {
       dynamic: 30,
       static: 180,
     },
+    optimizePackageImports: ["lucide-react"],
   },
+  productionBrowserSourceMaps: false,
   images: {
+    // Next's own optimizer serves AVIF/WebP and caches the result for a month;
+    // every remote poster benefits without touching a component.
+    formats: ['image/avif', 'image/webp'],
+    minimumCacheTTL: 2678400,
     remotePatterns: [
       { protocol: 'https', hostname: 'i.postimg.cc' },
       { protocol: 'https', hostname: 'images.pexels.com' },

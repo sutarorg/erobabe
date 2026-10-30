@@ -155,6 +155,7 @@ export default function MobileAdBreak({
             creative={ad}
             slotId={1}
             campaignId={ad.campaign_id}
+            orderId={ad.order_id}
             className="aspect-video w-full rounded-xl"
             imageClassName="h-full w-full object-cover"
             eager
