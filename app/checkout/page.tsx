@@ -7,7 +7,8 @@ import { SITE_URL } from "@/lib/site";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Advertise on erobabe",
+  // Not indexed: the checkout wizard is a tool, not a landing page.
+  title: { absolute: "Advertise on EroBabe" },
   description: "Choose a 16:9 placement, upload your banner, and pay securely.",
   alternates: { canonical: `${SITE_URL}/checkout` },
   robots: { index: false, follow: false },

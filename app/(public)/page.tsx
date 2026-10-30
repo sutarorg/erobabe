@@ -1,5 +1,5 @@
 import { Fragment } from "react";
-import { publicPageMetadata } from "@/lib/metadata/page";
+import { publicPageMetadata, staticPageMetadata } from "@/lib/metadata/page";
 import { homeSections } from "@/lib/public/selection";
 import { getRecommendationFeed } from "@/lib/recommendations/service";
 import RecommendationShelf from "@/src/components/RecommendationShelf";
@@ -34,19 +34,16 @@ export async function generateMetadata({
   const { q } = await searchParams;
   const query = q?.trim().slice(0, 160) || "";
   if (query) {
+    // Filtered views are thin duplicates of the home page: crawlable, never
+    // indexed, and canonicalised back to "/" so they cannot compete with it.
     return publicPageMetadata({
-      title: "Search",
-      description: "Search results on erobabe. Adults 18+ only.",
+      title: "Search | EroBabe",
+      description: "Search results on EroBabe. Adults 18+ only.",
       robots: { index: false, follow: true },
       alternates: { canonical: SITE_URL },
     });
   }
-  return publicPageMetadata({
-    title: "erobabe — Adult Videos for 18+",
-    description:
-      "Watch adult videos on erobabe. Browse categories, latest uploads, and popular scenes. 18+ only.",
-    alternates: { canonical: SITE_URL },
-  });
+  return staticPageMetadata("home");
 }
 
 /**

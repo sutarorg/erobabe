@@ -60,7 +60,7 @@ export default function AgeGate() {
       >
         <img
           src={LOGO_URL}
-          alt="erobabe logo"
+          alt="EroBabe"
           className="mx-auto h-11 w-auto object-contain"
           draggable={false}
         />

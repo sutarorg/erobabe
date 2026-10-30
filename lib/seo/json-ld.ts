@@ -1,28 +1,27 @@
-import { LOGO_URL, SITE_URL } from "@/lib/site";
+import { SITE_LOGO_URL, SITE_NAME, SITE_URL } from "@/lib/site";
 
 export type BreadcrumbItem = {
   name: string;
   path: string;
 };
 
+/**
+ * The site itself. This node is what Google reads to label results as
+ * "EroBabe" instead of falling back to the bare domain, so `name` and `url`
+ * are the two properties that must never drift.
+ */
 export function websiteJsonLd(siteUrl = SITE_URL) {
   return {
     "@context": "https://schema.org",
     "@type": "WebSite",
-    name: "erobabe",
+    "@id": `${siteUrl}/#website`,
+    name: SITE_NAME,
+    alternateName: ["erobabe", "Erobabe"],
     url: siteUrl,
     inLanguage: "en",
     description:
       "Adult video catalog for viewers 18 and older. Browse categories, latest uploads, and popular scenes.",
-    publisher: {
-      "@type": "Organization",
-      name: "erobabe",
-      url: siteUrl,
-      logo: {
-        "@type": "ImageObject",
-        url: LOGO_URL,
-      },
-    },
+    publisher: { "@id": `${siteUrl}/#organization` },
     potentialAction: {
       "@type": "SearchAction",
       target: {
@@ -30,6 +29,27 @@ export function websiteJsonLd(siteUrl = SITE_URL) {
         urlTemplate: `${siteUrl}/?q={search_term_string}`,
       },
       "query-input": "required name=search_term_string",
+    },
+  };
+}
+
+/**
+ * The brand behind the site, with a logo we host ourselves. Search surfaces
+ * that show a publisher logo pull it from here.
+ */
+export function organizationJsonLd(siteUrl = SITE_URL) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "@id": `${siteUrl}/#organization`,
+    name: SITE_NAME,
+    alternateName: ["erobabe", "Erobabe"],
+    url: siteUrl,
+    logo: {
+      "@type": "ImageObject",
+      url: SITE_LOGO_URL,
+      width: 600,
+      height: 600,
     },
   };
 }
