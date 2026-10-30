@@ -86,3 +86,58 @@ export function focusFromRow(row: {
     zoom: row.focus_zoom,
   });
 }
+
+/** The placement's shape: a 16:9 box, whatever the creative's own shape is. */
+export const AD_ASPECT = 16 / 9;
+
+/**
+ * Where the 16:9 window sits inside a picture, as fractions of the picture.
+ *
+ * The window is always the largest 16:9 rectangle that fits, which is exactly
+ * what `object-fit: cover` shows in the placement. A picture wider than 16:9
+ * leaves horizontal slack only; a taller one leaves vertical slack only; an
+ * exact 16:9 picture leaves none, because the window is the whole picture.
+ */
+export type CropBox = { left: number; top: number; width: number; height: number };
+
+export function cropBoxFor(
+  width: number,
+  height: number,
+  focus: CreativeFocus | null | undefined,
+): CropBox {
+  if (!(width > 0) || !(height > 0)) {
+    return { left: 0, top: 0, width: 1, height: 1 };
+  }
+  const imageAspect = width / height;
+  const wider = imageAspect > AD_ASPECT;
+  const boxWidth = wider ? AD_ASPECT / imageAspect : 1;
+  const boxHeight = wider ? 1 : imageAspect / AD_ASPECT;
+  const { x, y } = normalizeCreativeFocus(focus);
+  return {
+    left: (x / 100) * (1 - boxWidth),
+    top: (y / 100) * (1 - boxHeight),
+    width: boxWidth,
+    height: boxHeight,
+  };
+}
+
+/**
+ * The inverse: after the window is dragged to `left`/`top` (fractions of the
+ * picture), what focal point does that represent? Slack-free axes keep the
+ * default, because there is nowhere to drag on them.
+ */
+export function focusFromCropBox(
+  width: number,
+  height: number,
+  box: { left: number; top: number },
+  zoom = 1,
+): CreativeFocus {
+  const current = cropBoxFor(width, height, DEFAULT_CREATIVE_FOCUS);
+  const slackX = 1 - current.width;
+  const slackY = 1 - current.height;
+  return normalizeCreativeFocus({
+    x: slackX > 0 ? (box.left / slackX) * 100 : 50,
+    y: slackY > 0 ? (box.top / slackY) * 100 : 50,
+    zoom,
+  });
+}

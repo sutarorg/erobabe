@@ -11,19 +11,14 @@ import {
   LoaderCircle,
   LockKeyhole,
   ShieldCheck,
-  X,
 } from "lucide-react";
 import {
   CREATIVE_ACCEPT,
   CREATIVE_FORMAT_HINT,
   MAX_CREATIVE_BYTES,
 } from "@/lib/ads/creative";
-import {
-  DEFAULT_CREATIVE_FOCUS,
-  normalizeCreativeFocus,
-  type CreativeFocus,
-} from "@/lib/ads/focus";
-import CreativeAdjuster from "./CreativeAdjuster";
+import { DEFAULT_CREATIVE_FOCUS, type CreativeFocus } from "@/lib/ads/focus";
+import CreativeCropDialog, { CreativeThumb } from "./CreativeCrop";
 import type { InventorySlot } from "@/lib/ads/inventory";
 import {
   AD_REVIEW_FLAG_KEY,
@@ -149,8 +144,11 @@ export default function CheckoutForm({
   const [creative, setCreative] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [dimensions, setDimensions] = useState("");
-  // Which part of a non-16:9 picture fills the placement, and how close.
+  // Which part of the picture fills the placement.
   const [focus, setFocus] = useState<CreativeFocus>(DEFAULT_CREATIVE_FOCUS);
+  // The crop picker opens for every upload — even a 16:9 picture may have its
+  // subject off to one side — and reopens when the thumbnail is tapped.
+  const [cropOpen, setCropOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(
     initialSlot && !requestedSlot
@@ -215,6 +213,7 @@ export default function CheckoutForm({
     if (!file) {
       setCreative(null);
       setPreview("");
+      setCropOpen(false);
       return;
     }
     if (!["image/jpeg", "image/png", "image/gif"].includes(file.type)) {
@@ -231,6 +230,7 @@ export default function CheckoutForm({
     }
 
     setCreative(file);
+    setCropOpen(true);
     if (typeof URL.createObjectURL !== "function") return;
     const nextPreview = URL.createObjectURL(file);
     setPreview(nextPreview);
@@ -440,12 +440,12 @@ export default function CheckoutForm({
                   </span>
                 </div>
                 {preview && creative ? (
-                  <CreativeAdjuster
+                  <CreativeThumb
                     src={preview}
                     fileName={creative.name}
                     dimensions={dimensions}
                     focus={focus}
-                    onFocusChange={setFocus}
+                    onAdjust={() => setCropOpen(true)}
                     onRemove={() => {
                       chooseCreative(null);
                       if (fileInput.current) fileInput.current.value = "";
@@ -669,6 +669,22 @@ export default function CheckoutForm({
       </section>
 
       <PaymentPanel />
+
+      {/* The crop picker lives beside the wizard, not on a separate page, so a
+          phone keeps its scroll position and the uploaded picture. */}
+      {preview && creative && (
+        <CreativeCropDialog
+          open={cropOpen}
+          src={preview}
+          fileName={creative.name}
+          focus={focus}
+          onConfirm={(next) => {
+            setFocus(next);
+            setCropOpen(false);
+          }}
+          onCancel={() => setCropOpen(false)}
+        />
+      )}
     </form>
   );
 }
