@@ -1,5 +1,7 @@
 "use client";
 
+import { creativeImageStyle } from "@/lib/ads/focus";
+
 import type { InventorySlot } from "@/lib/ads/inventory";
 import VacantAdCard from "@/src/components/ads/VacantAdCard";
 
@@ -64,7 +66,8 @@ export default function SlotPicker({
                 <img
                   src={slot.ad.image_url}
                   alt={`Current advertisement in slot ${slot.id}`}
-                  className="h-full w-full object-cover opacity-55"
+                  className="h-full w-full opacity-55"
+                  style={creativeImageStyle(slot.ad.focus)}
                   loading="lazy"
                 />
               ) : (

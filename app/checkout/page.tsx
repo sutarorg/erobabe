@@ -3,16 +3,37 @@ import CheckoutForm from "./CheckoutForm";
 import { loadInventory, type InventorySlot } from "@/lib/ads/inventory";
 import { PAYMENT_PANEL_ARTWORK_PATH } from "@/lib/ads/payment";
 import { SITE_URL } from "@/lib/site";
+import { publicPageMetadata } from "@/lib/metadata/page";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  // Not indexed: the checkout wizard is a tool, not a landing page.
+/**
+ * The advertising page is a landing page in its own right: it is listed in
+ * sitemap.xml, so it is indexable and carries copy written for people
+ * searching for banner inventory rather than just a wizard title.
+ */
+export const metadata: Metadata = publicPageMetadata({
   title: { absolute: "Advertise on EroBabe" },
-  description: "Choose a 16:9 placement, upload your banner, and pay securely.",
+  description:
+    "Advertise on EroBabe with premium image banner placements on a fast-loading HD porn site. Reach a high-intent adult audience and get your banner seen. Advertise on EroBabe today!",
+  keywords: [
+    "advertise on EroBabe",
+    "adult banner advertising",
+    "porn site banner ads",
+    "image banner ads",
+    "banner ad placements",
+    "adult banner space",
+    "buy banner traffic",
+    "adult traffic",
+    "banner advertising on porn sites",
+    "adult ad placements",
+    "CPM rates",
+    "banner ad specs",
+    "adult media kit",
+    "high-intent adult traffic",
+  ],
   alternates: { canonical: `${SITE_URL}/checkout` },
-  robots: { index: false, follow: false },
-};
+});
 
 export default async function CheckoutPage({
   searchParams,

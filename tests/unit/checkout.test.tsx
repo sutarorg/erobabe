@@ -126,7 +126,9 @@ describe("guest advertising checkout", () => {
     // Highlighted wrapper: the field sits directly after the upload in an
     // accent-bordered block.
     expect(destination.closest("label")?.className).toContain("border-accent/45");
-    expect(screen.getByText("Most important")).toBeTruthy();
+    // The "Most important" chip is gone; the accent border carries the emphasis.
+    expect(screen.queryByText("Most important")).toBeNull();
+    expect(screen.getByText(/any shape/i)).toBeTruthy();
 
     expect(screen.getByPlaceholderText("Alex Morgan")).toHaveAttribute("required");
     expect(screen.getByPlaceholderText("Your brand (optional)")).not.toHaveAttribute("required");
@@ -159,6 +161,55 @@ describe("guest advertising checkout", () => {
     expect(screen.getByRole("button", { name: /Pay \$99\.00 Now/i })).toBeTruthy();
   });
 
+  it("accepts any shape or an animated GIF and lets the advertiser frame it", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      Response.json({ orderId: "order-2" }, { status: 201 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = render(<CheckoutForm slots={slots} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+
+    const gif = new File(["GIF89a"], "loop.gif", { type: "image/gif" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, {
+      target: { files: [gif] },
+    });
+
+    // No aspect-ratio rejection any more: the adjustable 16:9 frame appears.
+    expect(screen.queryByText(/must be 16:9/i)).toBeNull();
+    const zoom = screen.getByLabelText(/Zoom the banner inside the 16:9 placement/i);
+    expect(screen.getByText("1.00×")).toBeTruthy();
+    fireEvent.change(zoom, { target: { value: "2" } });
+    expect(screen.getByText("2.00×")).toBeTruthy();
+    // The frame can be put back to exactly how it started.
+    fireEvent.click(screen.getByRole("button", { name: /Reset/i }));
+    expect(screen.getByText("1.00×")).toBeTruthy();
+
+    fireEvent.change(zoom, { target: { value: "1.5" } });
+    fireEvent.change(screen.getByPlaceholderText("Alex Morgan"), { target: { value: "Alex Advertiser" } });
+    fireEvent.change(screen.getByPlaceholderText("you@company.com"), { target: { value: "alex@example.com" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. Summer collection launch"), { target: { value: "Loop launch" } });
+    fireEvent.change(screen.getByPlaceholderText("https://your-website.com/landing-page"), {
+      target: { value: "https://example.com/offer" },
+    });
+    fireEvent.submit(container.querySelector("form")!);
+    fireEvent.click(screen.getByRole("button", { name: /Pay \$99\.00 Now/i }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = fetchMock.mock.calls[0]?.[1]?.body as FormData;
+    expect(body.get("creative")).toBe(gif);
+    expect(body.get("focusZoom")).toBe("1.5");
+  });
+
+  it("rejects a file that is not an image at all", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+    const pdf = new File(["%PDF"], "brief.pdf", { type: "application/pdf" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, {
+      target: { files: [pdf] },
+    });
+    expect(screen.getByText(/Upload a JPG, PNG or GIF banner/i)).toBeTruthy();
+  });
+
   it("requires the banner before continuing, then submits and hands over to the payment page", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
       Response.json({ orderId: "order-1", status: "in_review" }, { status: 201 }),
@@ -172,7 +223,7 @@ describe("guest advertising checkout", () => {
     fireEvent.change(screen.getByPlaceholderText("e.g. Summer collection launch"), { target: { value: "Summer launch" } });
     fireEvent.change(screen.getByPlaceholderText("https://your-website.com/landing-page"), { target: { value: "https://example.com/offer" } });
     fireEvent.submit(container.querySelector("form")!);
-    expect(await screen.findByText(/Upload your 16:9 ad banner before continuing/i)).toBeTruthy();
+    expect(await screen.findByText(/Upload your ad banner before continuing/i)).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "3. Payment" })).toBeNull();
 
     const file = new File(["png"], "banner.png", { type: "image/png" });
@@ -192,6 +243,10 @@ describe("guest advertising checkout", () => {
     expect(body.get("email")).toBe("alex@example.com");
     expect(body.get("destinationUrl")).toBe("https://example.com/offer");
     expect(body.get("creative")).toBe(file);
+    // A default frame is still sent, so the server always records one.
+    expect(body.get("focusX")).toBe("50");
+    expect(body.get("focusY")).toBe("50");
+    expect(body.get("focusZoom")).toBe("1");
 
     // The homepage reads this flag to show the “In review” card once.
     expect(JSON.parse(window.localStorage.getItem(AD_REVIEW_FLAG_KEY) || "{}")).toMatchObject({

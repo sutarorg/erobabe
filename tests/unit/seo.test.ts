@@ -70,9 +70,34 @@ describe("robots.txt", () => {
     const doc = robots();
     const star = Array.isArray(doc.rules) ? doc.rules[0] : doc.rules;
     expect(star.allow).toBe("/");
-    expect(star.disallow).toEqual(expect.arrayContaining(["/admin", "/checkout", "/auth", "/api/"]));
+    expect(star.disallow).toEqual(expect.arrayContaining(["/admin", "/auth", "/api/"]));
+    // /checkout is listed in sitemap.xml, so it must not be blocked here.
+    expect(star.disallow).not.toContain("/checkout");
     expect(doc.sitemap).toEqual(
       expect.arrayContaining(["https://erobabe.com/sitemap.xml", "https://erobabe.com/video-sitemap.xml"]),
     );
+  });
+});
+
+describe("the advertising page is a real landing page", () => {
+  it("is listed in sitemap.xml", async () => {
+    const { default: sitemap } = await import("@/app/sitemap");
+    const entries = await sitemap();
+    const checkout = entries.find((entry) => entry.url.endsWith("/checkout"));
+    expect(checkout).toBeDefined();
+    expect(checkout?.changeFrequency).toBe("weekly");
+  });
+
+  it("carries the advertising copy and is indexable", async () => {
+    const { metadata } = await import("@/app/checkout/page");
+    expect(metadata.title).toEqual({ absolute: "Advertise on EroBabe" });
+    expect(metadata.description).toBe(
+      "Advertise on EroBabe with premium image banner placements on a fast-loading HD porn site. Reach a high-intent adult audience and get your banner seen. Advertise on EroBabe today!",
+    );
+    expect(metadata.keywords).toEqual(
+      expect.arrayContaining(["adult banner advertising", "banner ad placements", "CPM rates"]),
+    );
+    expect(metadata.robots).toMatchObject({ index: true, follow: true });
+    expect(metadata.alternates?.canonical).toBe("https://erobabe.com/checkout");
   });
 });

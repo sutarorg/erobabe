@@ -12,7 +12,7 @@ non-scrolling** payment panel on the right that replaces the old
 | Step | Contents |
 | --- | --- |
 | **1. Ads Details** | The ten fixed 16:9 placements drawn like the homepage ad cards: **two columns × five rows**. A sold placement shows its running creative and cannot be selected; an open one shows **Available** and selecting it advances the wizard. Duration is fixed at **1 month**. |
-| **2. Advertiser details** | **Media upload** (required, JPG/PNG, 16:9, max 5 MB) → **Destination URL** (required, second field, highlighted and tagged “Most important”) → Your name (required) → Company / brand (optional) → Email (required) → Ad name (required) → About you (optional). |
+| **2. Advertiser details** | **Media upload** (required, JPG/PNG/GIF of any shape, max 5 MB; the 16:9 frame crops it and the advertiser drags/zooms to choose which part shows) → **Destination URL** (required, second field, highlighted) → Your name (required) → Company / brand (optional) → Email (required) → Ad name (required) → About you (optional). |
 | **3. Payment** | Order summary (slot, 1 month, $99.00) and **Pay $99.00 with PayPal**. Paying writes the `in_review` order through `POST /api/ads/submit`, then hands the visitor to the hosted PayPal page. |
 
 Payment page: `https://www.paypal.com/ncp/payment/AZP63KXT9FUNL`

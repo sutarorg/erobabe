@@ -1,5 +1,6 @@
 "use client";
 import AdCreativeCard, { isSafeAdUrl } from "./ads/AdCreativeCard";
+import type { CreativeFocus } from "@/lib/ads/focus";
 import VacantAdCard from "./ads/VacantAdCard";
 
 interface AdSlotProps {
@@ -12,6 +13,7 @@ interface AdSlotProps {
     image_url?: string;
     destination_url?: string;
     title?: string;
+    focus?: CreativeFocus | null;
   } | null;
 }
 

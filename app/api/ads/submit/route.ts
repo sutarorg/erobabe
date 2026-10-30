@@ -3,11 +3,12 @@ import { z } from "zod";
 import { createServiceClient } from "@/lib/supabase/server";
 import { limitRequest, RequestError } from "@/lib/http/safety";
 import {
-  CREATIVE_ACCEPT,
+  CREATIVE_TYPES,
   CreativeValidationError,
   MAX_CREATIVE_BYTES,
   validateCreativeBytes,
 } from "@/lib/ads/creative";
+import { normalizeCreativeFocus } from "@/lib/ads/focus";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,11 @@ const submissionSchema = z
       .url()
       .max(2048)
       .refine((value) => /^https?:\/\//i.test(value), "Use an http or https URL"),
+    // How the advertiser framed their picture inside the 16:9 placement.
+    // Absent means "centred, no zoom", which is what an older client sends.
+    focusX: z.coerce.number().min(0).max(100).optional().default(50),
+    focusY: z.coerce.number().min(0).max(100).optional().default(50),
+    focusZoom: z.coerce.number().min(1).max(3).optional().default(1),
     paypalTransactionId: z.string().trim().max(128).optional().default(""),
     // Payment happens on the hosted payment page *after* the order exists, so
     // the confirmation is recorded by the operator during review. The flag is
@@ -111,6 +117,9 @@ export async function POST(req: Request) {
       email: field(form, "email"),
       aboutAdvertiser: field(form, "aboutAdvertiser") ?? "",
       destinationUrl: field(form, "destinationUrl"),
+      focusX: field(form, "focusX"),
+      focusY: field(form, "focusY"),
+      focusZoom: field(form, "focusZoom"),
       paypalTransactionId: field(form, "paypalTransactionId") ?? "",
       paymentConfirmed: field(form, "paymentConfirmed") ?? undefined,
     });
@@ -125,16 +134,21 @@ export async function POST(req: Request) {
       typeof creative.arrayBuffer !== "function" ||
       creative.size < 1
     ) {
-      throw new CreativeValidationError("Choose a 16:9 JPG or PNG ad banner.");
+      throw new CreativeValidationError("Choose a JPG, PNG or GIF ad banner.");
     }
     if (creative.size > MAX_CREATIVE_BYTES) {
       throw new CreativeValidationError("Ad banner must be 5 MB or smaller.");
     }
-    if (!CREATIVE_ACCEPT.split(",").includes(creative.type)) {
-      throw new CreativeValidationError("Ad banner must be a JPG or PNG image.");
+    if (!CREATIVE_TYPES.includes(creative.type as (typeof CREATIVE_TYPES)[number])) {
+      throw new CreativeValidationError("Ad banner must be a JPG, PNG or GIF image.");
     }
 
     const validated = validateCreativeBytes(Buffer.from(await creative.arrayBuffer()));
+    const focus = normalizeCreativeFocus({
+      x: parsed.data.focusX,
+      y: parsed.data.focusY,
+      zoom: parsed.data.focusZoom,
+    });
     await limitRequest(req, "ad-order-submit", 5);
     service = createServiceClient();
 
@@ -167,6 +181,9 @@ export async function POST(req: Request) {
       p_file_type: validated.fileType,
       p_dimensions: validated.dimensions,
       p_paypal_transaction_id: parsed.data.paypalTransactionId,
+      p_focus_x: focus.x,
+      p_focus_y: focus.y,
+      p_focus_zoom: focus.zoom,
     });
 
     if (error || !data) {

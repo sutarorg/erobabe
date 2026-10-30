@@ -1,4 +1,5 @@
 import { FIXED_CATEGORIES } from "./fixed-categories";
+import { focusFromRow, type CreativeFocus } from "@/lib/ads/focus";
 import { unstable_cache } from "next/cache";
 import { tryCreateServiceClient } from "@/lib/supabase/server";
 
@@ -45,6 +46,8 @@ export type PublicAd = {
     image_url: string;
     destination_url: string;
     status: string;
+    /** Checkout framing for any-ratio / GIF creatives (migration 26). */
+    focus?: CreativeFocus;
   };
 };
 
@@ -175,6 +178,34 @@ async function loadCategories(): Promise<PublicCategory[]> {
   );
 }
 
+/**
+ * Ad orders carry the framing the advertiser chose (migration 26). During a
+ * rolling deploy the column may not exist yet, so the query falls back to the
+ * pre-framing shape instead of failing the whole rail.
+ */
+async function orderAds(supabase: any) {
+  const base = supabase
+    .from("ad_orders")
+    .select("id, slot_id, ad_name, image_url, destination_url")
+    .eq("status", "live")
+    .eq("payment_status", "verified")
+    .lte("starts_at", new Date().toISOString())
+    .gt("ends_at", new Date().toISOString());
+  const withFocus = await supabase
+    .from("ad_orders")
+    .select("id, slot_id, ad_name, image_url, destination_url, focus_x, focus_y, focus_zoom")
+    .eq("status", "live")
+    .eq("payment_status", "verified")
+    .lte("starts_at", new Date().toISOString())
+    .gt("ends_at", new Date().toISOString());
+  if (!withFocus.error) return withFocus;
+  const missingColumn =
+    withFocus.error.code === "42703" ||
+    withFocus.error.code === "PGRST204" ||
+    /column .* does not exist/i.test(withFocus.error.message || "");
+  return missingColumn ? base : withFocus;
+}
+
 async function loadActiveAds(): Promise<PublicAd[]> {
   const supabase = tryCreateServiceClient();
   if (!supabase) return [];
@@ -183,13 +214,7 @@ async function loadActiveAds(): Promise<PublicAd[]> {
     supabase
       .from("eligible_ads")
       .select("campaign_id, slot_id, creative_id, title, image_url, destination_url"),
-    supabase
-      .from("ad_orders")
-      .select("id, slot_id, ad_name, image_url, destination_url")
-      .eq("status", "live")
-      .eq("payment_status", "verified")
-      .lte("starts_at", new Date().toISOString())
-      .gt("ends_at", new Date().toISOString()),
+    orderAds(supabase),
   ]);
 
   const bySlot = new Map<number, PublicAd>();
@@ -228,6 +253,7 @@ async function loadActiveAds(): Promise<PublicAd[]> {
           image_url: row.image_url,
           destination_url: row.destination_url,
           status: "approved",
+          focus: focusFromRow(row),
         },
       });
     }

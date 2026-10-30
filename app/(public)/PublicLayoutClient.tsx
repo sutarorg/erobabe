@@ -9,6 +9,7 @@ import MobileAdsProvider from "@/src/components/ads/MobileAdsProvider";
 import AdReviewNotice from "@/src/components/ads/AdReviewNotice";
 import AnalyticsBeacon from "@/src/components/analytics/AnalyticsBeacon";
 import type { RotatableAd } from "@/lib/ads/rotation";
+import type { CreativeFocus } from "@/lib/ads/focus";
 import { useRouter, usePathname } from "next/navigation";
 
 interface ActiveCampaign {
@@ -21,6 +22,7 @@ interface ActiveCampaign {
     image_url: string;
     destination_url: string;
     status: string;
+    focus?: CreativeFocus;
   };
 }
 
@@ -51,6 +53,7 @@ export function mobileRotationPool(activeCampaigns: ActiveCampaign[]): Rotatable
       title: campaign.creative.title || "Sponsored",
       image_url: campaign.creative.image_url,
       destination_url: campaign.creative.destination_url,
+      focus: campaign.creative.focus,
     }));
 }
 

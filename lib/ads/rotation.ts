@@ -19,6 +19,8 @@
  * render and the browser hydration agree.
  */
 
+import type { CreativeFocus } from "./focus";
+
 export type RotatableAd = {
   /** Stable creative id; also used as the React key. */
   id: string;
@@ -29,6 +31,8 @@ export type RotatableAd = {
   title: string;
   image_url: string;
   destination_url: string;
+  /** Checkout framing for any-ratio / GIF creatives. */
+  focus?: CreativeFocus;
 };
 
 /** FNV-1a — small, fast, and stable across server and browser. */
