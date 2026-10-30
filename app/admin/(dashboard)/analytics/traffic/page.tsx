@@ -98,7 +98,7 @@ function TrafficReport({
         />
       </div>
 
-      <Panel title="Traffic over time" subtitle="UTC buckets; hover or use the hidden table for exact values.">
+      <Panel title="Traffic over time" subtitle="UTC buckets; hover, tap or use the arrow keys to read any point.">
         <TimeSeriesChart points={data.series} bucket={range.bucket} title="Pageviews and sessions" />
       </Panel>
 

@@ -74,7 +74,11 @@ export default async function AdAnalyticsPage({
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-            <Panel title="Delivery" subtitle="Daily UTC impressions and clicks for this advertisement">
+            <Panel
+              title="Delivery"
+              subtitle="Daily UTC impressions and clicks for this advertisement"
+              className="self-start"
+            >
               <AdSeriesChart points={result.data.series} />
             </Panel>
 
