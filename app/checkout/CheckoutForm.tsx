@@ -13,7 +13,17 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { CREATIVE_ACCEPT, MAX_CREATIVE_BYTES } from "@/lib/ads/creative";
+import {
+  CREATIVE_ACCEPT,
+  CREATIVE_FORMAT_HINT,
+  MAX_CREATIVE_BYTES,
+} from "@/lib/ads/creative";
+import {
+  DEFAULT_CREATIVE_FOCUS,
+  normalizeCreativeFocus,
+  type CreativeFocus,
+} from "@/lib/ads/focus";
+import CreativeAdjuster from "./CreativeAdjuster";
 import type { InventorySlot } from "@/lib/ads/inventory";
 import {
   AD_REVIEW_FLAG_KEY,
@@ -139,6 +149,8 @@ export default function CheckoutForm({
   const [creative, setCreative] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
   const [dimensions, setDimensions] = useState("");
+  // Which part of a non-16:9 picture fills the placement, and how close.
+  const [focus, setFocus] = useState<CreativeFocus>(DEFAULT_CREATIVE_FOCUS);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(
     initialSlot && !requestedSlot
@@ -199,15 +211,16 @@ export default function CheckoutForm({
   function chooseCreative(file: File | null) {
     setError("");
     setDimensions("");
+    setFocus(DEFAULT_CREATIVE_FOCUS);
     if (!file) {
       setCreative(null);
       setPreview("");
       return;
     }
-    if (!["image/jpeg", "image/png"].includes(file.type)) {
+    if (!["image/jpeg", "image/png", "image/gif"].includes(file.type)) {
       setCreative(null);
       setPreview("");
-      setError("Upload a JPG or PNG banner.");
+      setError("Upload a JPG, PNG or GIF banner.");
       return;
     }
     if (file.size > MAX_CREATIVE_BYTES) {
@@ -222,23 +235,17 @@ export default function CheckoutForm({
     const nextPreview = URL.createObjectURL(file);
     setPreview(nextPreview);
 
+    // Any shape is welcome: the 16:9 frame below crops it, and the advertiser
+    // chooses which part stays. Only unreadable bytes are rejected.
     const image = new window.Image();
     image.onload = () => {
-      if (Math.abs(image.naturalWidth / image.naturalHeight - 16 / 9) > 0.01) {
-        setCreative(null);
-        setPreview("");
-        setDimensions("");
-        if (fileInput.current) fileInput.current.value = "";
-        setError("Your banner must be 16:9. Try 1200 × 675 or 1280 × 720.");
-        return;
-      }
       setDimensions(`${image.naturalWidth} × ${image.naturalHeight}`);
     };
     image.onerror = () => {
       setCreative(null);
       setPreview("");
       if (fileInput.current) fileInput.current.value = "";
-      setError("We could not read that image. Choose a valid JPG or PNG.");
+      setError(`We could not read that image. Choose a ${CREATIVE_FORMAT_HINT} file.`);
     };
     image.src = nextPreview;
   }
@@ -252,7 +259,7 @@ export default function CheckoutForm({
       return;
     }
     if (!creative) {
-      setError("Upload your 16:9 ad banner before continuing.");
+      setError("Upload your ad banner before continuing.");
       return;
     }
     goToStep(3);
@@ -267,7 +274,7 @@ export default function CheckoutForm({
       return;
     }
     if (!creative) {
-      setError("Upload your 16:9 ad banner before paying.");
+      setError("Upload your ad banner before paying.");
       goToStep(2);
       return;
     }
@@ -283,6 +290,9 @@ export default function CheckoutForm({
       body.set("email", fields.email);
       body.set("aboutAdvertiser", fields.aboutAdvertiser);
       body.set("destinationUrl", fields.destinationUrl);
+      body.set("focusX", String(focus.x));
+      body.set("focusY", String(focus.y));
+      body.set("focusZoom", String(focus.zoom));
       body.set("creative", creative);
 
       const response = await fetch("/api/ads/submit", { method: "POST", body });
@@ -425,26 +435,44 @@ export default function CheckoutForm({
                   <span className="text-[12px] font-medium text-ink-2">
                     Media upload <span className="text-accent">*</span>
                   </span>
-                  <span className="text-[10.5px] text-ink-3">JPG or PNG · 16:9 · max 5 MB</span>
+                  <span className="text-[10.5px] text-ink-3">
+                    {CREATIVE_FORMAT_HINT} · any shape · max 5 MB
+                  </span>
                 </div>
-                <label className="group relative mt-2 block cursor-pointer overflow-hidden rounded-xl border border-dashed border-line bg-card transition hover:border-accent/60">
-                  {preview ? (
-                    <span className="relative block aspect-video bg-black">
-                      <img src={preview} alt="Ad banner preview" className="h-full w-full object-contain" />
-                      <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/90 to-transparent px-4 pb-3 pt-8 text-[11px]">
-                        <span className="max-w-[70%] truncate">{creative?.name}</span>
-                        <span className="text-emerald-300">{dimensions || "16:9 banner"}</span>
-                      </span>
-                    </span>
-                  ) : (
+                {preview && creative ? (
+                  <CreativeAdjuster
+                    src={preview}
+                    fileName={creative.name}
+                    dimensions={dimensions}
+                    focus={focus}
+                    onFocusChange={setFocus}
+                    onRemove={() => {
+                      chooseCreative(null);
+                      if (fileInput.current) fileInput.current.value = "";
+                    }}
+                  />
+                ) : (
+                  <label className="group relative mt-2 block cursor-pointer overflow-hidden rounded-xl border border-dashed border-line bg-card transition hover:border-accent/60">
                     <span className="flex aspect-video flex-col items-center justify-center px-5 text-center">
                       <span className="flex h-11 w-11 items-center justify-center rounded-full border border-accent/25 bg-accent/10 text-accent transition group-hover:bg-accent/15">
                         <ImagePlus aria-hidden className="h-5 w-5" />
                       </span>
-                      <span className="mt-3 text-[13px] font-medium">Drop in your 16:9 creative</span>
-                      <span className="mt-1 text-[11px] text-ink-3">Click to browse · 1200 × 675 recommended</span>
+                      <span className="mt-3 text-[13px] font-medium">Drop in your creative</span>
+                      <span className="mt-1 text-[11px] text-ink-3">
+                        Any size or shape · we fit it to 16:9 · 1200 × 675 recommended
+                      </span>
                     </span>
-                  )}
+                    <input
+                      ref={fileInput}
+                      name="creative"
+                      type="file"
+                      accept={CREATIVE_ACCEPT}
+                      onChange={(event) => chooseCreative(event.target.files?.[0] || null)}
+                      className="sr-only"
+                    />
+                  </label>
+                )}
+                {preview && creative && (
                   <input
                     ref={fileInput}
                     name="creative"
@@ -453,18 +481,6 @@ export default function CheckoutForm({
                     onChange={(event) => chooseCreative(event.target.files?.[0] || null)}
                     className="sr-only"
                   />
-                </label>
-                {creative && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      chooseCreative(null);
-                      if (fileInput.current) fileInput.current.value = "";
-                    }}
-                    className="mt-2 inline-flex items-center gap-1 text-[10.5px] text-ink-3 transition hover:text-ink"
-                  >
-                    <X aria-hidden className="h-3 w-3" /> Remove banner
-                  </button>
                 )}
               </div>
 
@@ -473,9 +489,6 @@ export default function CheckoutForm({
                 <span className="flex items-center justify-between gap-2 text-[12px] font-medium text-ink-2">
                   <span>
                     Destination URL <span className="text-accent">*</span>
-                  </span>
-                  <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-accent">
-                    Most important
                   </span>
                 </span>
                 <input

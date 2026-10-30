@@ -1,5 +1,6 @@
 "use client";
 import AdSlot from "./AdSlot";
+import type { CreativeFocus } from "@/lib/ads/focus";
 
 interface ActiveCampaign {
   campaign_id?: string;
@@ -10,6 +11,7 @@ interface ActiveCampaign {
     image_url?: string;
     destination_url?: string;
     title?: string;
+    focus?: CreativeFocus | null;
   };
 }
 

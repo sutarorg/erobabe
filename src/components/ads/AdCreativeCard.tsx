@@ -1,12 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { creativeImageStyle, type CreativeFocus } from "@/lib/ads/focus";
 
 export type AdCreativeView = {
   id?: string;
   image_url?: string;
   destination_url?: string;
   title?: string;
+  /**
+   * The framing the advertiser chose at checkout. Absent for legacy campaigns,
+   * which were uploaded as 16:9 and need no adjustment.
+   */
+  focus?: CreativeFocus | null;
 };
 
 export function isSafeAdUrl(url?: string | null): boolean {
@@ -142,6 +148,7 @@ export default function AdCreativeCard({
         src={creative.image_url}
         alt={creative.title || `Advertisement ${slotId}`}
         className={imageClassName}
+        style={creativeImageStyle(creative.focus)}
         loading={eager ? "eager" : "lazy"}
       />
       {showBadge && (

@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { focusFromRow, type CreativeFocus } from "@/lib/ads/focus";
 
 /**
  * The ten fixed 16:9 placements and who currently occupies each one.
@@ -15,6 +16,8 @@ export const FIXED_AD_SLOT_COUNT = 10;
 export type InventoryAd = {
   /** Creative image shown in place of the "Advertise" card. */
   image_url: string;
+  /** Checkout framing for any-ratio / GIF creatives. */
+  focus?: CreativeFocus;
   ad_name: string;
   destination_url: string;
   /** When the occupancy ends, if the source knows. */
@@ -90,6 +93,26 @@ function campaignHoldsSlot(campaign: CampaignRow) {
   return ["active", "paused", "pending_review"].includes(String(campaign.status || ""));
 }
 
+/**
+ * Orders that hold a placement, with the framing they were bought with.
+ *
+ * Migration 26 adds focus_x/focus_y/focus_zoom; during a rolling deploy the
+ * columns may not exist yet, and an unframed banner is still a banner.
+ */
+async function orderInventory(db: ReturnType<typeof createServiceClient>) {
+  const query = (columns: string) =>
+    db
+      .from("ad_orders")
+      .select(columns)
+      .in("status", ["in_review", "live", "paused"]);
+  const withFocus = await query(
+    "slot_id,status,ends_at,ad_name,image_url,destination_url,focus_x,focus_y,focus_zoom",
+  );
+  if (!withFocus.error) return withFocus;
+  if (!missingColumn(withFocus.error)) return withFocus;
+  return query("slot_id,status,ends_at,ad_name,image_url,destination_url");
+}
+
 export async function loadInventory(): Promise<InventorySlot[]> {
   const db = createServiceClient();
   const [slotResult, campaignResult, orderResult] = await Promise.all([
@@ -103,10 +126,7 @@ export async function loadInventory(): Promise<InventorySlot[]> {
       .select("slot_id,status,hold_expires_at,end_date,name,creative:ad_creatives(image_url,title,destination_url)")
       .in("status", ["active", "paused", "pending_review", "pending_payment"])
       .gt("end_date", new Date().toISOString().slice(0, 10)),
-    db
-      .from("ad_orders")
-      .select("slot_id,status,ends_at,ad_name,image_url,destination_url")
-      .in("status", ["in_review", "live", "paused"]),
+    orderInventory(db),
   ]);
 
   if (slotResult.error) throw new Error("Unable to load inventory");
@@ -159,6 +179,7 @@ export async function loadInventory(): Promise<InventorySlot[]> {
     if (existing && existing.source === "order" && order.status !== "live") continue;
     occupied.set(slotId, {
       image_url: order.image_url || "",
+      focus: focusFromRow(order),
       ad_name: order.ad_name || existing?.ad_name || "Reserved placement",
       destination_url: order.destination_url || "",
       ends_at: order.ends_at || null,

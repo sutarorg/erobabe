@@ -28,7 +28,21 @@ function png(width: number, height: number) {
   return bytes;
 }
 
-function requestWith(width = 1200, height = 675) {
+function gif(width: number, height: number) {
+  const bytes = Buffer.alloc(16);
+  bytes.write("GIF89a", 0, "ascii");
+  bytes.writeUInt16LE(width, 6);
+  bytes.writeUInt16LE(height, 8);
+  return bytes;
+}
+
+function requestWith(
+  width = 1200,
+  height = 675,
+  focus: { x?: string; y?: string; zoom?: string } = {},
+  bytes: Buffer = png(width, height),
+  type = "image/png",
+) {
   const form = new FormData();
   form.set("slotId", "1");
   form.set("durationMonths", "1");
@@ -41,7 +55,10 @@ function requestWith(width = 1200, height = 675) {
   form.set("paypalTransactionId", "PAYPAL-123");
   form.set("paymentConfirmed", "true");
   form.set("amountCents", "1"); // Client-supplied pricing is never accepted.
-  form.set("creative", new File([png(width, height)], "banner.png", { type: "image/png" }));
+  if (focus.x !== undefined) form.set("focusX", focus.x);
+  if (focus.y !== undefined) form.set("focusY", focus.y);
+  if (focus.zoom !== undefined) form.set("focusZoom", focus.zoom);
+  form.set("creative", new File([new Uint8Array(bytes)], "banner", { type }));
   return new Request("https://example.com/api/ads/submit", { method: "POST", body: form });
 }
 
@@ -122,10 +139,43 @@ describe("guest ad submission route", () => {
     expect(body.error).not.toMatch(/16:9 banner/i);
   });
 
-  it("rejects a non-16:9 banner before uploading or reserving a slot", async () => {
+  it("accepts a square banner: any shape is framed into the 16:9 placement", async () => {
     const response = await POST(requestWith(1000, 1000));
+    expect(response.status).toBe(201);
+    const params = state.rpc.mock.calls[0]?.[1];
+    expect(params).toMatchObject({ p_dimensions: "1000x1000" });
+    // No framing sent means centred, untouched.
+    expect(params).toMatchObject({ p_focus_x: 50, p_focus_y: 50, p_focus_zoom: 1 });
+  });
+
+  it("accepts an animated GIF and stores its framing", async () => {
+    const response = await POST(
+      requestWith(600, 900, { x: "20", y: "80", zoom: "1.8" }, gif(600, 900), "image/gif"),
+    );
+    expect(response.status).toBe(201);
+    expect(state.upload.mock.calls[0]?.[0]).toMatch(/\.gif$/);
+    const params = state.rpc.mock.calls[0]?.[1];
+    expect(params).toMatchObject({
+      p_file_type: "image/gif",
+      p_dimensions: "600x900",
+      p_focus_x: 20,
+      p_focus_y: 80,
+      p_focus_zoom: 1.8,
+    });
+  });
+
+  it("clamps framing that arrived outside the allowed range", async () => {
+    const response = await POST(requestWith(1200, 675, { x: "-40", y: "900", zoom: "9" }));
+    // Out-of-range values are rejected by the schema rather than silently
+    // stored, so a bad client can never rotate a banner 900% off-centre.
     expect(response.status).toBe(400);
-    expect((await response.json()).error).toMatch(/16:9/);
+    expect(state.upload).not.toHaveBeenCalled();
+  });
+
+  it("rejects a picture thinner than the placement before uploading", async () => {
+    const response = await POST(requestWith(40, 40));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/at least/i);
     expect(state.upload).not.toHaveBeenCalled();
     expect(state.rpc).not.toHaveBeenCalled();
   });

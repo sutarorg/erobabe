@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ExternalLink, Mail, ShieldCheck, Trash2 } from "lucide-react";
 import { tryCreateServiceClient } from "@/lib/supabase/server";
 import AdOrderActions from "./AdOrderActions";
+import { creativeImageStyle, focusFromRow } from "@/lib/ads/focus";
 
 function money(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
@@ -31,19 +32,31 @@ export const dynamic = "force-dynamic";
 
 export default async function AdsAdmin() {
   const supabase = tryCreateServiceClient();
-  const { data: orders, error } = supabase
-    ? await supabase
-    .from("ad_orders")
-    .select(`
+  // The framing columns arrive with migration 26: a database that has not been
+  // migrated yet still lists its orders, just without the crop.
+  const selectOrders = (columns: string) =>
+    supabase!
+      .from("ad_orders")
+      .select(columns)
+      .order("created_at", { ascending: false })
+      .limit(100);
+  const baseColumns = `
       id, slot_id, ad_name, contact_name, company_name, email,
       about_advertiser, destination_url, image_url, dimensions,
       duration_months, amount_cents, currency, paypal_transaction_id,
       payment_status, payment_verified_at, status, starts_at, ends_at,
       live_email_sent_at, created_at
-    `)
-        .order("created_at", { ascending: false })
-        .limit(100)
-    : { data: [], error: { message: "Supabase is not configured" } };
+    `;
+  let ordersResult = supabase
+    ? await selectOrders(`focus_x, focus_y, focus_zoom, ${baseColumns}`)
+    : null;
+  if (ordersResult?.error?.code === "42703" || ordersResult?.error?.code === "PGRST204") {
+    ordersResult = await selectOrders(baseColumns);
+  }
+  const { data: orders, error } = ordersResult ?? {
+    data: [],
+    error: { message: "Supabase is not configured" },
+  };
 
   const rows = (orders || []) as any[];
   const awaitingReview = rows.filter((order) => order.status === "in_review").length;
@@ -104,13 +117,16 @@ export default async function AdsAdmin() {
                     className="group relative block bg-black"
                     aria-label={`Inspect ${order.ad_name} banner`}
                   >
+                    {/* Framed exactly as the placement renders it: the
+                        advertiser uploaded any shape and chose the crop. */}
                     <img
                       src={order.image_url}
                       alt={`${order.ad_name} submitted banner`}
-                      className="aspect-video w-full object-contain transition group-hover:opacity-90"
+                      className="aspect-video w-full transition group-hover:opacity-90"
+                      style={creativeImageStyle(focusFromRow(order))}
                     />
                     <span className="absolute bottom-2 left-2 rounded bg-black/75 px-2 py-1 text-[9px] text-white">
-                      16:9 · {order.dimensions}
+                      16:9 crop · source {order.dimensions}
                     </span>
                   </a>
                   <dl className="flex flex-1 flex-col justify-center gap-2 border-t border-line/60 px-4 py-3">

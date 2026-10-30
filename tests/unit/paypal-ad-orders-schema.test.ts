@@ -60,4 +60,35 @@ describe("guest PayPal ad-order schema", () => {
     expect(live.rows[0]).toHaveProperty("starts_at");
     expect(live.rows[0]).toHaveProperty("ends_at");
   });
+
+  it("stores the framing an advertiser chose, for a GIF of any shape", async () => {
+    await db.query(`select admin_review_ad_order('${admin}','${orderId}','delete_ad')`).catch(() => undefined);
+    await db.query(`delete from ad_orders where slot_id = 2`);
+    const submitted = await db.query<{ submit_ad_order: string }>(
+      `select submit_ad_order(2,1,'Loop launch','Sam','','sam@example.com','Advertiser','https://example.com','https://cdn.example.com/loop.gif','orders/loop.gif',2400,'image/gif','600x900',null,20,80,1.8)`,
+    );
+    const row = await db.query(
+      `select file_type, dimensions, focus_x, focus_y, focus_zoom from ad_orders where id='${submitted.rows[0]!.submit_ad_order}'`,
+    );
+    expect(row.rows[0]).toMatchObject({
+      file_type: "image/gif",
+      dimensions: "600x900",
+      focus_x: "20.00",
+      focus_y: "80.00",
+      focus_zoom: "1.80",
+    });
+  });
+
+  it("refuses framing outside the frame, at the database as well as the route", async () => {
+    await expect(
+      db.query(
+        `select submit_ad_order(3,1,'Bad','Bad','','bad@example.com','Advertiser','https://example.com','https://cdn.example.com/bad.png','orders/bad.png',1200,'image/png','1200x675',null,400,50,1)`,
+      ),
+    ).rejects.toThrow(/Invalid creative framing/);
+    await expect(
+      db.query(
+        `select submit_ad_order(3,1,'Bad','Bad','','bad@example.com','Advertiser','https://example.com','https://cdn.example.com/bad.png','orders/bad.png',1200,'image/png','1200x675',null,50,50,9)`,
+      ),
+    ).rejects.toThrow(/Invalid creative framing/);
+  });
 });
