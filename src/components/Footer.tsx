@@ -70,7 +70,7 @@ export default function Footer({
             <div className="flex items-center gap-2">
               <img
                 src={LOGO_URL}
-                alt="erobabe logo"
+                alt="EroBabe"
                 className="h-6 w-auto object-contain"
                 draggable={false}
               />
@@ -167,7 +167,7 @@ export default function Footer({
 
         <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-5">
           <p className="text-[11.5px] text-ink-3">
-            © 2026 erobabe. All rights reserved. erobabe does not own or produce
+            © 2026 EroBabe. All rights reserved. EroBabe does not own or produce
             any uploaded videos.
           </p>
           <span className="inline-flex items-center rounded border border-accent/45 bg-accent/8 px-2 py-1 text-[10px] font-semibold tracking-[0.14em] text-accent">

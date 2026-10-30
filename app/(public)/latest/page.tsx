@@ -1,16 +1,10 @@
-import { publicPageMetadata } from "@/lib/metadata/page";
-import { SITE_URL } from "@/lib/site";
+import { staticPageMetadata } from "@/lib/metadata/page";
 import { latestRecommendations } from "@/lib/recommendations/service";
 import PaginatedLatestFeed from "@/src/components/PaginatedLatestFeed";
 import type { Metadata } from "next";
 
 export const revalidate = 30;
-export const metadata: Metadata = publicPageMetadata({
-  title: "Latest Videos",
-  description:
-    "Newest published adult videos on erobabe, listed in chronological order. 18+ only.",
-  alternates: { canonical: `${SITE_URL}/latest` },
-});
+export const metadata: Metadata = staticPageMetadata("latest", "/latest");
 
 export default async function LatestPage() {
   const page = await latestRecommendations({ limit: 24 });

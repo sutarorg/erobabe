@@ -7,6 +7,7 @@ import Breadcrumbs from "@/src/components/Breadcrumbs";
 import JsonLd from "@/src/components/JsonLd";
 import { collectionPageJsonLd } from "@/lib/seo/json-ld";
 import { publicPageMetadata } from "@/lib/metadata/page";
+import { categorySeo } from "@/lib/seo/pages";
 import type { Metadata } from "next";
 
 export const revalidate = 30;
@@ -15,18 +16,13 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { slug } = await params;
   const { category, videos } = await getCategoryBySlug(slug);
   if (!category) notFound();
-  const description =
-    category.description ||
-    `Browse ${category.label} adult videos on erobabe. ${videos.length} published scene${videos.length === 1 ? "" : "s"}. 18+ only.`;
+  const seo = categorySeo(slug, category.label);
   return publicPageMetadata({
-    title: `${category.label} Videos`,
-    description,
+    title: { absolute: seo.title },
+    description: seo.description,
+    keywords: seo.keywords,
+    // An empty category is a thin page: readable, but not worth indexing.
     robots: { index: videos.length > 0, follow: true },
-    openGraph: {
-      title: `${category.label} Videos`,
-      description,
-      url: `${SITE_URL}/category/${slug}`,
-    },
     alternates: { canonical: `${SITE_URL}/category/${slug}` },
   });
 }

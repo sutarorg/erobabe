@@ -1,12 +1,8 @@
-import { publicPageMetadata } from "@/lib/metadata/page";
-import { SITE_URL } from "@/lib/site";
+import { staticPageMetadata } from "@/lib/metadata/page";
 import type { Metadata } from "next";
 import ContactForm from "./ContactForm";
 
-export const metadata: Metadata = publicPageMetadata({
-  title: "Contact",
-  alternates: { canonical: `${SITE_URL}/contact` },
-});
+export const metadata: Metadata = staticPageMetadata("contact", "/contact");
 
 export default function ContactPage() {
   return (

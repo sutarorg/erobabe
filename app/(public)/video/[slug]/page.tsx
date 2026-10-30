@@ -14,8 +14,10 @@ import {
   playbackCandidates,
   selectPlaybackSource,
 } from "@/lib/video/playback";
-import { SITE_URL, formatDuration, formatTimeAgo } from "@/lib/site";
+import { SITE_URL, SITE_OG_IMAGE, formatDuration, formatTimeAgo } from "@/lib/site";
 import { iso8601Duration } from "@/lib/seo/duration";
+import { videoSeo } from "@/lib/seo/pages";
+import { publicPageMetadata } from "@/lib/metadata/page";
 import JsonLd from "@/src/components/JsonLd";
 import Breadcrumbs from "@/src/components/Breadcrumbs";
 import { SHELF_VIDEO_LIMIT } from "@/lib/public/shelf";
@@ -42,27 +44,34 @@ export async function generateMetadata({
     notFound();
   }
 
-  const description =
-    video.description || `Watch ${video.title} on erobabe. Adult video, 18+ only.`;
-  const pageUrl = `${SITE_URL}/video/${slug}`;
-  return {
+  // A watch page borrows its category's description and keywords, so it says
+  // something specific instead of repeating "watch X on EroBabe".
+  const seo = videoSeo({
     title: video.title,
-    description,
+    categorySlug: video.category?.slug,
+    categoryLabel: video.category?.label,
+  });
+  const pageUrl = `${SITE_URL}/video/${slug}`;
+  const images = video.thumbnail_url ? [video.thumbnail_url] : [SITE_OG_IMAGE];
+  return publicPageMetadata({
+    title: seo.title,
+    description: seo.description,
+    keywords: seo.keywords,
     alternates: { canonical: pageUrl },
     openGraph: {
-      title: video.title,
-      description,
-      images: video.thumbnail_url ? [video.thumbnail_url] : [],
+      title: seo.title,
+      description: seo.description,
+      images,
       type: "video.other",
       url: pageUrl,
     },
     twitter: {
       card: "summary_large_image",
-      title: video.title,
-      description,
-      images: video.thumbnail_url ? [video.thumbnail_url] : [],
+      title: seo.title,
+      description: seo.description,
+      images,
     },
-  };
+  });
 }
 
 /** Skeleton for one shelf; each watch-page shelf streams in on its own. */

@@ -1,13 +1,8 @@
-import { publicPageMetadata } from "@/lib/metadata/page";
+import { staticPageMetadata } from "@/lib/metadata/page";
 import Link from "next/link";
 import type { Metadata } from "next";
-import { SITE_URL } from "@/lib/site";
 
-export const metadata: Metadata = publicPageMetadata({
-  title: "DMCA Notice",
-  description: "DMCA copyright policy and takedown procedures for erobabe",
-  alternates: { canonical: `${SITE_URL}/dmca` },
-});
+export const metadata: Metadata = staticPageMetadata("dmca", "/dmca");
 
 const SECTIONS = [
   {

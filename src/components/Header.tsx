@@ -93,11 +93,11 @@ export default function Header({
             href="/"
             prefetch
             className="flex shrink-0 items-center gap-2"
-            aria-label="erobabe — home"
+            aria-label="EroBabe — home"
           >
             <img
               src={LOGO_URL}
-              alt="erobabe logo"
+              alt="EroBabe"
               className="h-7 w-auto object-contain"
               draggable={false}
             />
@@ -110,11 +110,11 @@ export default function Header({
             type="button"
             onClick={() => onNavigate("home")}
             className="flex shrink-0 items-center gap-2"
-            aria-label="erobabe — home"
+            aria-label="EroBabe — home"
           >
             <img
               src={LOGO_URL}
-              alt="erobabe logo"
+              alt="EroBabe"
               className="h-7 w-auto object-contain"
               draggable={false}
             />

@@ -1,5 +1,12 @@
+/** The wordmark used in the header, footer and age gate. */
 export const LOGO_URL =
   "https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png";
+
+/**
+ * How the brand is written wherever the name is text: titles, share cards,
+ * structured data and the search results themselves.
+ */
+export const SITE_NAME = "EroBabe";
 
 const FALLBACK_SITE_URL = "https://erobabe.com";
 
@@ -26,6 +33,15 @@ export function getSiteUrl(): string {
 }
 
 export const SITE_URL = getSiteUrl();
+
+/**
+ * Brand assets we host ourselves. Google only shows a favicon it can reliably
+ * crawl from the site that owns it, so none of these point at an image host.
+ */
+export const SITE_LOGO_PATH = "/brand/erobabe-logo.png";
+export const SITE_LOGO_URL = `${SITE_URL}${SITE_LOGO_PATH}`;
+/** Square mark used as the default share image when a page has no better one. */
+export const SITE_OG_IMAGE = SITE_LOGO_URL;
 
 export const SLOT_PRICE_CENTS = 9900;
 export const SLOT_PRICE_USD = 99;

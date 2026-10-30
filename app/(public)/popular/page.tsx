@@ -1,6 +1,5 @@
 import { Fragment } from "react";
-import { publicPageMetadata } from "@/lib/metadata/page";
-import { SITE_URL } from "@/lib/site";
+import { staticPageMetadata } from "@/lib/metadata/page";
 import { getPopularVideos } from "@/lib/public/catalog";
 import PublicVideoCard from "@/src/components/PublicVideoCard";
 import MobileAdSlot from "@/src/components/ads/MobileAdSlot";
@@ -8,12 +7,7 @@ import type { Metadata } from "next";
 
 export const revalidate = 30;
 
-export const metadata: Metadata = publicPageMetadata({
-  title: "Popular Videos",
-  description:
-    "Most-viewed adult videos on erobabe, ordered by recorded watch-page views. 18+ only.",
-  alternates: { canonical: `${SITE_URL}/popular` },
-});
+export const metadata: Metadata = staticPageMetadata("popular", "/popular");
 
 export default async function PopularPage() {
   const videos = await getPopularVideos();

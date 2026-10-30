@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
-import { publicPageMetadata } from "@/lib/metadata/page";
-import { SITE_URL } from "@/lib/site";
+import { staticPageMetadata } from "@/lib/metadata/page";
 import Link from "next/link";
 
 const EFFECTIVE_DATE = "October 27, 2026";
@@ -133,4 +132,4 @@ export default function TermsPage() {
   );
 }
 
-export const metadata: Metadata = publicPageMetadata({ title: "Terms of Service", description: "Read the terms governing use of Erobabe, including adult eligibility, permitted use, publisher obligations, and content removal policies.", alternates: { canonical: `${SITE_URL}/terms` } });
+export const metadata: Metadata = staticPageMetadata("terms", "/terms");

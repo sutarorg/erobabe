@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import AdminSignInForm from "./AdminSignInForm";
 
 export const metadata: Metadata = {
-  title: "Admin sign in — erobabe",
+  title: "Admin sign in — EroBabe",
   // Staff-only surface: never let a crawler index or follow it.
   robots: { index: false, follow: false },
 };
