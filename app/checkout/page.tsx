@@ -1,7 +1,13 @@
 import type { Metadata } from "next";
 import CheckoutForm from "./CheckoutForm";
 import { loadInventory, type InventorySlot } from "@/lib/ads/inventory";
-import { PAYMENT_PANEL_ARTWORK_PATH } from "@/lib/ads/payment";
+import {
+  PAYMENT_PANEL_ARTWORK_PATH,
+  PAYMENT_PANEL_ARTWORK_SIZES,
+  PAYMENT_PANEL_ARTWORK_SMALL_PATH,
+  PAYMENT_PANEL_ARTWORK_SMALL_WIDTH,
+  PAYMENT_PANEL_ARTWORK_WIDTH,
+} from "@/lib/ads/payment";
 import { SITE_URL } from "@/lib/site";
 import { publicPageMetadata } from "@/lib/metadata/page";
 
@@ -72,12 +78,16 @@ export default async function CheckoutPage({
       {/*
         The 8:9 artwork is the largest thing on this page, so its request starts
         first: the browser fetches it while the wizard's JavaScript is still
-        arriving, instead of after the panel mounts.
+        arriving, instead of after the panel mounts. The hint carries the same
+        srcset/sizes as the panel, so the preload and the `<img>` pick the same
+        candidate — a mismatched hint would download the picture twice.
       */}
       <link
         rel="preload"
         as="image"
         href={PAYMENT_PANEL_ARTWORK_PATH}
+        imageSrcSet={`${PAYMENT_PANEL_ARTWORK_SMALL_PATH} ${PAYMENT_PANEL_ARTWORK_SMALL_WIDTH}w, ${PAYMENT_PANEL_ARTWORK_PATH} ${PAYMENT_PANEL_ARTWORK_WIDTH}w`}
+        imageSizes={PAYMENT_PANEL_ARTWORK_SIZES}
         type="image/webp"
         fetchPriority="high"
       />

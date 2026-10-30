@@ -13,11 +13,17 @@ import {
   type CropBox,
 } from "@/lib/ads/focus";
 
+/**
+ * The four drag handles, offset by half of their own 14 px so they are centred
+ * on the frame's corners. Each sits on a spot that is at most 7 px outside the
+ * picture, well inside the card's padding, so no dot is ever cut off by the
+ * card's border.
+ */
 const CORNERS = [
-  { id: "nw", className: "-left-2 -top-2 cursor-nwse-resize", label: "top left" },
-  { id: "ne", className: "-right-2 -top-2 cursor-nesw-resize", label: "top right" },
-  { id: "sw", className: "-bottom-2 -left-2 cursor-nesw-resize", label: "bottom left" },
-  { id: "se", className: "-bottom-2 -right-2 cursor-nwse-resize", label: "bottom right" },
+  { id: "nw", className: "-left-[7px] -top-[7px] cursor-nwse-resize", label: "top left" },
+  { id: "ne", className: "-right-[7px] -top-[7px] cursor-nesw-resize", label: "top right" },
+  { id: "sw", className: "-bottom-[7px] -left-[7px] cursor-nesw-resize", label: "bottom left" },
+  { id: "se", className: "-bottom-[7px] -right-[7px] cursor-nwse-resize", label: "bottom right" },
 ] as const;
 
 /**
@@ -158,6 +164,12 @@ export default function CreativeCropDialog({
     size.width > 0 && size.height > 0
       ? cropBoxFromFocus(size.width, size.height, { x: 50, y: 50, zoom: 1 }).width
       : 0;
+  const frameStyle = {
+    left: `${box.left * 100}%`,
+    top: `${box.top * 100}%`,
+    width: `${box.width * 100}%`,
+    height: `${box.height * 100}%`,
+  };
   const zoomPercent =
     baseWidth > 0 && box.width > 0
       ? Math.min(
@@ -193,21 +205,32 @@ export default function CreativeCropDialog({
           </button>
         </div>
 
-        <div className="flex min-h-0 flex-1 items-center justify-center p-3">
+        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
           {/* Exactly the picture's box: every percentage below is a percentage
-              of the image, which is what the crop maths expects. */}
-          <div
-            ref={stageRef}
-            className="relative inline-block max-w-full select-none overflow-hidden rounded-lg"
-          >
-            <img
-              src={src}
-              alt=""
-              onLoad={onImageLoad}
-              draggable={false}
-              className="block h-auto w-auto max-w-full opacity-90"
-              style={{ maxHeight: "calc(92dvh - 8.5rem)" }}
-            />
+              of the image, which is what the crop maths expects. The stage
+              itself does not clip — only the picture layer does — so the corner
+              dots stay visible even when the window sits on the image edge. */}
+          <div ref={stageRef} className="relative inline-block max-w-full select-none">
+            <div className="relative overflow-hidden rounded-lg">
+              <img
+                src={src}
+                alt=""
+                onLoad={onImageLoad}
+                draggable={false}
+                className="block h-auto w-auto max-w-full opacity-90"
+                style={{ maxHeight: "calc(92dvh - 9rem)" }}
+              />
+              {/* Dim everything outside the window. The 9999px spread is clipped
+                  by the picture layer above, never by the card. */}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute rounded-[3px] shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]"
+                style={frameStyle}
+              />
+            </div>
+
+            {/* The frame and its four drag handles live outside the clipped
+                picture layer, so no handle can be cut off by the card edge. */}
             <div
               ref={windowRef}
               role="group"
@@ -226,13 +249,8 @@ export default function CreativeCropDialog({
                 else return;
                 event.preventDefault();
               }}
-              className="absolute cursor-move touch-none rounded-[3px] border-2 border-accent shadow-[0_0_0_9999px_rgba(0,0,0,0.55)] outline-none focus-visible:border-white"
-              style={{
-                left: `${box.left * 100}%`,
-                top: `${box.top * 100}%`,
-                width: `${box.width * 100}%`,
-                height: `${box.height * 100}%`,
-              }}
+              className="absolute cursor-move touch-none rounded-[3px] border-2 border-accent outline-none focus-visible:border-white"
+              style={frameStyle}
             >
               <span aria-hidden className="pointer-events-none absolute inset-0">
                 <span className="absolute inset-y-0 left-1/3 w-px bg-white/25" />
@@ -242,7 +260,9 @@ export default function CreativeCropDialog({
               </span>
 
               {/* Four corner dots: drag any of them to resize the window, which
-                  is how the advertiser zooms into the part they want. */}
+                  is how the advertiser zooms into the part they want. They are
+                  inset by half their own size so the whole dot stays inside the
+                  card's rounded border. */}
               {CORNERS.map((corner) => (
                 <span
                   key={corner.id}
@@ -278,7 +298,7 @@ export default function CreativeCropDialog({
                     event.preventDefault();
                     event.stopPropagation();
                   }}
-                  className={`absolute h-3.5 w-3.5 touch-none rounded-full border-2 border-white bg-accent shadow-[0_1px_4px_rgba(0,0,0,0.6)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${corner.className}`}
+                  className={`absolute z-10 h-3.5 w-3.5 touch-none rounded-full border-2 border-white bg-accent shadow-[0_1px_4px_rgba(0,0,0,0.6)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${corner.className}`}
                 />
               ))}
             </div>

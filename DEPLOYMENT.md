@@ -186,10 +186,23 @@ artwork means replacing those two files (keep the 8:9 shape and update
 `PAYMENT_PANEL_ARTWORK_WIDTH`/`_HEIGHT`/`_ASPECT` in `lib/ads/payment.ts` if the
 new file has different pixel dimensions).
 
-To regenerate the WebP from a new PNG (ImageMagick or Pillow both work):
+The panel also ships `public/checkout/advertise-panel-720.webp` (720 × 810,
+25 KB) for phones; the two WebP files are offered through one `srcset`, and the
+document head preloads the same pair so no visit downloads the picture twice.
+All three files are served with `Cache-Control: public, max-age=31536000,
+immutable`, so `PAYMENT_PANEL_ARTWORK_PATH` and friends in `lib/ads/payment.ts`
+carry a `?v=<ARTWORK_VERSION>` query string — **bump `ARTWORK_VERSION` whenever
+you replace the files**, otherwise returning visitors keep the cached copy.
+
+To regenerate both WebP files from a new 960 × 1080 PNG (sharp, cwebp or
+ImageMagick all work):
 
 ```bash
+npx sharp-cli -i public/checkout/advertise-panel.png -o public/checkout/advertise-panel.webp resize 960 -- webp -q 86
+npx sharp-cli -i public/checkout/advertise-panel.png -o public/checkout/advertise-panel-720.webp resize 720 -- webp -q 82
+# or, with ImageMagick / cwebp:
 cwebp -q 86 public/checkout/advertise-panel.png -o public/checkout/advertise-panel.webp
+convert public/checkout/advertise-panel.png -resize 720x public/checkout/advertise-panel-720.webp
 ```
 
 Do not accept an image URL or payment destination from a checkout visitor.
