@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
 import CheckoutForm from "./CheckoutForm";
 import { loadInventory, type InventorySlot } from "@/lib/ads/inventory";
+import { PAYMENT_PANEL_ARTWORK_PATH } from "@/lib/ads/payment";
 import { SITE_URL } from "@/lib/site";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Advertise with PayPal — erobabe",
-  description: "Choose a 16:9 placement, upload your banner, and pay with PayPal.",
+  title: "Advertise on erobabe",
+  description: "Choose a 16:9 placement, upload your banner, and pay securely.",
   alternates: { canonical: `${SITE_URL}/checkout` },
   robots: { index: false, follow: false },
 };
@@ -45,10 +46,25 @@ export default async function CheckoutPage({
   }
 
   return (
-    <CheckoutForm
-      slots={slots}
-      initialSlot={Number.isInteger(requestedSlot) ? requestedSlot : 0}
-      loadError={loadError}
-    />
+    <>
+      {/*
+        The artwork is the largest thing on this page, so its request starts
+        first: the browser fetches it while the wizard's JavaScript is still
+        arriving, instead of after the panel mounts. One fixed URL on purpose -
+        a srcset here would have to be resolved before the fetch can begin.
+      */}
+      <link
+        rel="preload"
+        as="image"
+        href={PAYMENT_PANEL_ARTWORK_PATH}
+        fetchPriority="high"
+        referrerPolicy="no-referrer"
+      />
+      <CheckoutForm
+        slots={slots}
+        initialSlot={Number.isInteger(requestedSlot) ? requestedSlot : 0}
+        loadError={loadError}
+      />
+    </>
   );
 }

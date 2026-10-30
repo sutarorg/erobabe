@@ -98,6 +98,15 @@ damplips** posts one category per request to
 `/api/admin/damplips/import` (admin session required, 300 s budget, 200 videos
 per request maximum) and shows per-category counts as each finishes.
 
+The number beside each category in that panel is counted by Postgres, one exact
+count per category, and it is the figure the public category page shows: a
+published, public, cleared, approved row with a real playback destination. When
+the catalog also holds rows that are not published yet, the panel adds the
+larger total beside it (`12 · 40 total`), so a review backlog is never mistaken
+for missing videos. Counting rows in application code is what used to go wrong:
+PostgREST serves at most 1 000 rows per request, so a catalog that had grown past
+that was silently under-counted.
+
 ### How a category is sourced
 
 `lib/damplips/categories.ts` maps every fixed category to damplips taxonomy

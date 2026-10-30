@@ -4,6 +4,7 @@ import { requireActiveAdmin, errorStatusFrom } from "@/lib/video/publishing";
 import { boundedJson, RequestError } from "@/lib/http/safety";
 import { revalidatePublicTag } from "@/lib/public/revalidate";
 import { sendEmail, templateAdLive } from "@/lib/resend/client";
+import { releaseAdCreative } from "@/lib/ads/creative-cleanup";
 
 export const runtime = "nodejs";
 
@@ -116,6 +117,29 @@ export async function POST(req: Request) {
     }
 
     revalidatePublicTag("ads");
+
+    if (parsed.data.action === "reject_ad") {
+      /*
+       * A rejection is final, so the banner goes with it: the file is removed
+       * from the bucket and the order stops pointing at it. The row stays for
+       * the audit trail and the payments history.
+       */
+      const { data: rejected } = await service
+        .from("ad_orders")
+        .select("id, image_path, image_url")
+        .eq("id", parsed.data.id)
+        .maybeSingle();
+      const released = rejected
+        ? await releaseAdCreative(service, rejected as { id: string; image_path?: string | null; image_url?: string | null })
+        : null;
+      revalidatePublicTag("ads");
+      return NextResponse.json({
+        updated: true,
+        action: parsed.data.action,
+        creativeRemoved: Boolean(released?.path),
+        creativeRemovalFailed: Boolean(released?.path && !released.removed),
+      });
+    }
 
     if (parsed.data.action !== "make_live") {
       return NextResponse.json({ updated: true, action: parsed.data.action });

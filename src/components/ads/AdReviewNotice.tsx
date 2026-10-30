@@ -34,7 +34,8 @@ function clearPendingReview() {
 }
 
 /**
- * The “In review” confirmation shown after PayPal sends the advertiser back.
+ * The “In review” confirmation shown when the payment page sends the
+ * advertiser back.
  *
  * The checkout writes a short-lived local flag just before handing over to
  * PayPal. Landing back on the site consumes the flag, shows a deliberately
@@ -100,7 +101,7 @@ export default function AdReviewNotice({ holdMs = AD_REVIEW_HOLD_MS }: { holdMs?
         </span>
         <h2 className="mt-5 text-[21px] font-semibold tracking-tight text-ink">In review</h2>
         <p className="mt-1.5 text-[12px] leading-relaxed text-ink-3">
-          We’re verifying your PayPal payment.
+          We’re confirming your payment and checking your banner.
         </p>
         <div className="mt-5 h-[3px] overflow-hidden rounded-full bg-white/[0.07]">
           <div

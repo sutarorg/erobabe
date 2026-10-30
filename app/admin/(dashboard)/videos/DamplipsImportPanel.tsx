@@ -42,7 +42,9 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
   const categories = counts.length
     ? counts
     : [];
-  const short = counts.filter((entry) => entry.count < perCategory).length;
+  const short = counts.filter((entry) => entry.published < perCategory).length;
+  const publishedTotal = counts.reduce((sum, entry) => sum + entry.published, 0);
+  const catalogTotal = counts.reduce((sum, entry) => sum + entry.total, 0);
 
   function toggle(slug: string) {
     setSelected((value) => {
@@ -120,9 +122,17 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
             is how many new unique videos to add in each selected category —
             500 means 500 new videos per category, not a split across them.
             Nightly autopilot at 00:00 IST adds 100 per category.{" "}
+            {publishedTotal.toLocaleString("en-US")} published{" "}
+            {publishedTotal === 1 ? "video" : "videos"} across these categories
+            {catalogTotal !== publishedTotal
+              ? `, out of ${catalogTotal.toLocaleString("en-US")} rows in the catalog`
+              : ""}
+            .{" "}
             {short > 0
-              ? `${counts.reduce((sum, entry) => sum + entry.count, 0)} unique videos in the catalog.`
-              : "Catalog already has videos in every selected category."}
+              ? `${short} ${
+                  short === 1 ? "category has" : "categories have"
+                } fewer than ${perCategory} published videos.`
+              : "Every selected category already publishes at least the number you are asking for."}
           </p>
         </div>
         <label className="flex items-center gap-2 text-[11.5px]">
@@ -157,10 +167,32 @@ export default function DamplipsImportPanel({ counts }: { counts: CategoryCount[
               onChange={() => toggle(entry.slug)}
             />
             <span className="flex-1 truncate">{entry.label}</span>
+            {/*
+              Both numbers come from exact database counts (no page of rows is
+              tallied any more), so neither can fall behind a growing catalog.
+              The first is what a visitor can watch — the same predicate the
+              public category page uses — and the second appears only when the
+              catalog also holds drafts, so a review backlog is visible instead
+              of looking like missing videos.
+            */}
             <span
-              className={`tabular-nums ${entry.count >= perCategory ? "text-emerald-400" : "text-amber-300"}`}
+              className="flex items-baseline gap-1 tabular-nums"
+              title={`${entry.published} published ${
+                entry.published === 1 ? "video" : "videos"
+              } in ${entry.label} · ${entry.total} ${
+                entry.total === 1 ? "row" : "rows"
+              } in the catalog${
+                entry.published < perCategory && entry.total >= perCategory
+                  ? ` · ${entry.total - entry.published} not published yet, so a sync adds only new posts`
+                  : ""
+              }`}
             >
-              {entry.count}
+              <span className={entry.published >= perCategory ? "text-emerald-400" : "text-amber-300"}>
+                {entry.published}
+              </span>
+              {entry.total !== entry.published && (
+                <span className="text-[10px] text-ink-3">{entry.total} total</span>
+              )}
             </span>
           </label>
         ))}

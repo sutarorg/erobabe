@@ -87,6 +87,41 @@ describe("guest ad submission route", () => {
     expect(params).not.toHaveProperty("p_payment_status");
   });
 
+  it("does not require the legacy client flag (the real checkout never sends it)", async () => {
+    const form = new FormData();
+    form.set("slotId", "3");
+    form.set("durationMonths", "1");
+    form.set("adName", "Autumn launch");
+    form.set("contactName", "Sam Advertiser");
+    form.set("companyName", "");
+    form.set("email", "sam@example.com");
+    form.set("aboutAdvertiser", "");
+    form.set("destinationUrl", "https://example.com/autumn");
+    form.set("creative", new File([png(1280, 720)], "banner.png", { type: "image/png" }));
+    const response = await POST(
+      new Request("https://example.com/api/ads/submit", { method: "POST", body: form }),
+    );
+    expect(response.status).toBe(201);
+  });
+
+  it("names the field that is missing instead of a generic message", async () => {
+    const form = new FormData();
+    form.set("slotId", "3");
+    form.set("durationMonths", "1");
+    form.set("adName", "Autumn launch");
+    form.set("contactName", "Sam Advertiser");
+    form.set("email", "not-an-email");
+    form.set("destinationUrl", "https://example.com/autumn");
+    form.set("creative", new File([png(1280, 720)], "banner.png", { type: "image/png" }));
+    const response = await POST(
+      new Request("https://example.com/api/ads/submit", { method: "POST", body: form }),
+    );
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toMatch(/email/i);
+    expect(body.error).not.toMatch(/16:9 banner/i);
+  });
+
   it("rejects a non-16:9 banner before uploading or reserving a slot", async () => {
     const response = await POST(requestWith(1000, 1000));
     expect(response.status).toBe(400);

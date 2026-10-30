@@ -426,7 +426,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       const counts = await categoryCounts(service);
       process.stdout.write("\nPublished damplips videos per category\n");
       for (const entry of counts) {
-        process.stdout.write(`  ${entry.label.padEnd(18)} ${entry.count}\n`);
+        const backlog = entry.total > entry.published ? `  (${entry.total} rows in catalog)` : "";
+        process.stdout.write(`  ${entry.label.padEnd(18)} ${entry.published}${backlog}\n`);
       }
     } catch {
       /* The run summary above already says what was written. */

@@ -29,7 +29,8 @@ export default function AdOrderActions({
         "Confirm only after you have checked your PayPal account and verified that this payment arrived.",
       make_live:
         "Make this ad live now? The advertiser will automatically receive the ‘Your ad is live! Erobabe’ email.",
-      reject_ad: "Reject this ad submission? It will not appear on the public website.",
+      reject_ad:
+        "Reject this ad submission? It will never appear on the public website, and its banner is deleted from storage immediately.",
       delete_ad:
         status === "rejected"
           ? "Delete this rejected submission permanently? The banner file and the order record are removed and cannot be restored."
@@ -63,7 +64,9 @@ export default function AdOrderActions({
             : action === "make_live"
               ? "Ad is live and the confirmation email has been sent."
               : action === "reject_ad"
-                ? "Ad submission rejected. Delete it permanently once you no longer need the record."
+                ? result.creativeRemovalFailed
+                  ? "Ad submission rejected. Its banner could not be deleted from storage — delete the ad permanently to retry."
+                  : "Ad submission rejected and its banner deleted from storage. Delete the record permanently once you no longer need it."
                 : "Advertisement deleted permanently. The slot is available again and its payment is no longer counted as verified revenue.",
         );
       }
