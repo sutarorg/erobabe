@@ -388,7 +388,7 @@ export default function CheckoutForm({
                 </span>
               </div>
               <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
-                Ten fixed 16:9 placements, 1 month each. Taken placements show the running ad and
+                Ten fixed 16:9 placements, 1 month each. A sold placement shows its running ad and
                 cannot be selected.
               </p>
               <SlotPicker slots={slots} onSelect={chooseSlot} />

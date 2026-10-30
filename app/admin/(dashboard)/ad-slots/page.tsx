@@ -9,7 +9,8 @@ function money(cents: number) {
 /**
  * One placement card, drawn exactly like the public ad slot: a 16:9 panel that
  * shows the running creative and its figures when it is sold, or the
- * “Advertise” artwork plus an “Available” tag when it is open.
+ * “Advertise” artwork when it is open. No status pill and no placeholder
+ * description text — the card itself shows which of the two states it is in.
  */
 function SlotCard({ slot }: { slot: SlotBoardRow }) {
   const ad = slot.ad;
@@ -69,16 +70,6 @@ function SlotCard({ slot }: { slot: SlotBoardRow }) {
           </Link>
         )}
 
-        <span
-          className={`absolute left-1.5 top-1.5 rounded-full border px-2 py-[1px] text-[8.5px] font-semibold uppercase tracking-wider backdrop-blur ${
-            slot.taken
-              ? "border-emerald-400/35 bg-emerald-500/15 text-emerald-300"
-              : "border-accent/40 bg-accent/15 text-accent"
-          }`}
-        >
-          {slot.label}
-        </span>
-
         <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-[1px] text-[8.5px] font-semibold uppercase tracking-wider text-zinc-300 backdrop-blur">
           Slot {slot.id} · {slot.side}
         </span>
@@ -86,7 +77,7 @@ function SlotCard({ slot }: { slot: SlotBoardRow }) {
 
       <div className="flex items-center justify-between gap-2 border-t border-line/70 px-3 py-2 text-[10.5px]">
         <span className="min-w-0 truncate text-ink-2">
-          {slot.taken ? ad?.ad_name || "Reserved placement" : slot.description || slot.name}
+          {slot.taken ? ad?.ad_name || "Reserved placement" : slot.name}
         </span>
         <span className="shrink-0 tabular-nums text-ink-3">
           {slot.taken
@@ -111,8 +102,6 @@ export default async function AdSlotsAdmin() {
 
   const left = rows.filter((slot) => slot.side === "left");
   const right = rows.filter((slot) => slot.side === "right");
-  const taken = rows.filter((slot) => slot.taken).length;
-  const available = rows.length - taken;
 
   return (
     <div>
@@ -121,7 +110,7 @@ export default async function AdSlotsAdmin() {
           <h1 className="text-[20px] font-semibold">Ad Slots — Fixed Inventory (10)</h1>
           <p className="mt-1 max-w-[640px] text-[12px] leading-relaxed text-ink-3">
             The same five-and-five 16:9 rails the homepage renders. A sold placement shows its live
-            creative; an open placement shows the “Advertise” card with an Available tag.
+            creative; an open placement shows the “Advertise” card.
           </p>
         </div>
         <Link href="/admin/advertisements" className="rounded-md border border-line bg-pcard px-3 py-2 text-[11px] text-ink-2 hover:bg-white/5">
@@ -138,7 +127,7 @@ export default async function AdSlotsAdmin() {
       {rows.length === 0 ? (
         <p className="mt-6 rounded-lg border border-dashed border-line bg-pcard p-8 text-center text-[12px] text-ink-3">
           No placements could be read. Once the database is reachable, the ten fixed 16:9 slots are
-          listed here with their live creative or the Available tag.
+          listed here with their live creative or the “Advertise” card.
         </p>
       ) : null}
 
@@ -162,24 +151,6 @@ export default async function AdSlotsAdmin() {
           </div>
           <div className="mt-3 flex flex-col gap-3">
             {right.map((slot) => <SlotCard key={slot.id} slot={slot} />)}
-            {/* Sixth card in the right column: the inventory summary. */}
-            <article className="rounded-lg border border-line bg-pcard p-4" aria-label="Inventory summary">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-3">Inventory summary</p>
-              <div className="mt-3 grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-ink-3">Available</p>
-                  <p className="mt-1 text-[22px] font-semibold text-accent">{available}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-ink-3">Taken</p>
-                  <p className="mt-1 text-[22px] font-semibold text-emerald-400">{taken}</p>
-                </div>
-              </div>
-              <p className="mt-3 text-[11px] leading-relaxed text-ink-3">
-                Ten fixed placements at {money(rows[0]?.price_cents ?? 9900)} per month, 16:9 only.
-                Deleting an advertisement frees its slot immediately.
-              </p>
-            </article>
           </div>
         </section>
       </div>

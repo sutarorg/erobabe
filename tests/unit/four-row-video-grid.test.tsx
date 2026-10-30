@@ -43,6 +43,38 @@ describe("four-row video sections", () => {
     expect(count / columns).toBe(GRID_ROWS);
   });
 
+  it("inserts a mobile-only placement after the requested card without dropping a video", () => {
+    width = 350; // one-column phone container
+    const { container } = render(
+      <FourRowVideoGrid mobileAd={<span data-testid="mobile-ad">Ad slot</span>} mobileAdAfter={2}>
+        {cards(20)}
+      </FourRowVideoGrid>,
+    );
+    const grid = container.querySelector(".video-grid")!;
+    expect(grid).toHaveAttribute("data-mobile-ad-at", "2");
+    // The phone keeps its four videos and gains the banner row after the second.
+    expect(screen.getAllByRole("link")).toHaveLength(4);
+    expect(screen.getByTestId("mobile-ad")).toBeTruthy();
+    const cells = [...grid.children].map((cell) => cell.textContent);
+    expect(cells[0]).toBe("Clip 0");
+    expect(cells[1]).toBe("Clip 1");
+    expect(cells[2]).toBe("Ad slot");
+    expect(cells[3]).toBe("Clip 2");
+  });
+
+  it("never injects the mobile placement into a desktop grid", () => {
+    width = 800; // four columns
+    const { container } = render(
+      <FourRowVideoGrid mobileAd={<span data-testid="mobile-ad">Ad slot</span>} mobileAdAfter={2}>
+        {cards(20)}
+      </FourRowVideoGrid>,
+    );
+    const grid = container.querySelector(".video-grid")!;
+    expect(grid).not.toHaveAttribute("data-mobile-ad-at");
+    expect(screen.queryByTestId("mobile-ad")).toBeNull();
+    expect(screen.getAllByRole("link")).toHaveLength(16);
+  });
+
   it("trims the card count on resize instead of spilling into a fifth row", () => {
     const { container, unmount } = render(<FourRowVideoGrid>{cards()}</FourRowVideoGrid>);
     expect(screen.getAllByRole("link")).toHaveLength(16);

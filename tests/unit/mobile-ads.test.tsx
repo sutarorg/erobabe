@@ -76,7 +76,9 @@ describe("mobile ad banners", () => {
     for (const link of links) {
       expect(link).toHaveAttribute("href", "/checkout");
       expect(link.className).toContain("underline");
-      expect(link.className).toContain("opacity-75");
+      // Faded but legible: the brighter secondary ink, not the dimmest one.
+      expect(link.className).toContain("text-ink-2/90");
+      expect(link.className).not.toContain("opacity-75");
     }
     // The top-right “Advertisement” label is gone from the mobile card.
     expect(screen.queryByText("Advertisement")).toBeNull();

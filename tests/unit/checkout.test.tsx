@@ -85,6 +85,9 @@ describe("guest PayPal checkout", () => {
     expect(screen.getAllByRole("button", { name: /Select ad slot/i })).toHaveLength(2);
     expect(screen.getByLabelText("Slot 3 is taken")).toBeTruthy();
     expect(screen.queryByLabelText("Slot 3 is taken")?.getAttribute("aria-disabled")).toBe("true");
+    // No status pills on the placement cards.
+    expect(screen.queryByText("Available")).toBeNull();
+    expect(screen.queryByText("Taken")).toBeNull();
     expect(screen.getByAltText("Current advertisement in slot 3")).toHaveAttribute(
       "src",
       "https://cdn.example.com/live-ad.png",
