@@ -175,14 +175,24 @@ migrations remain for audit compatibility only.
 
 ### 1. Publish the authoritative payment artwork and PayPal page
 
-The checkout's fixed right-hand panel shows the operator-supplied artwork:
-`https://ibb.co/MDYm8xJ8` (direct image: `https://i.ibb.co/SXhzQ4ZQ/Untitled-Design-18-1.png`)
+The checkout's fixed right-hand panel shows the operator-supplied advertising
+artwork, committed to the repo at **`public/checkout/advertise-panel.webp`**
+(960 × 1080, exactly 8:9) with **`public/checkout/advertise-panel.png`** as the
+fallback for browsers without WebP support. Both files are served from our own
+origin by `app/checkout/PaymentPanel.tsx`, which frames them at `aspect-[8/9]`,
+so the picture is neither cropped nor letterboxed at any viewport size. There is
+no environment variable and no third-party image host involved: replacing the
+artwork means replacing those two files (keep the 8:9 shape and update
+`PAYMENT_PANEL_ARTWORK_WIDTH`/`_HEIGHT`/`_ASPECT` in `lib/ads/payment.ts` if the
+new file has different pixel dimensions).
 
-It is referenced through `NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` (default: that direct
-image URL) with the local copy at `public/Untitled Design (18) (1).png` as the
-bundled fallback. Download the artwork into `public/` and point the variable at that local
-file if you prefer not to depend on Google Drive at runtime. Do not accept an image URL or
-payment destination from a checkout visitor.
+To regenerate the WebP from a new PNG (ImageMagick or Pillow both work):
+
+```bash
+cwebp -q 86 public/checkout/advertise-panel.png -o public/checkout/advertise-panel.webp
+```
+
+Do not accept an image URL or payment destination from a checkout visitor.
 
 Payment itself is the hosted PayPal page
 `https://www.paypal.com/ncp/payment/AZP63KXT9FUNL` (`lib/ads/payment.ts`). Configure that

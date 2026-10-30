@@ -678,11 +678,15 @@ export default function CheckoutForm({
           src={preview}
           fileName={creative.name}
           focus={focus}
-          onConfirm={(next) => {
+          onDone={(next) => {
             setFocus(next);
             setCropOpen(false);
           }}
-          onCancel={() => setCropOpen(false)}
+          // Closing discards the upload: nothing is kept until Done is pressed.
+          onClose={() => {
+            chooseCreative(null);
+            if (fileInput.current) fileInput.current.value = "";
+          }}
         />
       )}
     </form>

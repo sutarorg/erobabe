@@ -2,68 +2,62 @@
 
 import { useState } from "react";
 import {
+  PAYMENT_PANEL_ARTWORK_FALLBACK,
+  PAYMENT_PANEL_ARTWORK_HEIGHT,
   PAYMENT_PANEL_ARTWORK_PATH,
-  PAYMENT_PANEL_IMAGE_FALLBACK,
+  PAYMENT_PANEL_ARTWORK_WIDTH,
+  PAYMENT_PANEL_ASPECT,
 } from "@/lib/ads/payment";
 
 /**
  * The fixed right-hand panel of the checkout.
  *
  * It replaces the old order-summary QR block: the panel is pinned to the
- * viewport (it never scrolls, the wizard scrolls in its own column), and it
- * contains only the advertiser payment artwork, scaled to fit so it can never
- * overflow.
+ * viewport (it never scrolls, the wizard scrolls in its own column) and holds
+ * one 8:9 artwork, exactly the shape of the file, so the picture is neither
+ * cropped nor letterboxed at any size.
  *
- * The artwork is requested from `/api/assets/payment-artwork`, which serves a
- * downsized, long-cached copy from our own origin instead of the multi-megabyte
- * third-party PNG the panel used to load; `priority` hints let it start before
- * the rest of the page settles, and a soft placeholder holds the frame so the
- * panel never looks broken while it arrives.
+ * Both files are static and same-origin, and the WebP is roughly a quarter of
+ * the PNG, so the picture arrives with the document instead of after a cold
+ * fetch to an image host.
  */
 export default function PaymentPanel() {
-  const [stage, setStage] = useState<"cached" | "original" | "none">("cached");
   const [ready, setReady] = useState(false);
-
-  // `cached` is the same-origin route; `original` is the hosted file it reads
-  // from; `none` keeps the placeholder instead of a broken-image icon.
-  const src = stage === "cached" ? PAYMENT_PANEL_ARTWORK_PATH : PAYMENT_PANEL_IMAGE_FALLBACK;
 
   return (
     <aside
       aria-label="Payment artwork"
-      className="relative border-t border-line bg-[#0e0f12] lg:sticky lg:top-0 lg:h-screen lg:self-start lg:overflow-hidden lg:border-l lg:border-t-0"
+      className="relative border-t border-line bg-[#0a0b0c] lg:sticky lg:top-0 lg:h-screen lg:self-start lg:overflow-hidden lg:border-l lg:border-t-0"
     >
-      <div className="flex h-full w-full items-center justify-center p-5 sm:p-8 lg:p-9">
-        <div className="relative w-full max-w-[560px]">
-          {/* Placeholder: same shape as the artwork, so nothing jumps into place. */}
+      <div className="flex h-full w-full items-center justify-center p-4 sm:p-8 lg:p-9">
+        {/* 8:9 — the artwork's own shape. `object-cover` then has nothing to
+            crop: the frame and the picture match exactly. */}
+        <div
+          className="relative aspect-[8/9] w-full max-w-[min(100%,560px)] overflow-hidden rounded-xl shadow-[0_24px_80px_rgba(0,0,0,0.45)] lg:h-full lg:w-auto lg:max-w-full"
+          style={{ aspectRatio: PAYMENT_PANEL_ASPECT }}
+        >
           {!ready && (
             <div
               aria-hidden
-              className="aspect-video w-full animate-pulse rounded-xl border border-white/5 bg-white/[0.04]"
+              className="absolute inset-0 animate-pulse rounded-xl border border-white/5 bg-white/[0.04]"
             />
           )}
-          <img
-            src={src}
-            alt="erobabe advertising placement"
-            onLoad={() => setReady(true)}
-            onError={() => {
-              // A cached copy that cannot be built still has a working source:
-              // try the hosted file, then leave the placeholder rather than a
-              // broken image.
-              if (stage === "cached") setStage("original");
-              else setStage("none");
-            }}
-            className={`w-full rounded-xl object-contain shadow-[0_24px_80px_rgba(0,0,0,0.45)] transition-opacity duration-300 ${
-              ready && stage !== "none" ? "opacity-100" : "absolute inset-0 opacity-0"
-            }`}
-            width={2560}
-            height={1440}
-            loading="eager"
-            fetchPriority="high"
-            decoding="async"
-            // The artwork host sometimes rejects a foreign referrer.
-            referrerPolicy="no-referrer"
-          />
+          <picture>
+            <source srcSet={PAYMENT_PANEL_ARTWORK_PATH} type="image/webp" />
+            <img
+              src={PAYMENT_PANEL_ARTWORK_FALLBACK}
+              alt="erobabe advertising placements"
+              onLoad={() => setReady(true)}
+              className={`h-full w-full rounded-xl object-cover transition-opacity duration-300 ${
+                ready ? "opacity-100" : "opacity-0"
+              }`}
+              width={PAYMENT_PANEL_ARTWORK_WIDTH}
+              height={PAYMENT_PANEL_ARTWORK_HEIGHT}
+              loading="eager"
+              fetchPriority="high"
+              decoding="async"
+            />
+          </picture>
         </div>
       </div>
     </aside>

@@ -90,10 +90,11 @@ holds the word budget, so every path (AI prompt, API, public card) agrees.
 Clicking a vacant banner opens `/checkout?slot=<id>` directly; no advertiser account,
 billing modal, or dashboard is involved. The checkout is a three-step wizard in the left
 panel — **Ads Details** (the ten 16:9 placements, five per row, with sold slots showing the
-running creative and locked), **Advertiser details** (any-shape JPG/PNG/GIF upload, framed into the 16:9 slot with a draggable crop window, destination URL,
+running creative and locked), **Advertiser details** (any-shape JPG/PNG/GIF upload, framed into the 16:9 slot in a
+"Frame your banner" card with a draggable window and four corner resize dots, destination URL,
 name, company, email, ad name, about), then **Payment** — while the right panel stays
-fixed on the advertiser payment artwork (`NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL`,
-bundled local copy `public/Untitled Design (18) (1).png` as fallback). Up to ten 16:9 placements are listed two
+fixed on `public/checkout/advertise-panel.webp` (960 × 1080, exact 8:9, with the PNG
+copy as fallback for browsers without WebP). Up to ten 16:9 placements are listed two
 columns by five rows. Prices are recalculated from `ad_slots` on the server.
 Paying writes an `in_review` order and hands the visitor to the hosted PayPal page
 (`https://www.paypal.com/ncp/payment/AZP63KXT9FUNL`). PayPal returns them to the

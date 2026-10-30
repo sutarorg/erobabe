@@ -70,17 +70,16 @@ export default async function CheckoutPage({
   return (
     <>
       {/*
-        The artwork is the largest thing on this page, so its request starts
+        The 8:9 artwork is the largest thing on this page, so its request starts
         first: the browser fetches it while the wizard's JavaScript is still
-        arriving, instead of after the panel mounts. One fixed URL on purpose -
-        a srcset here would have to be resolved before the fetch can begin.
+        arriving, instead of after the panel mounts.
       */}
       <link
         rel="preload"
         as="image"
         href={PAYMENT_PANEL_ARTWORK_PATH}
+        type="image/webp"
         fetchPriority="high"
-        referrerPolicy="no-referrer"
       />
       <CheckoutForm
         slots={slots}
