@@ -53,6 +53,15 @@ function tenSlots(): CheckoutSlot[] {
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
+  // jsdom implements neither half of the object-URL API.
+  Object.defineProperty(window.URL, "createObjectURL", {
+    configurable: true,
+    value: () => "blob:preview",
+  });
+  Object.defineProperty(window.URL, "revokeObjectURL", {
+    configurable: true,
+    value: () => undefined,
+  });
   // jsdom cannot navigate; capture the PayPal hand-off instead.
   Object.defineProperty(window, "location", {
     configurable: true,
@@ -161,11 +170,7 @@ describe("guest advertising checkout", () => {
     expect(screen.getByRole("button", { name: /Pay \$99\.00 Now/i })).toBeTruthy();
   });
 
-  it("accepts any shape or an animated GIF and lets the advertiser frame it", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      Response.json({ orderId: "order-2" }, { status: 201 }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+  it("opens the 16:9 crop picker for every upload, with the original picture and a draggable window", () => {
     const { container } = render(<CheckoutForm slots={slots} />);
     fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
 
@@ -174,20 +179,56 @@ describe("guest advertising checkout", () => {
       target: { files: [gif] },
     });
 
-    // No aspect-ratio rejection any more: the adjustable 16:9 frame appears.
+    // No aspect-ratio rejection: the picker shows the whole picture…
     expect(screen.queryByText(/must be 16:9/i)).toBeNull();
-    const zoom = screen.getByLabelText(/Zoom the banner inside the 16:9 placement/i);
-    expect(screen.getByText("1.00×")).toBeTruthy();
-    fireEvent.change(zoom, { target: { value: "2" } });
-    expect(screen.getByText("2.00×")).toBeTruthy();
-    // The frame can be put back to exactly how it started.
-    fireEvent.click(screen.getByRole("button", { name: /Reset/i }));
-    expect(screen.getByText("1.00×")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: /Frame your banner/i })).toBeTruthy();
+    // …and the 16:9 window that decides the creative focus sits on top of it.
+    expect(screen.getByRole("group", { name: /16:9 crop window/i })).toBeTruthy();
 
-    fireEvent.change(zoom, { target: { value: "1.5" } });
+    fireEvent.click(screen.getByRole("button", { name: /Use this frame/i }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // The banner is on the page, framed, with one way to delete it.
+    expect(screen.getByRole("button", { name: "Delete banner" })).toBeTruthy();
+  });
+
+  it("still opens the picker for a picture that is already 16:9", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+    const wide = new File(["png"], "wide.png", { type: "image/png" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, {
+      target: { files: [wide] },
+    });
+    // The subject may not be in the middle even at 16:9, so the frame opens.
+    expect(screen.getByRole("dialog", { name: /Frame your banner/i })).toBeTruthy();
+  });
+
+  it("moves the crop window with the arrow keys and submits that framing", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      Response.json({ orderId: "order-3" }, { status: 201 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = render(<CheckoutForm slots={slots} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+    const tall = new File(["png"], "tall.png", { type: "image/png" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, {
+      target: { files: [tall] },
+    });
+
+    // A portrait picture only has vertical slack; tell the dialog its size.
+    const dialog = screen.getByRole("dialog", { name: /Frame your banner/i });
+    const picture = dialog.querySelectorAll("img")[0]!;
+    Object.defineProperty(picture, "naturalWidth", { configurable: true, value: 600 });
+    Object.defineProperty(picture, "naturalHeight", { configurable: true, value: 900 });
+    fireEvent.load(picture);
+
+    const window16by9 = screen.getByRole("group", { name: /16:9 crop window/i });
+    fireEvent.keyDown(window16by9, { key: "ArrowDown" });
+    fireEvent.click(screen.getByRole("button", { name: /Use this frame/i }));
+
     fireEvent.change(screen.getByPlaceholderText("Alex Morgan"), { target: { value: "Alex Advertiser" } });
     fireEvent.change(screen.getByPlaceholderText("you@company.com"), { target: { value: "alex@example.com" } });
-    fireEvent.change(screen.getByPlaceholderText("e.g. Summer collection launch"), { target: { value: "Loop launch" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. Summer collection launch"), { target: { value: "Tall launch" } });
     fireEvent.change(screen.getByPlaceholderText("https://your-website.com/landing-page"), {
       target: { value: "https://example.com/offer" },
     });
@@ -196,8 +237,29 @@ describe("guest advertising checkout", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const body = fetchMock.mock.calls[0]?.[1]?.body as FormData;
-    expect(body.get("creative")).toBe(gif);
-    expect(body.get("focusZoom")).toBe("1.5");
+    expect(Number(body.get("focusY"))).toBeGreaterThan(50);
+    expect(body.get("focusX")).toBe("50");
+    // Zooming is gone: the window is always the largest 16:9 crop.
+    expect(body.get("focusZoom")).toBe("1");
+  });
+
+  it("deletes the banner from the thumbnail's corner icon", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+    const file = new File(["png"], "banner.png", { type: "image/png" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, {
+      target: { files: [file] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Use this frame/i }));
+
+    // Dropped features stay gone: no hint line, no text button, no zoom.
+    expect(screen.queryByText(/Drag to position/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove$/i })).toBeNull();
+    expect(screen.queryByRole("slider")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete banner" }));
+    expect(screen.queryByRole("button", { name: "Delete banner" })).toBeNull();
+    expect(screen.getByText(/Drop in your creative/i)).toBeTruthy();
   });
 
   it("rejects a file that is not an image at all", () => {
