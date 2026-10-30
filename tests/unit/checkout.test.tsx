@@ -185,7 +185,7 @@ describe("guest advertising checkout", () => {
     // …and the 16:9 window that decides the creative focus sits on top of it.
     expect(screen.getByRole("group", { name: /16:9 crop window/i })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /Use this frame/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     // The banner is on the page, framed, with one way to delete it.
     expect(screen.getByRole("button", { name: "Delete banner" })).toBeTruthy();
@@ -224,7 +224,7 @@ describe("guest advertising checkout", () => {
 
     const window16by9 = screen.getByRole("group", { name: /16:9 crop window/i });
     fireEvent.keyDown(window16by9, { key: "ArrowDown" });
-    fireEvent.click(screen.getByRole("button", { name: /Use this frame/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     fireEvent.change(screen.getByPlaceholderText("Alex Morgan"), { target: { value: "Alex Advertiser" } });
     fireEvent.change(screen.getByPlaceholderText("you@company.com"), { target: { value: "alex@example.com" } });
@@ -250,7 +250,7 @@ describe("guest advertising checkout", () => {
     fireEvent.change(container.querySelector('input[name="creative"]')!, {
       target: { files: [file] },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Use this frame/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     // Dropped features stay gone: no hint line, no text button, no zoom.
     expect(screen.queryByText(/Drag to position/i)).toBeNull();
@@ -258,6 +258,76 @@ describe("guest advertising checkout", () => {
     expect(screen.queryByRole("slider")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Delete banner" }));
+    expect(screen.queryByRole("button", { name: "Delete banner" })).toBeNull();
+    expect(screen.getByText(/Drop in your creative/i)).toBeTruthy();
+  });
+
+  it("keeps the crop card free of explanation, preview and scrollbars", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+    const file = new File(["png"], "banner.png", { type: "image/png" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, {
+      target: { files: [file] },
+    });
+
+    const dialog = screen.getByRole("dialog", { name: /Frame your banner/i });
+    // The instruction sentence and the live preview section are both gone.
+    expect(dialog.textContent).not.toMatch(/Drag the 16:9 frame/i);
+    expect(dialog.textContent).not.toMatch(/In the ad slot/i);
+
+    // No scroll container anywhere in the card: nothing to scroll on either axis.
+    for (const node of [dialog, ...Array.from(dialog.querySelectorAll("*"))]) {
+      const classes = node.className || "";
+      expect(classes).not.toContain("overflow-y-auto");
+      expect(classes).not.toContain("overflow-x-auto");
+      expect(classes).not.toContain("overflow-scroll");
+      expect(classes).not.toContain("overflow-auto");
+    }
+    expect(dialog.firstElementChild?.className).toContain("overflow-hidden");
+  });
+
+  it("has four corner dots that resize the 16:9 window", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+    const file = new File(["png"], "banner.png", { type: "image/png" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, {
+      target: { files: [file] },
+    });
+
+    for (const corner of ["top left", "top right", "bottom left", "bottom right"]) {
+      expect(screen.getByLabelText(`Resize from the ${corner} corner`)).toBeTruthy();
+    }
+
+    // Tell the dialog the picture's size, then drag the bottom-right dot inwards.
+    const dialog = screen.getByRole("dialog", { name: /Frame your banner/i });
+    const picture = dialog.querySelectorAll("img")[0]!;
+    Object.defineProperty(picture, "naturalWidth", { configurable: true, value: 1200 });
+    Object.defineProperty(picture, "naturalHeight", { configurable: true, value: 1200 });
+    fireEvent.load(picture);
+
+    const window16by9 = screen.getByRole("group", { name: /16:9 crop window/i });
+    const before = window16by9.getAttribute("style");
+    const handle = screen.getByLabelText("Resize from the bottom right corner");
+    fireEvent.pointerDown(handle, { pointerId: 1, clientX: 100, clientY: 100, button: 0 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 60, clientY: 60 });
+    fireEvent.pointerUp(handle, { pointerId: 1 });
+    // The window is smaller (or at its floor), which is a change in its style.
+    expect(window16by9.getAttribute("style")).not.toBe(before);
+  });
+
+  it("closes with the corner X and saves nothing", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+    const file = new File(["png"], "banner.png", { type: "image/png" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, {
+      target: { files: [file] },
+    });
+    expect(screen.getByRole("dialog", { name: /Frame your banner/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+
+    // The card is gone and so is the upload: nothing was saved.
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete banner" })).toBeNull();
     expect(screen.getByText(/Drop in your creative/i)).toBeTruthy();
   });

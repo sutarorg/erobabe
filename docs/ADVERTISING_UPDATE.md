@@ -42,12 +42,13 @@ theme-matching scrollbar on its right edge, while the artwork panel stays fixed
 in the right column. Below `lg` the document scrolls normally and the artwork
 panel follows the wizard.
 
-`NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` (default:
-`https://i.ibb.co/SXhzQ4ZQ/Untitled-Design-18-1.png`) is rendered in the fixed
-panel, scaled to fit (`max-h-[82vh]`, `object-contain`) so it can never overflow
-or scroll. The same artwork committed at
-`public/Untitled Design (18) (1).png` is the bundled fallback if the hosted
-image fails.
+The fixed panel renders `public/checkout/advertise-panel.webp` (960 × 1080,
+exactly **8:9**) with `public/checkout/advertise-panel.png` as the `<picture>`
+fallback. Both are committed to this repo and served from our own origin, so the
+panel never waits on a third-party image host. The frame is `aspect-[8/9]` with
+`object-cover`: the frame and the file have the same shape, so nothing is
+cropped, letterboxed or scrolled, and the intrinsic `width`/`height` reserve the
+box before the bytes arrive (`fetchPriority="high"`, eager decode).
 
 ## 2. Admin panel
 
@@ -179,9 +180,25 @@ New/updated tests:
   cleanup, audit metadata and revenue exclusion.
 * `tests/e2e/portal-navigation.spec.ts` — no Users / legacy Campaigns entries.
 
-### Not verifiable in this sandbox
+### The "Frame your banner" card
 
-The payment artwork is referenced from its host (`i.ibb.co`) because outbound
-downloads are blocked in this environment. To make it self-hosted, save the
-image into `public/` and set `NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` to that path;
-the local copy in `public/` remains the bundled fallback.
+Every upload — including one that is already 16:9 — opens the card, because the
+subject of a 16:9 picture can still sit off-centre.
+
+* Title only: there is no instructional sentence and no "In the ad slot"
+  preview. The card's job is obvious from the frame itself.
+* The 16:9 window is dragged to move it and resized from **four corner dots**
+  (pointer or arrow keys). Resizing keeps 16:9, pins the opposite corner and is
+  clamped between the largest fitting window and a third of it (the 3× zoom
+  cap). The arrow keys nudge a focused window; `Shift` takes bigger steps.
+* **Done** commits the framing. The **X** in the top-right corner — and
+  `Escape` — discards the upload entirely: nothing is stored and the drop zone
+  comes back empty.
+* Nothing in the card scrolls: it is a fixed overlay capped at `92dvh` with
+  `overflow-hidden`, and the picture is capped to the remaining height, so there
+  is no vertical or horizontal scrollbar at any window size.
+
+`lib/ads/focus.ts` holds the maths: `cropBoxFromFocus` draws the window that
+`creativeImageStyle` renders, `focusFromCropBox` is its exact inverse (the width
+decides the zoom), and `resizeCropBox`/`moveCropBox` clamp every gesture inside
+the picture. `tests/unit/creative-focus.test.ts` asserts that round trip.

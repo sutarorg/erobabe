@@ -68,3 +68,6 @@ playwright/.cache
 
 # Import/build scratch
 .cache
+
+# Operator-supplied design sources (optimised copies live in public/)
+google_drive/

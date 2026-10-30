@@ -1,62 +1,89 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Trash2 } from "lucide-react";
+import { Trash2, X } from "lucide-react";
 import {
+  MAX_CREATIVE_ZOOM,
   creativeImageStyle,
-  cropBoxFor,
+  cropBoxFromFocus,
   focusFromCropBox,
-  normalizeCreativeFocus,
+  moveCropBox,
+  resizeCropBox,
   type CreativeFocus,
+  type CropBox,
 } from "@/lib/ads/focus";
 
+const CORNERS = [
+  { id: "nw", className: "-left-2 -top-2 cursor-nwse-resize", label: "top left" },
+  { id: "ne", className: "-right-2 -top-2 cursor-nesw-resize", label: "top right" },
+  { id: "sw", className: "-bottom-2 -left-2 cursor-nesw-resize", label: "bottom left" },
+  { id: "se", className: "-bottom-2 -right-2 cursor-nwse-resize", label: "bottom right" },
+] as const;
+
 /**
- * The 16:9 crop picker.
+ * The 16:9 crop window.
  *
- * Banners arrive in every shape — a square logo, a tall poster, a wide strip,
- * an animated GIF — and even an exact 16:9 picture may have its subject off to
- * one side. So every upload opens this: the whole picture, with the 16:9
- * window laid over it. Drag the window to choose what the ad slot shows.
+ * Every upload lands here, whatever its shape — a square logo, a tall poster, a
+ * wide strip, an animated GIF, or an exact 16:9 picture whose subject is off to
+ * one side. The whole picture is shown, with the 16:9 window on top: drag the
+ * window to move it, drag a corner dot to make it bigger or smaller (which is
+ * the same thing as zooming the ad slot).
  *
- * The window is the largest 16:9 rectangle that fits, which is precisely what
- * `object-fit: cover` shows in the placement, so the frame approved here is the
- * crop a visitor gets — no zoom, no second guess.
+ * The card never scrolls: it is a fixed overlay whose picture is capped to the
+ * viewport, so there is no inner scrollbar on any axis.
  */
 export default function CreativeCropDialog({
   open,
   src,
   fileName,
   focus,
-  onConfirm,
-  onCancel,
+  onDone,
+  onClose,
 }: {
   open: boolean;
   src: string;
   fileName: string;
   focus: CreativeFocus;
-  onConfirm: (next: CreativeFocus) => void;
-  onCancel: () => void;
+  /** Commit the framing the advertiser ended up with. */
+  onDone: (next: CreativeFocus) => void;
+  /** Dismiss without saving anything: the upload is discarded. */
+  onClose: () => void;
 }) {
-  const [draft, setDraft] = useState<CreativeFocus>(focus);
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const [box, setBox] = useState<CropBox>({ left: 0, top: 0, width: 1, height: 1 });
   const stageRef = useRef<HTMLDivElement>(null);
   const windowRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ pointerId: number; startX: number; startY: number; box: { left: number; top: number } } | null>(
-    null,
+  const gesture = useRef<
+    | { kind: "move" | "resize"; corner?: "nw" | "ne" | "sw" | "se"; startX: number; startY: number; box: CropBox }
+    | null
+  >(null);
+
+  const rebuild = useCallback(
+    (nextSize: { width: number; height: number }, nextFocus: CreativeFocus) => {
+      setBox(cropBoxFromFocus(nextSize.width, nextSize.height, nextFocus));
+    },
+    [],
   );
 
-  // Start each visit from the framing that is already stored.
+  // Re-open from whatever is stored for this banner.
   useEffect(() => {
-    if (open) setDraft(focus);
-  }, [open, focus]);
+    if (!open) return;
+    setSize({ width: 0, height: 0 });
+    setBox({ left: 0, top: 0, width: 1, height: 1 });
+  }, [open, src]);
 
-  // Focus moves into the frame so the arrow keys work immediately and Escape
-  // can close the sheet without hunting for it first.
+  useEffect(() => {
+    if (open && size.width > 0) rebuild(size, focus);
+    // `focus` is only the starting point; dragging must not re-seed the box.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, size.width, size.height]);
+
+  // Focus the window so the arrow keys work at once and Escape closes.
   useEffect(() => {
     if (open) windowRef.current?.focus();
   }, [open]);
 
-  // A full-screen sheet on a phone must not scroll the wizard behind it.
+  // A full-screen overlay on a phone must not scroll the wizard behind it.
   useEffect(() => {
     if (!open) return;
     const previous = document.body.style.overflow;
@@ -66,89 +93,109 @@ export default function CreativeCropDialog({
     };
   }, [open]);
 
-  const box = cropBoxFor(size.width, size.height, draft);
+  const onImageLoad = useCallback(
+    (event: React.SyntheticEvent<HTMLImageElement>) => {
+      const image = event.currentTarget;
+      const nextSize = { width: image.naturalWidth, height: image.naturalHeight };
+      setSize(nextSize);
+      setBox(cropBoxFromFocus(nextSize.width, nextSize.height, focus));
+    },
+    [focus],
+  );
 
-  const onImageLoad = useCallback((event: React.SyntheticEvent<HTMLImageElement>) => {
-    const image = event.currentTarget;
-    setSize({ width: image.naturalWidth, height: image.naturalHeight });
-  }, []);
+  /** Pointer movement in pixels → fractions of the picture. */
+  function delta(event: React.PointerEvent) {
+    const stage = stageRef.current?.getBoundingClientRect();
+    const start = gesture.current;
+    if (!start || !stage) return null;
+    return {
+      x: (event.clientX - start.startX) / (stage.width || 1),
+      y: (event.clientY - start.startY) / (stage.height || 1),
+    };
+  }
 
-  function beginDrag(event: React.PointerEvent<HTMLDivElement>) {
+  function begin(kind: "move" | "resize", event: React.PointerEvent) {
     if (event.button !== 0 && event.pointerType === "mouse") return;
-    const stage = stageRef.current;
-    if (!stage) return;
-    const rect = stage.getBoundingClientRect();
-    drag.current = {
-      pointerId: event.pointerId,
+    event.stopPropagation();
+    gesture.current = {
+      kind,
+      corner: kind === "resize" ? (event.currentTarget as HTMLElement).dataset.corner as
+        | "nw"
+        | "ne"
+        | "sw"
+        | "se" : undefined,
       startX: event.clientX,
       startY: event.clientY,
-      box: { left: box.left, top: box.top },
+      box,
     };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    // Remembered so pointermove can convert pixels to fractions of the stage.
-    stage.dataset.dragWidth = String(rect.width || 1);
-    stage.dataset.dragHeight = String(rect.height || 1);
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   }
 
-  function moveDrag(event: React.PointerEvent<HTMLDivElement>) {
-    const start = drag.current;
-    const stage = stageRef.current;
-    if (!start || !stage) return;
-    const width = Number(stage.dataset.dragWidth) || 1;
-    const height = Number(stage.dataset.dragHeight) || 1;
-    const nextLeft = Math.min(
-      Math.max(start.box.left + (event.clientX - start.startX) / width, 0),
-      1 - box.width,
-    );
-    const nextTop = Math.min(
-      Math.max(start.box.top + (event.clientY - start.startY) / height, 0),
-      1 - box.height,
-    );
-    setDraft(
-      focusFromCropBox(size.width, size.height, { left: nextLeft, top: nextTop }),
+  function move(event: React.PointerEvent) {
+    const start = gesture.current;
+    const offset = delta(event);
+    if (!start || !offset) return;
+    setBox(
+      start.kind === "resize" && start.corner
+        ? resizeCropBox(size.width, size.height, start.box, start.corner, offset)
+        : moveCropBox(start.box, offset),
     );
   }
 
-  function endDrag() {
-    drag.current = null;
+  function end() {
+    gesture.current = null;
   }
 
-  /** The window only moves on an axis that has slack; arrows do the same. */
-  function nudge(deltaX: number, deltaY: number) {
-    const current = cropBoxFor(size.width, size.height, draft);
-    setDraft(
-      focusFromCropBox(size.width, size.height, {
-        left: Math.min(Math.max(current.left + deltaX, 0), 1 - current.width),
-        top: Math.min(Math.max(current.top + deltaY, 0), 1 - current.height),
-      }),
-    );
+  function nudge(dx: number, dy: number) {
+    setBox((current) => moveCropBox(current, { x: dx, y: dy }));
   }
 
   if (!open) return null;
 
+  // How much the window is zoomed in, as a percentage: the label a screen
+  // reader gets while a corner is being dragged.
+  const baseWidth =
+    size.width > 0 && size.height > 0
+      ? cropBoxFromFocus(size.width, size.height, { x: 50, y: 50, zoom: 1 }).width
+      : 0;
+  const zoomPercent =
+    baseWidth > 0 && box.width > 0
+      ? Math.min(
+          Math.round(MAX_CREATIVE_ZOOM * 100),
+          Math.max(100, Math.round((baseWidth / box.width) * 100)),
+        )
+      : 100;
+
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-end justify-center bg-black/80 backdrop-blur-sm sm:items-center sm:p-6"
+      className="fixed inset-0 z-[70] flex items-center justify-center overflow-hidden bg-black/85 p-3 backdrop-blur-sm sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="crop-dialog-title"
       onKeyDown={(event) => {
-        if (event.key === "Escape") onCancel();
+        if (event.key === "Escape") onClose();
       }}
     >
-      <div className="flex max-h-[94vh] max-h-[94dvh] w-full max-w-[560px] flex-col overflow-y-auto rounded-t-2xl border border-line bg-panel p-4 shadow-[0_32px_90px_rgba(0,0,0,0.7)] sm:rounded-2xl sm:p-5">
-        <h2 id="crop-dialog-title" className="text-[15px] font-semibold text-ink">
-          Frame your banner
-        </h2>
-        <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
-          Drag the 16:9 frame over the part of {fileName || "your image"} you want in the ad slot.
-        </p>
+      {/* overflow-hidden, fixed height budget: the card itself never scrolls. */}
+      <div className="flex max-h-[92dvh] w-full max-w-[520px] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-[0_32px_90px_rgba(0,0,0,0.7)]">
+        <div className="flex items-center justify-between gap-3 px-4 pt-3">
+          <h2 id="crop-dialog-title" className="truncate text-[13.5px] font-semibold text-ink">
+            Frame your banner
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            title="Close"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-3 transition hover:bg-white/10 hover:text-ink"
+          >
+            <X aria-hidden className="h-4 w-4" />
+          </button>
+        </div>
 
-        <div className="mt-4 flex justify-center">
-          {/* The stage is exactly the picture, so window maths is in picture
-              coordinates no matter how the browser scaled it. */}
-          {/* overflow-hidden keeps the window's huge dimming shadow inside the
-              picture, so it can never paint over the dialog's own buttons. */}
+        <div className="flex min-h-0 flex-1 items-center justify-center p-3">
+          {/* Exactly the picture's box: every percentage below is a percentage
+              of the image, which is what the crop maths expects. */}
           <div
             ref={stageRef}
             className="relative inline-block max-w-full select-none overflow-hidden rounded-lg"
@@ -158,17 +205,18 @@ export default function CreativeCropDialog({
               alt=""
               onLoad={onImageLoad}
               draggable={false}
-              className="block max-h-[52vh] max-h-[52dvh] w-auto max-w-full opacity-90"
+              className="block h-auto w-auto max-w-full opacity-90"
+              style={{ maxHeight: "calc(92dvh - 8.5rem)" }}
             />
             <div
               ref={windowRef}
               role="group"
-              aria-label="16:9 crop window. Use the arrow keys to move it."
+              aria-label="16:9 crop window. Drag it, resize it from a corner, or use the arrow keys."
               tabIndex={0}
-              onPointerDown={beginDrag}
-              onPointerMove={moveDrag}
-              onPointerUp={endDrag}
-              onPointerCancel={endDrag}
+              onPointerDown={(event) => begin("move", event)}
+              onPointerMove={move}
+              onPointerUp={end}
+              onPointerCancel={end}
               onKeyDown={(event) => {
                 const step = event.shiftKey ? 0.1 : 0.02;
                 if (event.key === "ArrowLeft") nudge(-step, 0);
@@ -186,46 +234,68 @@ export default function CreativeCropDialog({
                 height: `${box.height * 100}%`,
               }}
             >
-              {/* Rule-of-thirds guides, dimmed so they never fight the picture. */}
               <span aria-hidden className="pointer-events-none absolute inset-0">
                 <span className="absolute inset-y-0 left-1/3 w-px bg-white/25" />
                 <span className="absolute inset-y-0 left-2/3 w-px bg-white/25" />
                 <span className="absolute inset-x-0 top-1/3 h-px bg-white/25" />
                 <span className="absolute inset-x-0 top-2/3 h-px bg-white/25" />
               </span>
+
+              {/* Four corner dots: drag any of them to resize the window, which
+                  is how the advertiser zooms into the part they want. */}
+              {CORNERS.map((corner) => (
+                <span
+                  key={corner.id}
+                  role="slider"
+                  tabIndex={0}
+                  aria-label={`Resize from the ${corner.label} corner`}
+                  aria-valuemin={100}
+                  aria-valuemax={Math.round(MAX_CREATIVE_ZOOM * 100)}
+                  aria-valuenow={zoomPercent}
+                  aria-valuetext={`${zoomPercent}% zoom`}
+                  data-corner={corner.id}
+                  onPointerDown={(event) => begin("resize", event)}
+                  onPointerMove={move}
+                  onPointerUp={end}
+                  onPointerCancel={end}
+                  onKeyDown={(event) => {
+                    const step = event.shiftKey ? 0.1 : 0.02;
+                    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+                      setBox((current) =>
+                        resizeCropBox(size.width, size.height, current, corner.id, {
+                          x: step,
+                          y: step,
+                        }),
+                      );
+                    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                      setBox((current) =>
+                        resizeCropBox(size.width, size.height, current, corner.id, {
+                          x: -step,
+                          y: -step,
+                        }),
+                      );
+                    } else return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  className={`absolute h-3.5 w-3.5 touch-none rounded-full border-2 border-white bg-accent shadow-[0_1px_4px_rgba(0,0,0,0.6)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white ${corner.className}`}
+                />
+              ))}
             </div>
           </div>
         </div>
 
-        <div className="mt-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-3">
-            In the ad slot
-          </p>
-          <div className="mt-1.5 aspect-video w-full overflow-hidden rounded-lg border border-line bg-black">
-            <img
-              src={src}
-              alt=""
-              draggable={false}
-              className="h-full w-full"
-              style={creativeImageStyle(draft)}
-            />
-          </div>
-        </div>
-
-        <div className="mt-4 flex items-center justify-end gap-2">
+        <div className="px-4 pb-4 pt-1">
+          <p className="truncate text-[10.5px] text-ink-3">{fileName}</p>
           <button
             type="button"
-            onClick={onCancel}
-            className="inline-flex h-10 items-center justify-center rounded-md border border-line px-4 text-[12.5px] font-medium text-ink-2 transition hover:bg-white/5"
+            onClick={() => {
+              if (size.width > 0) onDone(focusFromCropBox(size.width, size.height, box));
+              else onDone(focus);
+            }}
+            className="mt-2 inline-flex h-10 w-full items-center justify-center rounded-md bg-accent text-[13px] font-semibold text-white transition hover:bg-accent-soft"
           >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => onConfirm(normalizeCreativeFocus(draft))}
-            className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md bg-accent px-4 text-[12.5px] font-semibold text-white transition hover:bg-accent-soft"
-          >
-            <Check aria-hidden className="h-3.5 w-3.5" /> Use this frame
+            Done
           </button>
         </div>
       </div>
@@ -236,7 +306,7 @@ export default function CreativeCropDialog({
 /**
  * The uploaded banner, framed exactly as the ad slot will show it.
  *
- * Tapping the picture reopens the crop picker; the delete button lives in the
+ * Tapping the picture reopens the crop window; the delete button lives in the
  * corner so removing the upload is one tap away and never confused with the
  * frame itself.
  */
