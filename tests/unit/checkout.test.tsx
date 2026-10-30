@@ -67,7 +67,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("guest PayPal checkout", () => {
+describe("guest advertising checkout", () => {
   it("links every vacant banner directly to its slot checkout", () => {
     render(<AdSlot index={3} />);
     expect(screen.getByRole("link", { name: /Advertise in slot 3/i })).toHaveAttribute("href", "/checkout?slot=3");
@@ -135,7 +135,31 @@ describe("guest PayPal checkout", () => {
     expect(screen.getByPlaceholderText(/A sentence about your business/)).not.toHaveAttribute("required");
   });
 
-  it("requires the banner before continuing, then submits and hands over to PayPal", async () => {
+  it("never mentions the payment provider or an approval queue on this page", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    // Step 1 → 2 → 3, then read every rendered word.
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+    fireEvent.change(screen.getByPlaceholderText("Alex Morgan"), { target: { value: "Alex Advertiser" } });
+    fireEvent.change(screen.getByPlaceholderText("you@company.com"), { target: { value: "alex@example.com" } });
+    fireEvent.change(screen.getByPlaceholderText("e.g. Summer collection launch"), { target: { value: "Summer launch" } });
+    fireEvent.change(screen.getByPlaceholderText("https://your-website.com/landing-page"), {
+      target: { value: "https://example.com/offer" },
+    });
+    const file = new File(["png"], "banner.png", { type: "image/png" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, { target: { files: [file] } });
+    fireEvent.submit(container.querySelector("form")!);
+    expect(screen.getByRole("heading", { name: "3. Payment" })).toBeTruthy();
+
+    const words = (container.textContent || "").toLowerCase();
+    expect(words).not.toContain("paypal");
+    expect(words).not.toContain("in review");
+    // The old explainer card is gone, not merely restyled.
+    expect(screen.queryByText(/how payment works/i)).toBeNull();
+    // …and the pay button says what it does.
+    expect(screen.getByRole("button", { name: /Pay \$99\.00 Now/i })).toBeTruthy();
+  });
+
+  it("requires the banner before continuing, then submits and hands over to the payment page", async () => {
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
       Response.json({ orderId: "order-1", status: "in_review" }, { status: 201 }),
     );
@@ -157,7 +181,7 @@ describe("guest PayPal checkout", () => {
     expect(screen.getByRole("heading", { name: "3. Payment" })).toBeTruthy();
     expect(screen.getAllByText(/1 month/).length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole("button", { name: /Pay \$99\.00 with PayPal/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Pay \$99\.00 Now/i }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("https://www.paypal.com/ncp/payment/AZP63KXT9FUNL"));
 
     const body = fetchMock.mock.calls[0]?.[1]?.body as FormData;
@@ -187,7 +211,7 @@ describe("guest PayPal checkout", () => {
       target: { files: [new File(["png"], "banner.png", { type: "image/png" })] },
     });
     fireEvent.submit(container.querySelector("form")!);
-    fireEvent.click(screen.getByRole("button", { name: /Pay \$99\.00 with PayPal/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Pay \$99\.00 Now/i }));
 
     expect(await screen.findAllByText("This ad slot was just reserved.")).not.toHaveLength(0);
     expect(assign).not.toHaveBeenCalled();
@@ -208,7 +232,7 @@ describe("in-review confirmation", () => {
     const { container } = render(<AdReviewNotice />);
 
     expect(screen.getByRole("heading", { name: "In review" })).toBeTruthy();
-    expect(screen.getByText("We’re verifying your PayPal payment.")).toBeTruthy();
+    expect(screen.getByText("We’re confirming your payment and checking your banner.")).toBeTruthy();
     expect(container.querySelector(".ad-review-in")).toBeTruthy();
     expect(container.querySelector(".ad-review-progress")).toBeTruthy();
 

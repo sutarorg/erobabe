@@ -28,12 +28,51 @@ const submissionSchema = z
       .max(2048)
       .refine((value) => /^https?:\/\//i.test(value), "Use an http or https URL"),
     paypalTransactionId: z.string().trim().max(128).optional().default(""),
-    // Payment now happens on the hosted PayPal page after the order exists, so
+    // Payment happens on the hosted payment page *after* the order exists, so
     // the confirmation is recorded by the operator during review. The flag is
-    // still accepted (and must be "true") when a client sends it.
-    paymentConfirmed: z.literal("true").optional(),
+    // only accepted for older clients that still send it — it must never be
+    // required, because checkout does not send it at all.
+    paymentConfirmed: z
+      .union([z.literal("true"), z.literal(""), z.undefined()])
+      .optional()
+      .transform(() => undefined),
   })
   .strict();
+
+/**
+ * Form fields arrive as `null` when absent, which every Zod string rejects.
+ * Normalising first means a missing optional field is simply missing, instead
+ * of failing the whole submission with a message about a banner.
+ */
+function field(form: FormData, name: string): string | undefined {
+  const value = form.get(name);
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : value;
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  slotId: "an ad slot",
+  durationMonths: "a duration",
+  adName: "an ad name",
+  contactName: "your name",
+  email: "a valid email address",
+  destinationUrl: "a full https:// destination URL",
+};
+
+/**
+ * Says which field the submission is missing, and stops claiming the banner is
+ * to blame for a problem that has nothing to do with it.
+ */
+function validationMessage(error: z.ZodError): string {
+  const first = error.issues[0];
+  if (!first) return "Check the form and try again.";
+  const key = String(first.path[0] ?? "");
+  const label = FIELD_LABELS[key];
+  if (label) return `Enter ${label} and try again.`;
+  if (key === "slotId") return "Choose an ad slot and try again.";
+  return "Check the form and try again.";
+}
 
 function errorResponse(error: unknown) {
   if (error instanceof CreativeValidationError) {
@@ -64,22 +103,19 @@ export async function POST(req: Request) {
 
     const form = await req.formData();
     const parsed = submissionSchema.safeParse({
-      slotId: form.get("slotId"),
-      durationMonths: form.get("durationMonths"),
-      adName: form.get("adName"),
-      contactName: form.get("contactName"),
-      companyName: form.get("companyName") || "",
-      email: form.get("email"),
-      aboutAdvertiser: form.get("aboutAdvertiser"),
-      destinationUrl: form.get("destinationUrl"),
-      paypalTransactionId: form.get("paypalTransactionId") || "",
-      paymentConfirmed: form.get("paymentConfirmed"),
+      slotId: field(form, "slotId"),
+      durationMonths: field(form, "durationMonths"),
+      adName: field(form, "adName"),
+      contactName: field(form, "contactName"),
+      companyName: field(form, "companyName") ?? "",
+      email: field(form, "email"),
+      aboutAdvertiser: field(form, "aboutAdvertiser") ?? "",
+      destinationUrl: field(form, "destinationUrl"),
+      paypalTransactionId: field(form, "paypalTransactionId") ?? "",
+      paymentConfirmed: field(form, "paymentConfirmed") ?? undefined,
     });
     if (!parsed.success) {
-      return NextResponse.json(
-        { error: "Complete every required field, attach a 16:9 banner, and try again." },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: validationMessage(parsed.error) }, { status: 400 });
     }
 
     const creative = form.get("creative");

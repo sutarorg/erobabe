@@ -7,7 +7,6 @@ import {
   ArrowRight,
   Check,
   ChevronLeft,
-  CreditCard,
   ImagePlus,
   LoaderCircle,
   LockKeyhole,
@@ -120,8 +119,8 @@ function StepIndicator({
  * Three wizard steps in the left panel — Ads Details → Advertiser details →
  * Payment — while the right panel stays fixed on the payment artwork. The
  * order is written to `/api/ads/submit` and the visitor is handed to the hosted
- * PayPal page; PayPal returns to the homepage, where the “In review” card
- * (see `AdReviewNotice`) confirms the submission.
+ * payment page; it returns to the homepage, where a short confirmation card
+ * (see `AdReviewNotice`) acknowledges the submission.
  */
 export default function CheckoutForm({
   slots,
@@ -259,8 +258,8 @@ export default function CheckoutForm({
     goToStep(3);
   }
 
-  /** Step 3: create the in-review order, then hand over to PayPal. */
-  async function payWithPayPal() {
+  /** Step 3: create the order, then hand over to the hosted payment page. */
+  async function payNow() {
     setError("");
     if (!selectedSlot?.available) {
       setError("Choose an available ad slot.");
@@ -290,8 +289,8 @@ export default function CheckoutForm({
       const result = await response.json().catch(() => null);
       if (!response.ok) throw new Error(result?.error || "Unable to submit your ad.");
 
-      // PayPal returns to the homepage; this flag makes the “In review” card
-      // appear there exactly once, for ten seconds.
+      // The payment page returns to the homepage; this flag makes the short
+      // confirmation card appear there exactly once, for ten seconds.
       try {
         window.localStorage.setItem(
           AD_REVIEW_FLAG_KEY,
@@ -302,7 +301,7 @@ export default function CheckoutForm({
           }),
         );
       } catch {
-        /* storage disabled — the visitor still reaches PayPal */
+        /* storage disabled — the visitor still reaches the payment page */
       }
       window.location.assign(PAYPAL_PAYMENT_URL);
     } catch (submitError) {
@@ -348,7 +347,7 @@ export default function CheckoutForm({
               Your brand, in the spotlight.
             </h1>
             <p className="mt-2 max-w-[520px] text-[12.5px] leading-relaxed text-ink-3">
-              Pick a 16:9 placement, tell us about your ad, and pay with PayPal. No account needed.
+              Pick a 16:9 placement, tell us about your ad, and pay securely. No account needed.
             </p>
           </div>
 
@@ -592,8 +591,8 @@ export default function CheckoutForm({
                 3. Payment
               </h2>
               <p className="mt-1 text-[11.5px] leading-relaxed text-ink-3">
-                You’ll pay {money(totalCents)} for 1 month on PayPal’s secure page, then come back
-                here while we review your ad.
+                One payment of {money(totalCents)} covers your 16:9 placement for 1 month. Pay
+                securely on the next screen — no account needed.
               </p>
 
               <div className="mt-4 rounded-xl border border-line bg-card p-4">
@@ -618,16 +617,6 @@ export default function CheckoutForm({
                 </div>
               </div>
 
-              <div className="mt-4 rounded-xl border border-line bg-card p-4 text-[11.5px] leading-relaxed text-ink-2">
-                <p className="flex items-center gap-2 font-medium text-ink">
-                  <CreditCard aria-hidden className="h-4 w-4 text-accent" /> How payment works
-                </p>
-                <ol className="mt-2 space-y-1 pl-5 text-ink-3">
-                  <li>1. We save your ad as “In review”.</li>
-                  <li>2. PayPal opens in this tab for the {money(totalCents)} payment.</li>
-                  <li>3. PayPal returns you to the homepage while we approve the ad.</li>
-                </ol>
-              </div>
 
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
                 <button
@@ -640,7 +629,7 @@ export default function CheckoutForm({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void payWithPayPal()}
+                  onClick={() => void payNow()}
                   disabled={submitting || !selectedSlot?.available}
                   className="inline-flex h-12 items-center gap-2 rounded-lg bg-accent px-5 text-[14px] font-semibold text-white transition hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-45"
                 >
@@ -649,7 +638,7 @@ export default function CheckoutForm({
                   ) : (
                     <LockKeyhole aria-hidden className="h-4 w-4" />
                   )}
-                  {submitting ? "Preparing your order…" : `Pay ${money(totalCents)} with PayPal`}
+                  {submitting ? "Preparing your order…" : `Pay ${money(totalCents)} Now`}
                   {!submitting && <ArrowRight aria-hidden className="h-4 w-4" />}
                 </button>
               </div>
@@ -657,8 +646,8 @@ export default function CheckoutForm({
               <div className="mt-4 flex items-start gap-2 text-[10.5px] leading-relaxed text-ink-3">
                 <ShieldCheck aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
                 <p>
-                  Your ad stays <strong className="text-ink-2">In review</strong> until our team
-                  confirms the PayPal payment and approves the creative.
+                  Your payment is taken on a secure page, and your banner goes to our team the
+                  moment you finish — nothing appears on erobabe before it is approved.
                 </p>
               </div>
             </section>
