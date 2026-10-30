@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 import AdCreativeCard, { isSafeAdUrl } from "./AdCreativeCard";
+import AdvertiseWithUsLink from "./AdvertiseWithUsLink";
 import VacantAdCard from "./VacantAdCard";
 import { useMobileAds } from "./MobileAdsProvider";
 
@@ -161,7 +162,9 @@ export default function MobileAdBreak({
         )}
       </div>
 
-      <p className="mt-4 text-center text-[11.5px] text-ink-3" aria-live="polite">
+      <AdvertiseWithUsLink className="mt-4" tone="dim" />
+
+      <p className="mt-3 text-center text-[11.5px] text-ink-3" aria-live="polite">
         {phase === "closable"
           ? "Continue to your video"
           : `Your video starts in ${seconds} second${seconds === 1 ? "" : "s"}`}

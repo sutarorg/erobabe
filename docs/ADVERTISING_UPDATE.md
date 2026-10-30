@@ -11,7 +11,7 @@ non-scrolling** payment panel on the right that replaces the old
 
 | Step | Contents |
 | --- | --- |
-| **1. Ads Details** | The ten fixed 16:9 placements drawn like the homepage ad cards: five columns × two rows. A sold placement shows its running creative and cannot be selected; an open one shows **Available** and selecting it advances the wizard. Duration is fixed at **1 month**. |
+| **1. Ads Details** | The ten fixed 16:9 placements drawn like the homepage ad cards: **two columns × five rows**. A sold placement shows its running creative and cannot be selected; an open one shows **Available** and selecting it advances the wizard. Duration is fixed at **1 month**. |
 | **2. Advertiser details** | **Media upload** (required, JPG/PNG, 16:9, max 5 MB) → **Destination URL** (required, second field, highlighted and tagged “Most important”) → Your name (required) → Company / brand (optional) → Email (required) → Ad name (required) → About you (optional). |
 | **3. Payment** | Order summary (slot, 1 month, $99.00) and **Pay $99.00 with PayPal**. Paying writes the `in_review` order through `POST /api/ads/submit`, then hands the visitor to the hosted PayPal page. |
 
@@ -36,10 +36,11 @@ first public page load consumes it and shows the **In review** card:
 
 ### Payment artwork
 
-`NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` (default: the Google Drive thumbnail of
-`1l1dIKZHIXguLYPmJ0QpAWEe6eHkRYsNq`) is rendered in the fixed panel, scaled to
-fit (`max-h-[82vh]`, `object-contain`) so it can never overflow or scroll.
-`public/paypal-qr.png` is the bundled fallback if the hosted image fails.
+`NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` (default:
+`https://i.ibb.co/SXhzQ4ZQ/Untitled-Design-18-1.png`) is rendered in the fixed
+panel, scaled to fit (`max-h-[82vh]`, `object-contain`) so it can never overflow
+or scroll. `public/paypal-qr.png` is the bundled fallback if the hosted image
+fails.
 
 ## 2. Admin panel
 
@@ -115,6 +116,11 @@ as in-flow 16:9 banners (hidden again from 1000px up with
 If no advertisement is active, every one of these renders the plain
 “Advertise” card used on the homepage.
 
+Every mobile placement — paid creative, vacant card and the ad break — also
+prints a faded, underlined **“Advertise with us”** line underneath it that opens
+`/checkout`. The mobile card no longer carries the “Advertisement” tag in its
+top-right corner; the “Ad” marker on paid creatives (top-left) stays.
+
 ### Rotation (`lib/ads/rotation.ts`)
 
 * The pool is the active creatives (guest orders plus legacy campaigns).
@@ -166,7 +172,7 @@ New/updated tests:
 
 ### Not verifiable in this sandbox
 
-The Google Drive artwork could not be downloaded here (no outbound access to
-Drive), so the panel points at the Drive thumbnail with the bundled QR as
-fallback. To make the artwork self-hosted, download it into `public/` and set
-`NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` to that path.
+The payment artwork is referenced from its host (`i.ibb.co`) because outbound
+downloads are blocked in this environment. To make it self-hosted, save the
+image into `public/` and set `NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` to that path;
+`public/paypal-qr.png` remains the bundled fallback.

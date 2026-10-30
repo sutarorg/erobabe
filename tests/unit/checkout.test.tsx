@@ -73,11 +73,14 @@ describe("guest PayPal checkout", () => {
     expect(screen.getByRole("link", { name: /Advertise in slot 3/i })).toHaveAttribute("href", "/checkout?slot=3");
   });
 
-  it("starts on Ads Details with the ten placements in a five-column grid and taken slots locked", () => {
+  it("starts on Ads Details with the placements in a two-column, five-row grid and taken slots locked", () => {
     const { container } = render(<CheckoutForm slots={slots} />);
     expect(screen.getByRole("heading", { name: "1. Ads Details" })).toBeTruthy();
-    const grid = container.querySelector(".grid-cols-2");
-    expect(grid?.className).toContain("lg:grid-cols-5");
+    const grid = container.querySelector('[data-slot-grid="5x2"]');
+    expect(grid?.className).toContain("grid-cols-2");
+    // Two columns at every breakpoint: ten placements read as five rows.
+    expect(grid?.className).not.toContain("grid-cols-5");
+    expect(grid?.className).not.toContain("sm:grid-cols-3");
     // Two available cards plus one locked, image-backed card.
     expect(screen.getAllByRole("button", { name: /Select ad slot/i })).toHaveLength(2);
     expect(screen.getByLabelText("Slot 3 is taken")).toBeTruthy();

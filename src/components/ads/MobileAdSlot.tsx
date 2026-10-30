@@ -2,6 +2,7 @@
 
 import { cn } from "@/src/utils/cn";
 import AdCreativeCard, { isSafeAdUrl } from "./AdCreativeCard";
+import AdvertiseWithUsLink from "./AdvertiseWithUsLink";
 import VacantAdCard from "./VacantAdCard";
 import { useMobileAds } from "./MobileAdsProvider";
 
@@ -17,7 +18,8 @@ import { useMobileAds } from "./MobileAdsProvider";
  * The banner is hidden from 1000px up — that is where the desktop rails take
  * over — and `display:none` also removes it from a grid, so a desktop layout
  * gains no empty cells. When no ad is active the plain “Advertise” card shows,
- * exactly as the rails do.
+ * exactly as the rails do. Every banner carries the faded
+ * “Advertise with us” line that opens the advertising checkout.
  */
 export default function MobileAdSlot({
   position,
@@ -46,23 +48,19 @@ export default function MobileAdSlot({
       )}
       data-mobile-ad={position}
     >
-      <div className="relative w-full overflow-hidden rounded-xl">
-        {showCreative && ad ? (
-          <AdCreativeCard
-            creative={ad}
-            slotId={slotId}
-            campaignId={ad.campaign_id}
-            className="aspect-video w-full rounded-xl"
-            imageClassName="h-full w-full object-cover"
-            eager={eager}
-          />
-        ) : (
-          <VacantAdCard className="aspect-video w-full rounded-xl" />
-        )}
-        <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-zinc-300 backdrop-blur">
-          Advertisement
-        </span>
-      </div>
+      {showCreative && ad ? (
+        <AdCreativeCard
+          creative={ad}
+          slotId={slotId}
+          campaignId={ad.campaign_id}
+          className="aspect-video w-full rounded-xl"
+          imageClassName="h-full w-full object-cover"
+          eager={eager}
+        />
+      ) : (
+        <VacantAdCard className="aspect-video w-full rounded-xl" />
+      )}
+      <AdvertiseWithUsLink className="mt-1.5" />
     </div>
   );
 }

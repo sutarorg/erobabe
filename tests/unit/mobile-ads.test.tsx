@@ -69,6 +69,20 @@ describe("mobile ad banners", () => {
     expect(container.firstElementChild?.className).toContain("min-[1000px]:hidden");
   });
 
+  it("prints a faded 'Advertise with us' link under every banner and no corner tag", () => {
+    const { container } = renderBanners([ad("only")], 3);
+    const links = screen.getAllByRole("link", { name: "Advertise with us" });
+    expect(links).toHaveLength(3);
+    for (const link of links) {
+      expect(link).toHaveAttribute("href", "/checkout");
+      expect(link.className).toContain("underline");
+      expect(link.className).toContain("opacity-75");
+    }
+    // The top-right “Advertisement” label is gone from the mobile card.
+    expect(screen.queryByText("Advertisement")).toBeNull();
+    expect(container.querySelectorAll("[data-mobile-ad]")).toHaveLength(3);
+  });
+
   it("shows the single active ad in every banner position", () => {
     renderBanners([ad("only")], 4);
     const images = screen.getAllByRole("img");
@@ -133,6 +147,8 @@ describe("mobile ad break", () => {
     );
 
     expect(screen.getByRole("dialog", { name: "Advertisement break" })).toBeTruthy();
+    // The ad-break placement carries the same checkout link.
+    expect(screen.getByRole("link", { name: "Advertise with us" })).toHaveAttribute("href", "/checkout");
     expect(screen.queryByRole("button", { name: "Close advertisement" })).toBeNull();
     expect(screen.getByText(/Your video starts in 3 seconds/i)).toBeTruthy();
 

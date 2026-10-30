@@ -12,7 +12,10 @@ function money(cents: number) {
 
 /**
  * Step 1 of the checkout wizard: the ten fixed placements, drawn exactly like
- * the homepage ad cards — five columns and two rows inside the left panel.
+ * the homepage ad cards.
+ *
+ * Two columns and five rows on every breakpoint, so the whole inventory is
+ * read top-to-bottom: ten placements always fill exactly five rows.
  *
  * An unsold placement is a selectable “Advertise” card; a sold one shows the
  * running creative and is not selectable. Choosing an available card moves the
@@ -34,7 +37,10 @@ export default function SlotPicker({
   }
 
   return (
-    <div className="mt-5 grid grid-cols-2 gap-x-2.5 gap-y-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div
+      className="mt-5 grid grid-cols-2 gap-x-3 gap-y-4"
+      data-slot-grid="5x2"
+    >
       {slots.map((slot) => (
         <div key={slot.id} className="min-w-0">
           {slot.available ? (
