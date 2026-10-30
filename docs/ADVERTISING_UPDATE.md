@@ -48,7 +48,25 @@ fallback. Both are committed to this repo and served from our own origin, so the
 panel never waits on a third-party image host. The frame is `aspect-[8/9]` with
 `object-cover`: the frame and the file have the same shape, so nothing is
 cropped, letterboxed or scrolled, and the intrinsic `width`/`height` reserve the
-box before the bytes arrive (`fetchPriority="high"`, eager decode).
+box before the bytes arrive (`fetchPriority="high"`, eager decode). The panel is
+anchored to the **bottom** of the column (`items-end`), so on desktop the
+artwork sits on the bottom edge of the screen and the space above it is empty
+panel, not a floating centred picture.
+
+Loading is deliberately boring and fast:
+
+* the picture is in the server HTML and is never hidden behind JavaScript — it
+  used to start at `opacity-0` and only appear when a client `onLoad` ran after
+  hydration, so a fully downloaded image could stay invisible while the bundle
+  booted. The shimmering placeholder now sits *behind* it;
+* `<head>` preloads the same `srcset`/`sizes` pair the panel renders, so the
+  hinted candidate and the chosen candidate are the same file (a mismatched
+  hint would download the artwork twice);
+* phones get `advertise-panel-720.webp` (25 KB) instead of the 960 px WebP
+  (38 KB);
+* all three files are served with `max-age=31536000, immutable` from
+  `next.config.mjs`, and the URLs carry `?v=<ARTWORK_VERSION>`, so repeat visits
+  paint from cache with no network round trip.
 
 ## 2. Admin panel
 
@@ -197,6 +215,10 @@ subject of a 16:9 picture can still sit off-centre.
 * Nothing in the card scrolls: it is a fixed overlay capped at `92dvh` with
   `overflow-hidden`, and the picture is capped to the remaining height, so there
   is no vertical or horizontal scrollbar at any window size.
+* The four corner dots live **outside** the clipping picture layer (only the
+  picture clips, and only the dimming shadow is clipped by it), and each is
+  offset by half of its own 14 px size. A dot on the image edge therefore stays
+  centred on the corner and never slides under the card's rounded border.
 
 `lib/ads/focus.ts` holds the maths: `cropBoxFromFocus` draws the window that
 `creativeImageStyle` renders, `focusFromCropBox` is its exact inverse (the width

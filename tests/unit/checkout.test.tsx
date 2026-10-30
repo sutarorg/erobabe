@@ -315,6 +315,30 @@ describe("guest advertising checkout", () => {
     expect(window16by9.getAttribute("style")).not.toBe(before);
   });
 
+  it("keeps the corner dots inside the card instead of under its border", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));
+    const file = new File(["png"], "banner.png", { type: "image/png" });
+    fireEvent.change(container.querySelector('input[name="creative"]')!, {
+      target: { files: [file] },
+    });
+
+    const dialog = screen.getByRole("dialog", { name: /Frame your banner/i });
+    const pictureLayer = dialog.querySelector("img")!.parentElement!;
+
+    // The picture layer is the only thing that clips, and the drag handles are
+    // positioned against the picture's box — not inside the clipping element —
+    // so a handle on the image edge can never be cut in half by the border.
+    expect(pictureLayer.className).toContain("overflow-hidden");
+    for (const corner of ["top left", "top right", "bottom left", "bottom right"]) {
+      const handle = screen.getByLabelText(`Resize from the ${corner} corner`);
+      expect(pictureLayer.contains(handle)).toBe(false);
+      // Half of its own 14 px size: centred on the corner, inside the padding.
+      expect(handle.className).toMatch(/-?(left|right)-\[7px\]/);
+      expect(handle.className).toMatch(/-?(top|bottom)-\[7px\]/);
+    }
+  });
+
   it("closes with the corner X and saves nothing", () => {
     const { container } = render(<CheckoutForm slots={slots} />);
     fireEvent.click(screen.getByRole("button", { name: "Select ad slot 1 — 16:9 placement" }));

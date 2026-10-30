@@ -32,7 +32,23 @@ const nextConfig = {
     ],
   },
   async headers() {
+    // Static artwork never changes under a given URL (the checkout appends a
+    // version query when it does), so it can be cached for a year instead of
+    // the default revalidate-on-every-visit of /public files.
+    const ARTWORK_CACHE = 'public, max-age=31536000, immutable';
     return [
+      {
+        source: '/checkout/advertise-panel.webp',
+        headers: [{ key: 'Cache-Control', value: ARTWORK_CACHE }],
+      },
+      {
+        source: '/checkout/advertise-panel-720.webp',
+        headers: [{ key: 'Cache-Control', value: ARTWORK_CACHE }],
+      },
+      {
+        source: '/checkout/advertise-panel.png',
+        headers: [{ key: 'Cache-Control', value: ARTWORK_CACHE }],
+      },
       ...['/admin/:path*', '/checkout/:path*', '/auth/:path*', '/api/:path*'].map(source => ({
         source, headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }],
       })),
