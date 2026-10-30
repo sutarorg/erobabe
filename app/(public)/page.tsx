@@ -212,12 +212,15 @@ export default async function HomePage({
         correlationId={recommendedFeed.correlationId}
         algorithmVersion={recommendedFeed.algorithmVersion}
         trackEvents={rankedRecommended.length > 0}
+        mobileAd={<MobileAdSlot position={0} inGrid />}
+        mobileAdAfter={2}
       />
-      {/* Phones have no side rails: the same ten creatives appear in-flow,
-          one under each home section. */}
-      <MobileAdSlot position={0} />
-      <RecommendationShelf title="Featured Videos" videos={featuredVideos} surface="featured" correlationId={featuredFeed.correlationId} algorithmVersion={featuredFeed.algorithmVersion} />
+      {/* Phones have no side rails: the same ten creatives appear in-flow —
+          inside “Recommended for you” after the first two videos, then under
+          each home section. */}
       <MobileAdSlot position={1} />
+      <RecommendationShelf title="Featured Videos" videos={featuredVideos} surface="featured" correlationId={featuredFeed.correlationId} algorithmVersion={featuredFeed.algorithmVersion} />
+      <MobileAdSlot position={2} />
       <section className="mt-8">
         <VideoSection title="Latest Videos">
           <FourRowVideoGrid className="video-grid mt-3.5">
@@ -227,7 +230,7 @@ export default async function HomePage({
           </FourRowVideoGrid>
         </VideoSection>
       </section>
-      <MobileAdSlot position={2} />
+      <MobileAdSlot position={3} />
     </div>
   );
 }

@@ -19,7 +19,8 @@ function money(cents: number) {
  *
  * An unsold placement is a selectable “Advertise” card; a sold one shows the
  * running creative and is not selectable. Choosing an available card moves the
- * wizard straight to the advertiser step.
+ * wizard straight to the advertiser step. Placement cards carry no status
+ * pill: the card's own design (Advertise vs. the running creative) says it.
  */
 export default function SlotPicker({
   slots,
@@ -48,7 +49,6 @@ export default function SlotPicker({
               slotId={slot.id}
               emphasize
               compact
-              tag="Available"
               label="Advertise"
               className="aspect-video w-full"
               onSelect={() => onSelect(slot)}
@@ -72,9 +72,6 @@ export default function SlotPicker({
                   Reserved
                 </span>
               )}
-              <span className="absolute left-1.5 top-1.5 rounded-full border border-emerald-400/35 bg-emerald-500/15 px-1.5 py-[1px] text-[8.5px] font-semibold uppercase tracking-wider text-emerald-300">
-                Taken
-              </span>
             </div>
           )}
           <p className="mt-1 truncate text-center text-[9.5px] tabular-nums text-ink-3">

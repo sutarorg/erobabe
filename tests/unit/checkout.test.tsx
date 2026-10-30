@@ -85,6 +85,9 @@ describe("guest PayPal checkout", () => {
     expect(screen.getAllByRole("button", { name: /Select ad slot/i })).toHaveLength(2);
     expect(screen.getByLabelText("Slot 3 is taken")).toBeTruthy();
     expect(screen.queryByLabelText("Slot 3 is taken")?.getAttribute("aria-disabled")).toBe("true");
+    // No status pills on the placement cards.
+    expect(screen.queryByText("Available")).toBeNull();
+    expect(screen.queryByText("Taken")).toBeNull();
     expect(screen.getByAltText("Current advertisement in slot 3")).toHaveAttribute(
       "src",
       "https://cdn.example.com/live-ad.png",
@@ -92,6 +95,19 @@ describe("guest PayPal checkout", () => {
     // The fixed artwork panel replaced the old order-summary QR block.
     expect(screen.getByLabelText("Payment artwork")).toBeTruthy();
     expect(screen.queryByAltText("Erobabe PayPal payment QR code")).toBeNull();
+  });
+
+  it("scrolls the wizard in its own thin-scrollbar panel while the artwork panel stays fixed", () => {
+    const { container } = render(<CheckoutForm slots={slots} />);
+    const form = container.querySelector("form")!;
+    const panel = container.querySelector("section.checkout-scroll") as HTMLElement;
+    expect(panel).toBeTruthy();
+    // The document no longer scrolls on desktop; the left panel does.
+    expect(form.className).toContain("lg:h-screen");
+    expect(form.className).toContain("lg:overflow-hidden");
+    expect(panel.className).toContain("lg:h-screen");
+    expect(panel.className).toContain("lg:overflow-y-auto");
+    expect(panel.getAttribute("aria-label")).toBe("Checkout steps");
   });
 
   it("never renders more than ten placements", () => {

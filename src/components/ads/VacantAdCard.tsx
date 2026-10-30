@@ -17,7 +17,6 @@ export default function VacantAdCard({
   note = "View pricing",
   emphasize = false,
   onSelect,
-  tag,
   meta,
   badge,
   disabled = false,
@@ -33,8 +32,6 @@ export default function VacantAdCard({
   emphasize?: boolean;
   /** When provided the card is a button (used inside the checkout wizard). */
   onSelect?: () => void;
-  /** Small pill in the top-left corner, e.g. “Available”. */
-  tag?: string;
   /** Small caption under the label, e.g. “Slot 3 · $99.00”. */
   meta?: string;
   badge?: ReactNode;
@@ -53,11 +50,6 @@ export default function VacantAdCard({
 
   const contents = (
     <>
-      {tag && (
-        <span className="absolute left-1.5 top-1.5 rounded-full border border-accent/40 bg-accent/12 px-1.5 py-[1px] text-[8.5px] font-semibold uppercase tracking-wider text-accent">
-          {tag}
-        </span>
-      )}
       {badge}
       <span
         className={`flex items-center justify-center rounded-full border border-accent/30 bg-accent/10 transition-colors group-hover:border-accent/60 group-hover:bg-accent/20 ${

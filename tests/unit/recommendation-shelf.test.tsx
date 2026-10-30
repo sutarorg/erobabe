@@ -88,6 +88,29 @@ describe("recommendation shelf layout", () => {
     },
   );
 
+  it("drops a mobile placement into the shelf after the first two videos", () => {
+    stubViewport(true);
+    const { container } = render(
+      <RecommendationShelf
+        title="Recommended for you"
+        surface="recommended"
+        videos={videos}
+        mobileAd={<span data-testid="mobile-ad">Advertise</span>}
+        mobileAdAfter={2}
+      />,
+    );
+    const grid = container.querySelector('[data-mobile-ad-at="2"]') as HTMLElement;
+    expect(grid).toBeTruthy();
+    const cells = [...grid.children];
+    expect(cells[0]?.textContent).toContain("Video 0");
+    expect(cells[1]?.textContent).toContain("Video 1");
+    expect(cells[2]?.textContent).toContain("Advertise");
+    expect(cells[3]?.textContent).toContain("Video 2");
+    // The phone still shows its full shelf: ten videos plus the banner row.
+    expect(screen.getAllByTestId(/./).length).toBeGreaterThan(0);
+    expect(cells.filter((cell) => cell.querySelector("a[href^='/video/']"))).toHaveLength(MOBILE_SHELF_LIMIT);
+  });
+
   it("keeps the decorative Up Next shelf at eight cards on a phone too", async () => {
     stubViewport(true);
     render(<RecommendationShelf title="Up Next" surface="up_next" videos={videos} />);

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { PublicVideo } from "@/lib/public/catalog";
 import { ALGORITHM_VERSION, type RecommendationSurface } from "@/lib/recommendations/ranking";
 import PublicVideoCard from "./PublicVideoCard";
@@ -7,7 +7,18 @@ import FourRowVideoGrid from "./FourRowVideoGrid";
 import { UP_NEXT_VIDEO_LIMIT } from "@/lib/public/shelf";
 
 type Item = PublicVideo & { category_id?: string | null; like_count?: number; reason?: string; score?: number };
-type Props = { title: string; videos: Item[]; surface: RecommendationSurface; correlationId?: string; algorithmVersion?: string; trackEvents?: boolean };
+type Props = {
+  title: string;
+  videos: Item[];
+  surface: RecommendationSurface;
+  correlationId?: string;
+  algorithmVersion?: string;
+  trackEvents?: boolean;
+  /** Optional mobile-only placement rendered inside the grid. */
+  mobileAd?: ReactNode;
+  /** Number of cards before that placement (ignored without `mobileAd`). */
+  mobileAdAfter?: number;
+};
 
 function id() {
   try { return crypto.randomUUID(); } catch {
@@ -18,7 +29,16 @@ function id() {
   }
 }
 
-export default function RecommendationShelf({ title, videos, surface, correlationId, algorithmVersion = ALGORITHM_VERSION, trackEvents = true }: Props) {
+export default function RecommendationShelf({
+  title,
+  videos,
+  surface,
+  correlationId,
+  algorithmVersion = ALGORITHM_VERSION,
+  trackEvents = true,
+  mobileAd,
+  mobileAdAfter,
+}: Props) {
   const sent = useRef(false);
   const lastCorrelation = useRef("");
   useEffect(() => {
@@ -52,7 +72,12 @@ export default function RecommendationShelf({ title, videos, surface, correlatio
     <section className="mt-8 border-t border-line pt-5" aria-label={title}>
       <h2 className="text-[15px] font-semibold">{title}</h2>
       {videos.length ? (
-        <FourRowVideoGrid className="video-grid mt-3.5 gap-4" columnCount={isUpNext ? 2 : undefined}>
+        <FourRowVideoGrid
+          className="video-grid mt-3.5 gap-4"
+          columnCount={isUpNext ? 2 : undefined}
+          mobileAd={mobileAd}
+          mobileAdAfter={mobileAdAfter}
+        >
           {displayVideos.map((video) => (
             <div key={video.id} className="min-w-0">
               <PublicVideoCard video={video} onClick={() => {
