@@ -176,11 +176,11 @@ migrations remain for audit compatibility only.
 ### 1. Publish the authoritative payment artwork and PayPal page
 
 The checkout's fixed right-hand panel shows the operator-supplied artwork:
-`https://drive.google.com/file/d/1l1dIKZHIXguLYPmJ0QpAWEe6eHkRYsNq/view?usp=sharing`
+`https://ibb.co/MDYm8xJ8` (direct image: `https://i.ibb.co/SXhzQ4ZQ/Untitled-Design-18-1.png`)
 
-It is referenced through `NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` (default: the Drive
-thumbnail for that file) with `public/paypal-qr.png` served as `/paypal-qr.png` as the
-bundled fallback. Download the artwork into `public/` and point the variable at that local
+It is referenced through `NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL` (default: that direct
+image URL) with `public/paypal-qr.png` served as `/paypal-qr.png` as the bundled
+fallback. Download the artwork into `public/` and point the variable at that local
 file if you prefer not to depend on Google Drive at runtime. Do not accept an image URL or
 payment destination from a checkout visitor.
 

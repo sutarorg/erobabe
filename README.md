@@ -92,8 +92,9 @@ billing modal, or dashboard is involved. The checkout is a three-step wizard in 
 panel — **Ads Details** (the ten 16:9 placements, five per row, with sold slots showing the
 running creative and locked), **Advertiser details** (16:9 banner upload, destination URL,
 name, company, email, ad name, about), then **Payment** — while the right panel stays
-fixed on the advertiser payment artwork (`NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL`, bundled
-`public/paypal-qr.png` fallback). Prices are recalculated from `ad_slots` on the server.
+fixed on the advertiser payment artwork (`NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL`,
+bundled `public/paypal-qr.png` fallback). Up to ten 16:9 placements are listed two
+columns by five rows. Prices are recalculated from `ad_slots` on the server.
 Paying writes an `in_review` order and hands the visitor to the hosted PayPal page
 (`https://www.paypal.com/ncp/payment/AZP63KXT9FUNL`). PayPal returns them to the
 homepage, where the compact **In review** card animates in, holds for ten seconds and

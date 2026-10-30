@@ -11,10 +11,10 @@
 /** Hosted PayPal payment page for one 1-month 16:9 advertising placement. */
 export const PAYPAL_PAYMENT_URL = "https://www.paypal.com/ncp/payment/AZP63KXT9FUNL";
 
-/** The artwork shown in the fixed checkout panel (advertiser payment QR). */
+/** The artwork shown in the fixed checkout panel (advertiser payment artwork). */
 export const PAYMENT_PANEL_IMAGE_URL =
   process.env.NEXT_PUBLIC_PAYMENT_PANEL_IMAGE_URL ||
-  "https://drive.google.com/thumbnail?id=1l1dIKZHIXguLYPmJ0QpAWEe6eHkRYsNq&sz=w1400";
+  "https://i.ibb.co/SXhzQ4ZQ/Untitled-Design-18-1.png";
 
 /** Bundled fallback if the hosted artwork cannot be reached. */
 export const PAYMENT_PANEL_IMAGE_FALLBACK = "/paypal-qr.png";
