@@ -32,7 +32,7 @@ describe("ThumbImage", () => {
   });
 
   it("asks this origin's poster proxy for a catalog poster", () => {
-    const source = "https://ei.phncdn.com/videos/202401/01/1/original.jpg";
+    const source = "https://video.damplips.com/pics/2026/10/1.jpg";
     render(<ThumbImage src={source} alt="Clip" />);
     const image = screen.getByAltText("Clip") as HTMLImageElement;
     expect(image.getAttribute("src")).toBe(
@@ -43,7 +43,7 @@ describe("ThumbImage", () => {
   });
 
   it("falls back to the CDN URL when the proxy misses", () => {
-    const source = "https://ei.phncdn.com/videos/202401/01/1/original.jpg";
+    const source = "https://video.damplips.com/pics/2026/10/1.jpg";
     render(<ThumbImage src={source} alt="Clip" />);
     const image = screen.getByAltText("Clip") as HTMLImageElement;
 

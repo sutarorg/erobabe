@@ -75,9 +75,7 @@ function carouselCopySummary(report: CarouselCopyReport | null): string {
 
 /** Human label for the catalog source of a row. */
 function providerLabel(provider?: string | null): string {
-  if (provider === "pornhub") return "Pornhub";
-  // Rows imported before the Pornhub migration keep their source label.
-  if (provider === "damplips") return "Legacy damplips";
+  if (provider === "damplips") return "damplips";
   if (provider === "direct_url") return "Direct link";
   if (provider === "embed") return "Embed";
   if (!provider) return "Unknown source";
@@ -744,7 +742,7 @@ export default function VideoManager({
       </ul>
       {!filtered.length && (
         <p className="mt-6 rounded-lg border border-dashed border-line bg-pcard p-8 text-center text-[12px] text-ink-3">
-          No videos match this view. Run the Pornhub import to fill the catalog.
+          No videos match this view. Run the damplips import to fill the catalog.
         </p>
       )}
     </div>

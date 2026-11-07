@@ -68,7 +68,8 @@ describe("retired video providers have no active integration", () => {
     expect(manager).not.toContain("/api/videos/storage-token");
   });
 
-  it("retires damplips as a source and embeds Pornhub for every new catalog row", () => {
+  it("imports from damplips and keeps no Pornhub integration anywhere", () => {
+    // The retired upload provider's tables stay dropped.
     const retired = readFileSync(
       "supabase/migrations/00000000000026_damplips_embeds.sql",
       "utf8",
@@ -76,25 +77,48 @@ describe("retired video providers have no active integration", () => {
     expect(retired).toContain("drop table if exists public.bunny_uploads");
     expect(retired).toContain("drop table if exists public.upload_jobs");
 
-    // damplips keeps its provider value (old rows still play) but is no longer
-    // the default and no longer has an importer of its own.
-    const current = readFileSync(
-      "supabase/migrations/00000000000029_pornhub_embeds.sql",
-      "utf8",
-    );
-    expect(current).toContain("set default 'pornhub'");
-    for (const retiredSource of [
+    // damplips is the source again: importer, panel, routes, cron and workflow
+    // all exist, and the catalog migration makes damplips the default provider.
+    for (const source of [
       "lib/damplips/importer.ts",
       "lib/damplips/categories.ts",
       "lib/damplips/client.ts",
-      "app/api/admin/damplips",
-      "app/api/cron/damplips-import",
+      "lib/damplips/parse.ts",
+      "app/api/admin/damplips/import/route.ts",
+      "app/api/cron/damplips-import/route.ts",
       "app/admin/(dashboard)/videos/DamplipsImportPanel.tsx",
       ".github/workflows/damplips-nightly-import.yml",
     ]) {
-      expect(existsSync(retiredSource), retiredSource).toBe(false);
+      expect(existsSync(source), source).toBe(true);
     }
-    // The parser survives only to resolve a legacy row's stored media URL.
-    expect(existsSync("lib/damplips/parse.ts")).toBe(true);
+    const current = readFileSync(
+      "supabase/migrations/00000000000030_damplips_catalog.sql",
+      "utf8",
+    );
+    expect(current).toContain("set default 'damplips'");
+
+    // Nothing of the Pornhub round survives: no code, routes, migration,
+    // workflow or environment variable mentions the host.
+    const host = ["porn", "hub"].join("");
+    expect(existsSync(`lib/${host}`)).toBe(false);
+    expect(existsSync(`app/api/admin/${host}`)).toBe(false);
+    expect(existsSync(`app/api/cron/${host}-import`)).toBe(false);
+    expect(existsSync(`.github/workflows/${host}-nightly-import.yml`)).toBe(false);
+    expect(existsSync(`docs/${host.toUpperCase()}_EMBEDS.md`)).toBe(false);
+
+    const scanned = [
+      ...sources("app"),
+      ...sources("lib"),
+      ...sources("src"),
+      ...sources("scripts"),
+      ".env.example",
+      "next.config.mjs",
+    ];
+    for (const file of scanned) {
+      if (!existsSync(file)) continue;
+      const text = readFileSync(file, "utf8").toLowerCase();
+      expect(text, file).not.toContain(host);
+      expect(text, file).not.toContain("phncdn");
+    }
   });
 });

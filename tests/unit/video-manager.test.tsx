@@ -10,8 +10,7 @@ import VideoManager, {
 } from "@/app/admin/(dashboard)/videos/VideoManager";
 
 /**
- * Admin videos page: the library is embedded (Pornhub today, damplips before
- * that), so there is no
+ * Admin videos page: the library is imported from damplips, so there is no
  * upload path here. These tests cover curation only — poster edits, carousel
  * placement, publishing and deletion, including the destructive requests.
  */
@@ -50,7 +49,7 @@ describe("VideoManager", () => {
   it("lists the video with its thumbnail, category, and source", () => {
     render(<VideoManager initialVideos={[VIDEO]} />);
     expect(screen.getByText("Evening in Velvet")).toBeTruthy();
-    expect(screen.getByText(/Boudoir · Legacy damplips/)).toBeTruthy();
+    expect(screen.getByText(/Boudoir · damplips/)).toBeTruthy();
     // The admin table asks this origin's poster proxy for the picture, the same
     // way the public grid does — a blocked CDN must not blank the row here.
     expect(

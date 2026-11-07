@@ -4,8 +4,7 @@
  * A poster is a remote image on an adult CDN, and there are three ordinary
  * reasons a browser fails to show one:
  *
- *  1. **Ad blockers.** `phncdn.com` (and `damplips.com` before it) is on the
- *     block lists, so a perfectly valid `<img src="https://…phncdn.com/…">`
+ *  1. **Ad blockers.** `damplips.com` is on the block lists, so a perfectly valid `<img src="https://…damplips.com/…">`
  *     never leaves the page. The card is a blank box.
  *  2. **Hotlink protection.** Some poster paths only answer a request that
  *     carries the site's own referer, and answer a foreign one with 403.
@@ -28,7 +27,7 @@
 export const POSTER_PROXY_PATH = "/api/videos/poster";
 
 /** Hosts whose posters may be proxied. Everything else is rendered as-is. */
-const POSTER_HOST_SUFFIXES = ["phncdn.com", "pornhub.com", "damplips.com"];
+const POSTER_HOST_SUFFIXES = ["damplips.com"];
 
 const IMAGE_PATH = /\.(jpe?g|png|webp|avif|gif)$/i;
 

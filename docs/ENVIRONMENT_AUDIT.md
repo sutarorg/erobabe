@@ -2,8 +2,8 @@
 
 > **Historical document (superseded 2026-10-27).** Video uploads and Bunny
 > Stream are retired. This file is kept for provenance; read
-> `docs/PORNHUB_EMBEDS.md` for the current catalog flow (Pornhub embeds,
-> **Admin → Videos → Import from Pornhub**, `/api/videos/stream` for legacy rows).
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips imports,
+> **Admin → Videos → tick categories → Start**, `/api/videos/stream` for playback).
 
 No real credentials were read, written or verified. `.env.example` contains placeholders only. Required below means required for that workflow, not proof that its production account is approved.
 

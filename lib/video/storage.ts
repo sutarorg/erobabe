@@ -5,7 +5,7 @@ import type { ServiceClient } from "@/lib/video/publishing";
 /**
  * Image storage for the admin-managed artwork (category cards and legacy
  * posters). Video bytes never pass through this app any more: the catalog is
- * embedded from damplips, so there is no upload target to issue.
+ * imported from damplips, so there is no upload target to issue.
  */
 
 export const THUMBNAIL_BUCKET = "video-thumbnails";

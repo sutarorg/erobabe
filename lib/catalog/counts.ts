@@ -58,8 +58,7 @@ async function countCategoryVideos(
   liveOnly: boolean,
 ): Promise<number> {
   // No provider filter on purpose: the number the operator sees must be the
-  // number a visitor sees, whether the row was embedded from Pornhub today or
-  // imported from damplips before that source was retired.
+  // number a visitor sees, whatever source a row came from.
   const filters = (query: Record<string, any>) => {
     const scoped = query.eq("category_id", categoryId);
     return liveOnly ? playableFilter(scoped) : scoped;

@@ -2,8 +2,8 @@
 
 > **Historical document (superseded 2026-10-27).** Video uploads and Bunny
 > Stream are retired. This file is kept for provenance; read
-> `docs/PORNHUB_EMBEDS.md` for the current catalog flow (Pornhub embeds,
-> **Admin → Videos → Import from Pornhub**, `/api/videos/stream` for legacy rows).
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips imports,
+> **Admin → Videos → tick categories → Start**, `/api/videos/stream` for playback).
 
 **Current version:** `erobabe-rec-v1` · **Scope:** production public catalog · **Weights:** initial engineering hypotheses, not fitted or research-optimal. See `RECOMMENDATION_RESEARCH.md` and `RECOMMENDATION_AUDIT.md`.
 

@@ -25,12 +25,9 @@ const nextConfig = {
       { protocol: 'https', hostname: 'i.postimg.cc' },
       { protocol: 'https', hostname: 'images.pexels.com' },
       { protocol: 'https', hostname: '**.supabase.co' },
-      // Pornhub catalog: posters come from its image CDN. The browser asks
-      // /api/videos/poster for them, but listing the hosts here keeps
-      // next/image usable for a poster without a config change.
-      { protocol: 'https', hostname: 'pornhub.com' },
-      { protocol: 'https', hostname: '**.phncdn.com' },
-      // Damplips hosts stay listed for legacy rows imported before Pornhub.
+      // damplips catalog: posters and media come from its hosts. The browser
+      // asks /api/videos/poster for a poster, but listing the hosts here keeps
+      // next/image usable without a config change.
       { protocol: 'https', hostname: 'damplips.com' },
       { protocol: 'https', hostname: '**.damplips.com' },
       { protocol: 'https', hostname: '**.resend.com' },

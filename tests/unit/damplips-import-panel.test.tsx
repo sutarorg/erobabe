@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import PornhubImportPanel from "@/app/admin/(dashboard)/videos/PornhubImportPanel";
+import DamplipsImportPanel from "@/app/admin/(dashboard)/videos/DamplipsImportPanel";
 import type { CategoryCount } from "@/lib/catalog/counts";
 
 /**
@@ -8,7 +8,7 @@ import type { CategoryCount } from "@/lib/catalog/counts";
  *
  *  - it offers the categories, with their real published counts;
  *  - one press starts a run that only the Stop button ends: when a category has
- *    walked every search, another pass begins instead of the run finishing;
+ *    walked every listing, another pass begins instead of the run finishing;
  *  - Stop ends the run without losing what was already imported.
  */
 
@@ -24,11 +24,7 @@ const COUNTS: CategoryCount[] = [
 const FAST = { slicePauseMs: 1, roundPauseMs: 1, maxRoundPauseMs: 4 };
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
-  return {
-    ok,
-    status,
-    json: async () => body,
-  } as unknown as Response;
+  return { ok, status, json: async () => body } as unknown as Response;
 }
 
 function report(overrides: Record<string, unknown> = {}) {
@@ -38,11 +34,14 @@ function report(overrides: Record<string, unknown> = {}) {
       imported: 10,
       duplicates: 5,
       repaired: 0,
-      pagesRead: 4,
-      cursor: { source: 0, page: 5 },
+      pagesRead: 2,
+      postsRead: 8,
+      cursor: { source: 0, page: 2, skip: 0, url: "https://www.damplips.com/most-popular/page/2/" },
       exhausted: false,
       errors: [],
-      skipped: { notHd: 0, unknownQuality: 0, short: 0, noThumbnail: 0, failed: 0 },
+      skipped: { missingMedia: 0, missingThumbnail: 0, short: 0, failed: 0 },
+      sources: [],
+      samples: [],
       ...overrides,
     },
   };
@@ -50,8 +49,7 @@ function report(overrides: Record<string, unknown> = {}) {
 
 /** Ends the run so a leaked endless loop cannot pollute the next test. */
 async function stopRun() {
-  const stop = screen.getByRole("button", { name: /stop/i });
-  fireEvent.click(stop);
+  fireEvent.click(screen.getByRole("button", { name: /stop/i }));
   await waitFor(() => expect(screen.getByRole("button", { name: /start import/i })).toBeTruthy());
 }
 
@@ -63,9 +61,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("PornhubImportPanel", () => {
+describe("DamplipsImportPanel", () => {
   it("lists every category with its published count and no quota field", () => {
-    render(<PornhubImportPanel counts={COUNTS} />);
+    render(<DamplipsImportPanel counts={COUNTS} />);
     expect(screen.getByText("Amateur")).toBeTruthy();
     expect(screen.getByText("POV")).toBeTruthy();
     expect(screen.getByText("42")).toBeTruthy();
@@ -73,61 +71,66 @@ describe("PornhubImportPanel", () => {
     // such thing to ask for.
     expect(screen.queryByLabelText(/videos per category/i)).toBeNull();
     expect(screen.getByRole("button", { name: /start import/i })).toBeTruthy();
-    // Popular videos are the promise the panel makes.
-    expect(screen.getByText(/most\s+viewed first/i)).toBeTruthy();
+    // Popular listings are the promise the panel makes.
+    expect(screen.getByText(/popular listings first/i)).toBeTruthy();
   });
 
-  it("keeps chaining slices from the cursor each one returns", async () => {
+  it("chains slices from the cursor each one returns", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(report({ imported: 10 })))
-      .mockResolvedValueOnce(jsonResponse(report({ imported: 4, cursor: { source: 0, page: 9 } })))
+      .mockResolvedValueOnce(
+        jsonResponse(report({ imported: 4, cursor: { source: 1, page: 3, skip: 2 } })),
+      )
       .mockImplementation(() => new Promise<Response>(() => {}));
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<PornhubImportPanel counts={[COUNTS[0]]} {...FAST} />);
+    render(<DamplipsImportPanel counts={[COUNTS[0]]} {...FAST} />);
     fireEvent.click(screen.getByRole("button", { name: /start import/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     const bodies = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body));
-    expect(bodies[0].cursor).toEqual({ source: 0, page: 1 });
-    expect(bodies[1].cursor).toEqual({ source: 0, page: 5 });
-    expect(bodies[2].cursor).toEqual({ source: 0, page: 9 });
+    expect(bodies[0].cursor).toEqual({ source: 0, page: 1, skip: 0 });
+    expect(bodies[1].cursor).toEqual({
+      source: 0,
+      page: 2,
+      skip: 0,
+      url: "https://www.damplips.com/most-popular/page/2/",
+    });
+    expect(bodies[2].cursor).toEqual({ source: 1, page: 3, skip: 2 });
     // Nothing in the payload asks for a capped number of videos.
     expect(bodies[0]).not.toHaveProperty("perCategory");
     expect(bodies[0]).not.toHaveProperty("limit");
     // The first slice of a run also asks the server to repair stored posters.
     expect(bodies[0].repair).toBe(true);
     expect(bodies[2].repair).toBe(false);
-
     await waitFor(() => expect(screen.getAllByText(/\+14 new/).length).toBeGreaterThan(0));
   });
 
-  it("starts another pass instead of finishing when every search has been walked", async () => {
+  it("starts another pass instead of finishing when every listing has been walked", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(report({ imported: 3, exhausted: true })))
       .mockResolvedValueOnce(
-        jsonResponse(report({ imported: 7, exhausted: false, cursor: { source: 1, page: 2 } })),
+        jsonResponse(report({ imported: 7, exhausted: false, cursor: { source: 2, page: 1, skip: 0 } })),
       )
       .mockResolvedValue(
-        jsonResponse(report({ imported: 0, exhausted: false, cursor: { source: 2, page: 3 } })),
+        jsonResponse(report({ imported: 0, exhausted: false, cursor: { source: 3, page: 1, skip: 0 } })),
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<PornhubImportPanel counts={[COUNTS[0]]} {...FAST} />);
+    render(<DamplipsImportPanel counts={[COUNTS[0]]} {...FAST} />);
     fireEvent.click(screen.getByRole("button", { name: /start import/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
 
     const bodies = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body));
-    // The second pass starts from the top of the search plan again.
-    expect(bodies[1].cursor).toEqual({ source: 0, page: 1 });
+    // The second pass starts at the top of the plan again.
+    expect(bodies[1].cursor).toEqual({ source: 0, page: 1, skip: 0 });
     // Stop is still offered: the run is alive, not finished.
     expect(screen.getByRole("button", { name: /stop/i })).toBeTruthy();
 
     await stopRun();
-    // The category reports the pass it is on rather than "search exhausted".
     expect(screen.getByText(/pass 2/)).toBeTruthy();
   });
 
@@ -135,7 +138,7 @@ describe("PornhubImportPanel", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(report({ imported: 0, exhausted: true })));
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<PornhubImportPanel counts={[COUNTS[0]]} {...FAST} />);
+    render(<DamplipsImportPanel counts={[COUNTS[0]]} {...FAST} />);
     fireEvent.click(screen.getByRole("button", { name: /start import/i }));
 
     // Four empty passes and still asking: only Stop ends it.
@@ -150,13 +153,14 @@ describe("PornhubImportPanel", () => {
       .fn()
       .mockResolvedValueOnce(jsonResponse(report()))
       .mockImplementationOnce(
-        () => new Promise<Response>((resolve) => {
-          released = resolve;
-        }),
+        () =>
+          new Promise<Response>((resolve) => {
+            released = resolve;
+          }),
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<PornhubImportPanel counts={[COUNTS[0]]} {...FAST} />);
+    render(<DamplipsImportPanel counts={[COUNTS[0]]} {...FAST} />);
     fireEvent.click(screen.getByRole("button", { name: /start import/i }));
 
     const stop = await screen.findByRole("button", { name: /stop/i });
@@ -173,9 +177,8 @@ describe("PornhubImportPanel", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(report({ imported: 0, exhausted: true })));
     vi.stubGlobal("fetch", fetchMock);
 
-    // A long round pause: the run is waiting when Stop is pressed.
     render(
-      <PornhubImportPanel
+      <DamplipsImportPanel
         counts={[COUNTS[0]]}
         slicePauseMs={1}
         roundPauseMs={5_000}
@@ -192,21 +195,15 @@ describe("PornhubImportPanel", () => {
   });
 
   it("advances every selected category, not just the first one", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(async (_url: string, init: { body: string }) => {
-        const body = JSON.parse(init.body);
-        return jsonResponse(
-          report({
-            category: body.category,
-            imported: 1,
-            cursor: { source: 0, page: 2 },
-          }),
-        );
-      });
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body);
+      return jsonResponse(
+        report({ category: body.category, imported: 1, cursor: { source: 0, page: 2, skip: 0 } }),
+      );
+    });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<PornhubImportPanel counts={COUNTS} {...FAST} />);
+    render(<DamplipsImportPanel counts={COUNTS} {...FAST} />);
     fireEvent.click(screen.getByRole("button", { name: /start import/i }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
@@ -215,34 +212,57 @@ describe("PornhubImportPanel", () => {
     await stopRun();
   });
 
-  it("surfaces a server error and stops the run", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        jsonResponse(
-          {
-            error:
-              "Pornhub refused the request from this server (HTTP 403). The import needs an egress address Pornhub serves to browsers.",
-          },
-          false,
-          503,
-        ),
-      ),
-    );
+  it("keeps the run alive through a refused or throttled answer", async () => {
+    // damplips answering 429/503 is transient, not a reason to end the run the
+    // operator asked to keep going until Stop.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ error: "damplips responded 429" }, false, 429))
+      .mockResolvedValue(jsonResponse(report({ imported: 2 })));
+    vi.stubGlobal("fetch", fetchMock);
 
-    render(<PornhubImportPanel counts={[COUNTS[0]]} {...FAST} />);
+    render(
+      <DamplipsImportPanel
+        counts={[COUNTS[0]]}
+        slicePauseMs={1}
+        roundPauseMs={30}
+        maxRoundPauseMs={30}
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: /start import/i }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("HTTP 403");
-    expect(screen.getByRole("button", { name: /start import/i })).toBeTruthy();
+    expect(alert.textContent).toContain("429");
+    expect(alert.textContent).toMatch(/retrying/i);
+
+    // It retries the same slice, and the run continues afterwards.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    const [first, second] = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body));
+    expect(second.cursor).toEqual(first.cursor);
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(screen.getByRole("button", { name: /stop/i })).toBeTruthy();
+    await stopRun();
+  });
+
+  it("stops when the admin session has expired, because retrying cannot fix it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ error: "Unauthorized" }, false, 401)),
+    );
+
+    render(<DamplipsImportPanel counts={[COUNTS[0]]} {...FAST} />);
+    fireEvent.click(screen.getByRole("button", { name: /start import/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Unauthorized");
+    await waitFor(() => expect(screen.getByRole("button", { name: /start import/i })).toBeTruthy());
   });
 
   it("stages imports as drafts when the operator asks for review", async () => {
     const fetchMock = vi.fn().mockImplementation(() => new Promise<Response>(() => {}));
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<PornhubImportPanel counts={[COUNTS[0]]} {...FAST} />);
+    render(<DamplipsImportPanel counts={[COUNTS[0]]} {...FAST} />);
     fireEvent.click(screen.getByLabelText(/stage as private drafts/i));
     fireEvent.click(screen.getByRole("button", { name: /start import/i }));
 
@@ -250,8 +270,8 @@ describe("PornhubImportPanel", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).rightsStatus).toBe("pending");
   });
 
-  it("explains what to apply when the counts could not be read", () => {
-    render(<PornhubImportPanel counts={[]} />);
-    expect(screen.getByText(/00000000000029_pornhub_embeds\.sql/)).toBeTruthy();
+  it("explains what to fix when the counts could not be read", () => {
+    render(<DamplipsImportPanel counts={[]} />);
+    expect(screen.getByText(/categories table/i)).toBeTruthy();
   });
 });

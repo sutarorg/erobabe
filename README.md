@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Next.js application under production-readiness review with Supabase backend, guest PayPal advertising checkout, a video catalog embedded from Pornhub, Resend email, AI metadata (NVIDIA Nemotron 3 Ultra free route via OpenRouter), and SEO optimization.
+Next.js application under production-readiness review with Supabase backend, guest PayPal advertising checkout, a video catalog imported from damplips.com, Resend email, AI metadata (NVIDIA Nemotron 3 Ultra free route via OpenRouter), and SEO optimization.
 
 ## Quick Start
 
@@ -32,69 +32,68 @@ Open http://localhost:3000
 - PayPal QR checkout with manual staff payment verification
 - Resend (transactional email)
 - OpenRouter API, NVIDIA Nemotron 3 Ultra (free route; server-generated video metadata)
-- Pornhub embeds (`https://www.pornhub.com/embed/<viewkey>`), plus legacy damplips playback through a same-origin proxy and `hls.js`
+- damplips.com catalogue (imported media files, played in our own player), with `/api/videos/stream` and `/api/videos/stream-edge` proxies and `hls.js`
 - Tailwind CSS 4
 
-## Video Catalog — Pornhub embeds
+## Video Catalog — imported from damplips.com
 
-There are no uploads any more. `app/admin/(dashboard)/videos/upload`, the Bunny
-Stream adapter, its API routes and the publish-sweep cron were removed, and
-migration `00000000000026_damplips_embeds.sql` drops the upload tables and the
-Bunny library column.
+There are no uploads. `app/admin/(dashboard)/videos/upload`, the Bunny Stream
+adapter, its API routes and the publish-sweep cron were removed, and migration
+`00000000000026_damplips_embeds.sql` drops the upload tables and the Bunny
+library column.
 
-The catalog is filled from **Pornhub**. An operator ticks categories at
-**Admin → Videos → Import from Pornhub** and presses one button; for every
-selected category the importer types that category's name into Pornhub's own
-search, pages through the results and stores the title, poster, duration and the
-video's `viewkey`. The watch page then frames Pornhub's own player at
-`https://www.pornhub.com/embed/<viewkey>` — nothing is copied, re-hosted or
-transcoded.
+The catalogue is filled from **damplips.com**. An operator ticks categories at
+**Admin → Videos** and presses **Start import**. For every selected category the
+importer walks that category's popular listings first, then its other listing
+pages, then a search for the category name, and stores the post id, title,
+poster, duration, view count and the media file the post page publishes. The
+watch page plays that file in our own player (`/api/videos/stream-edge`); the
+damplips page itself is never framed.
 
 What a run does:
 
-* **Popular first.** Each category is searched in Pornhub's own sort orders —
-  most viewed, then top rated, then most commented, then its relevance order —
-  and the videos of one page are written in view order. A half-filled category
-  already looks like the category, and every row stores the real view count.
-* **Only Stop ends it.** The run never finishes on its own. When every search of
-  a category has been walked, the panel waits (a minute, doubling while passes
-  come back empty) and starts another pass, picking up whatever Pornhub has
-  published since. Pressing Stop ends it after the slice in flight.
+* **Popular first.** Each category starts with damplips' own popular ordering
+  and only then falls back to its other listings and to search, so a half-filled
+  category already looks like the category. Every row stores the real view count
+  and the grid can sort on it.
+* **Only Stop ends it.** A run never finishes on its own. When every listing of
+  a category has been walked (the report says `exhausted`), the panel waits — a
+  minute, doubling while passes come back empty, capped at ten — and starts
+  another pass, picking up whatever damplips has published since. Throttled or
+  empty answers pause the run rather than end it. Pressing Stop ends it after
+  the slice in flight.
 * **No quota.** There is no "videos per category" field and no ceiling. The
   dashboard asks the server for one slice at a time and continues from the
-  cursor each slice returns, so no single request outlives its timeout.
-* **No duplicates.** The viewkey is the identity. It is checked against the
-  rows already in the catalog, against the rows of the current run, and finally
-  by the unique index `videos_pornhub_identity_idx`, so two runs racing on the
-  same result page cannot both insert the same video.
-* **High quality only.** A video is imported when Pornhub marks it HD. When a
-  listing carries no HD badge at all (markup change), the importer reads the
-  watch page and imports only videos that serve 720p or better, recording
-  `quality` (`HD`/`4K`) and `resolution` (`1080p`, …).
-* **Posters included, and served by us.** A card without a thumbnail is resolved
-  from its watch page rather than imported blank, and every card asks
-  `/api/videos/poster` for the picture instead of the CDN: adult image CDNs are
-  on the ad-block lists and some paths hotlink-protect a foreign referer, which
-  is exactly how a grid ends up full of empty boxes. The proxy is
-  allowlist-only, image-only, size-capped and cached for a year.
-* **Resumable and polite.** A short pause sits between page reads, and a phrase
-  that only returns videos already in the catalog is abandoned after a dozen
-  pages in favour of the next phrase.
+  cursor each slice returns, so no single request outlives its timeout. The
+  cursor carries the resolved listing URL, so uneven damplips pagination
+  (`rel=next`, `/page/N/`, `?paged=N`) never has to be guessed.
+* **No duplicates.** The damplips post id is the identity. It is claimed for the
+  run before anything is fetched twice, checked against the rows already in the
+  catalogue, and finally enforced by the unique index
+  `videos_damplips_identity_idx`, so two runs racing on the same listing cannot
+  both insert the same video.
+* **High quality.** A post is imported when it advertises a real media file and
+  a duration of at least a minute; the tallest rendition the page advertises is
+  what gets stored. A post without a usable file is skipped, not imported blank.
+* **Posters included, and served by us.** A post without a usable poster is
+  skipped, and rows stored before the poster rule are repaired by the first
+  slice of a run (`repair`). Every card then asks `/api/videos/poster` for the
+  picture instead of the CDN: adult image CDNs are on the ad-block lists and
+  some paths hotlink-protect a foreign referer, which is exactly how a grid ends
+  up full of empty boxes. The proxy is allowlist-only (`damplips.com`),
+  image-only, size-capped and cached for a year.
+* **Resumable and polite.** A short pause sits between requests; the cursor is
+  what makes a run resumable, so a closed tab loses at most one slice.
 
-The same job runs nightly through `GET /api/cron/pornhub-import?category=<slug>`
-(Bearer `CRON_SECRET`); `.github/workflows/pornhub-nightly-import.yml` calls it
-for every category until it reports `exhausted`. Imported rows are written as
-published and public with `rights_status = 'cleared'` so the category is
-immediately visible; the panel's **Stage as private drafts** option stages them
-as private `pending_review` rows instead. Use the existing DMCA / content-removal
-pages as the takedown path for embedded content.
+The same job runs nightly through `GET /api/cron/damplips-import` (Bearer
+`CRON_SECRET`); `.github/workflows/damplips-nightly-import.yml` calls it, and the
+route loops slices on its own until the plan has been walked or its time budget
+runs out. Imported rows are written as published and public with
+`rights_status = 'cleared'` so the category is immediately visible; the panel's
+**Stage as private drafts** option stages them as private `pending_review` rows
+instead. Use the existing DMCA / content-removal pages as the takedown path.
 
-Legacy rows imported from damplips still play: a stored direct host file is
-streamed by our own player (with `/api/videos/stream` as the proxy fallback and
-for HLS playlists whose segments have to be rewritten). Nothing in that path
-imports anything new.
-
-See `docs/PORNHUB_EMBEDS.md` for the full behaviour and limits.
+See `docs/DAMPLIPS_EMBEDS.md` for the full behaviour and limits.
 
 ## Homepage carousel
 

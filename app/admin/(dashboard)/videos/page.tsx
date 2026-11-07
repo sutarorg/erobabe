@@ -1,7 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import Link from "next/link";
 import { categoryCounts, type ImportService } from "@/lib/catalog/counts";
-import PornhubImportPanel from "./PornhubImportPanel";
+import DamplipsImportPanel from "./DamplipsImportPanel";
 import VideoManager, {
   type AdminCategory,
   type AdminVideo,
@@ -90,7 +90,7 @@ export default async function AdminVideosPage() {
         <div>
           <h1 className="text-[20px] font-semibold">Videos</h1>
           <p className="mt-1 text-[12px] text-ink-3">
-            Every video in the library is embedded from Pornhub — nothing is
+            Every video in the library is imported from damplips — nothing is
             uploaded here. Curate the catalog: replace a poster, publish or hide
             a video, place it in the homepage carousel, or remove it.{" "}
             {rows.length > 0 && (
@@ -109,14 +109,14 @@ export default async function AdminVideosPage() {
         </Link>
       </div>
 
-      <PornhubImportPanel counts={counts} />
+      <DamplipsImportPanel counts={counts} />
 
       {rows.length === 0 ? (
         <div className="mt-8 rounded-lg border border-dashed border-line bg-pcard p-12 text-center">
           <p className="text-[14px] font-medium">No videos in the library yet</p>
           <p className="mt-1 text-[12px] text-ink-3">
             Pick categories in the import panel above and start a run to fill
-            them with embedded videos.
+            them with videos.
           </p>
         </div>
       ) : (

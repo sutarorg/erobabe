@@ -89,31 +89,26 @@ describe("validated stored playback", () => {
     ).toBe("unsupported");
   });
 
-  it("frames Pornhub's own embed player for an imported row", () => {
-    // The importer stores this exact URL; the watch page must hand it to the
-    // iframe, not to the <video> element.
+  it("plays a damplips media file in our own player, not in a frame", () => {
+    // The importer stores this exact URL; the watch page streams it through our
+    // own element, so the visitor gets our poster and our analytics.
     expect(
-      selectPlaybackSource(null, "https://www.pornhub.com/embed/68a1b2c3d4e5f", "pornhub"),
-    ).toEqual({ kind: "embed", url: "https://www.pornhub.com/embed/68a1b2c3d4e5f" });
+      selectPlaybackSource("https://video.damplips.com/video7/717/79.mp4", null, "damplips"),
+    ).toEqual({ kind: "direct", url: "https://video.damplips.com/video7/717/79.mp4" });
   });
 
-  it("accepts the bare pornhub.com host but nothing off the embed path", () => {
+  it("treats a damplips post page stored as an embed as our own direct source", () => {
+    // damplips never allows its pages to be framed, and its post pages resolve
+    // to a real file: the stream proxy plays them in our player.
     expect(
-      selectPlaybackSource(null, "https://pornhub.com/embed/68a1b2c3d4e5f", "pornhub").kind,
-    ).toBe("embed");
-    // A watch page, a search page or a lookalike host is never framed.
+      selectPlaybackSource(null, "https://www.damplips.com/p/67284/", "damplips").kind,
+    ).toBe("direct");
     expect(
-      selectPlaybackSource(
-        null,
-        "https://www.pornhub.com/view_video.php?viewkey=68a1b2c3d4e5f",
-        "pornhub",
-      ).kind,
-    ).toBe("unsupported");
+      selectPlaybackSource(null, "https://www.damplips.com/p/67284/", "damplips"),
+    ).toEqual({ kind: "direct", url: "https://www.damplips.com/p/67284/" });
+    // A foreign page is still never framed.
     expect(
-      selectPlaybackSource(null, "https://pornhub.evil.example/embed/68a1b2c3d4e5f").kind,
-    ).toBe("unsupported");
-    expect(
-      selectPlaybackSource(null, "https://www.pornhub.com/embed/68a1b2c3d4e5f?redirect=evil").kind,
+      selectPlaybackSource(null, "https://damplips.evil.example/p/67284/").kind,
     ).toBe("unsupported");
   });
 

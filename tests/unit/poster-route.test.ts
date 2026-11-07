@@ -18,7 +18,7 @@ function request(src: string | null): NextRequest {
   return new NextRequest(url);
 }
 
-function imageResponse(body = "binary", contentType = "image/jpeg", url = "https://ei.phncdn.com/videos/x.jpg") {
+function imageResponse(body = "binary", contentType = "image/jpeg", url = "https://video.damplips.com/pics/2026/10/67284.jpg") {
   return {
     ok: true,
     status: 200,
@@ -33,8 +33,8 @@ afterEach(() => {
 });
 
 describe("poster URLs", () => {
-  it("proxies a Pornhub CDN poster through this origin", () => {
-    const source = "https://ei.phncdn.com/videos/202401/01/123/original.jpg";
+  it("proxies a damplips CDN poster through this origin", () => {
+    const source = "https://video.damplips.com/pics/2026/10/67284.jpg";
     expect(proxiedPosterUrl(source)).toBe(
       `/api/videos/poster?src=${encodeURIComponent(source)}`,
     );
@@ -46,8 +46,9 @@ describe("poster URLs", () => {
 
   it("leaves other hosts, pages and non-https values alone", () => {
     expect(proxiedPosterUrl("https://cdn.example.com/a.jpg")).toBeNull();
-    expect(proxiedPosterUrl("https://www.pornhub.com/view_video.php?viewkey=abc12345")).toBeNull();
-    expect(proxiedPosterUrl("http://ei.phncdn.com/videos/a.jpg")).toBeNull();
+    expect(proxiedPosterUrl("https://www.damplips.com/p/67284/")).toBeNull();
+    expect(proxiedPosterUrl("http://video.damplips.com/pics/a.jpg")).toBeNull();
+    expect(proxiedPosterUrl("https://video.damplips.com/p/67284/")).toBeNull();
     expect(proxiedPosterUrl("javascript:alert(1)")).toBeNull();
     expect(proxiedPosterUrl("data:image/gif;base64,R0lGOD")).toBeNull();
     expect(proxiedPosterUrl(null)).toBeNull();
@@ -56,10 +57,16 @@ describe("poster URLs", () => {
     expect(posterSources(null)).toEqual([]);
   });
 
-  it("accepts legacy damplips posters too", () => {
+  it("accepts every damplips subdomain, and only damplips", () => {
     expect(posterProxyTarget("https://video.damplips.com/pics/thumb.jpg")?.hostname).toBe(
       "video.damplips.com",
     );
+    expect(posterProxyTarget("https://www.damplips.com/wp-content/uploads/a.jpg")?.hostname).toBe(
+      "www.damplips.com",
+    );
+    // A lookalike domain is not a damplips host.
+    expect(posterProxyTarget("https://notdamplips.com/pics/a.jpg")).toBeNull();
+    expect(posterProxyTarget("https://damplips.com.evil.example/a.jpg")).toBeNull();
   });
 });
 
@@ -68,7 +75,7 @@ describe("GET /api/videos/poster", () => {
     const fetchMock = vi.fn().mockResolvedValue(imageResponse("jpeg-bytes"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await GET(request("https://ei.phncdn.com/videos/x.jpg"));
+    const response = await GET(request("https://video.damplips.com/pics/2026/10/67284.jpg"));
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/jpeg");
@@ -77,8 +84,8 @@ describe("GET /api/videos/poster", () => {
 
     // The upstream request carries the referer the CDN expects.
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("https://ei.phncdn.com/videos/x.jpg");
-    expect(init.headers.referer).toBe("https://www.pornhub.com/");
+    expect(url).toBe("https://video.damplips.com/pics/2026/10/67284.jpg");
+    expect(init.headers.referer).toBe("https://www.damplips.com/");
     expect(init.headers["user-agent"]).toMatch(/Mozilla\/5\.0/);
   });
 
@@ -88,8 +95,8 @@ describe("GET /api/videos/poster", () => {
 
     for (const src of [
       "https://evil.example/x.jpg",
-      "https://www.pornhub.com/view_video.php?viewkey=abc12345",
-      "http://ei.phncdn.com/x.jpg",
+      "https://www.damplips.com/p/67284/",
+      "http://video.damplips.com/pics/x.jpg",
       null,
     ]) {
       const response = await GET(request(src));
@@ -103,7 +110,7 @@ describe("GET /api/videos/poster", () => {
       "fetch",
       vi.fn().mockResolvedValue(imageResponse("<html>blocked</html>", "text/html")),
     );
-    const response = await GET(request("https://ei.phncdn.com/videos/x.jpg"));
+    const response = await GET(request("https://video.damplips.com/pics/2026/10/67284.jpg"));
     expect(response.status).toBe(404);
   });
 
@@ -112,7 +119,7 @@ describe("GET /api/videos/poster", () => {
       "fetch",
       vi.fn().mockResolvedValue(imageResponse("bytes", "image/jpeg", "https://evil.example/x.jpg")),
     );
-    const response = await GET(request("https://ei.phncdn.com/videos/x.jpg"));
+    const response = await GET(request("https://video.damplips.com/pics/2026/10/67284.jpg"));
     expect(response.status).toBe(404);
   });
 
@@ -122,13 +129,13 @@ describe("GET /api/videos/poster", () => {
       headers: new Headers({ "content-type": "image/jpeg", "content-length": String(20 * 1024 * 1024) }),
     } as unknown as Response;
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(huge));
-    const response = await GET(request("https://ei.phncdn.com/videos/x.jpg"));
+    const response = await GET(request("https://video.damplips.com/pics/2026/10/67284.jpg"));
     expect(response.status).toBe(404);
   });
 
   it("answers 404 when the CDN is unreachable", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNRESET")));
-    const response = await GET(request("https://ei.phncdn.com/videos/x.jpg"));
+    const response = await GET(request("https://video.damplips.com/pics/2026/10/67284.jpg"));
     expect(response.status).toBe(404);
     expect(response.headers.get("cache-control")).toContain("max-age=60");
   });

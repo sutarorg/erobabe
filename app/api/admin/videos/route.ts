@@ -14,7 +14,7 @@ import { revalidatePublicTag } from "@/lib/public/revalidate";
  * a video in the homepage carousel, regenerate its carousel copy, or delete a
  * video.
  *
- * Uploads are gone: the catalog is embedded from Pornhub, so publishing only
+ * Uploads are gone: the catalog is imported from damplips, so publishing only
  * verifies that the row has a playable destination. Deleting a row never
  * touches the external media; the reference is recorded for operator review.
  *

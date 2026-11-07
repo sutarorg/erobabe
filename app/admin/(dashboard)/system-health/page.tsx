@@ -113,10 +113,10 @@ export default async function SystemHealthAdmin() {
   const ai = openRouterDiagnostics();
   const aiStatus = ai.configured ? "Configured" : "Not configured";
 
-  // The catalog is embedded; this is the real per-category count a visitor sees.
+  // This is the real per-category count a visitor sees.
   let catalogStatus = "Unavailable";
   let catalogDetail =
-    "Category counts could not be read. Apply migration 00000000000029_pornhub_embeds.sql.";
+    "Category counts could not be read. Check that the categories table has rows, then reload.";
   if (supabase) {
     try {
       const counts = await categoryCounts(supabase as unknown as ImportService);
@@ -166,7 +166,7 @@ export default async function SystemHealthAdmin() {
       name: "Video uploads",
       status: "Retired",
       latency: "—",
-      desc: "Uploads and the Bunny Stream pipeline are removed. The library is filled by the Pornhub importer from Videos → Import from Pornhub, or nightly by the pornhub-import cron job.",
+      desc: "Uploads and the Bunny Stream pipeline are removed. The library is filled by the damplips importer from Videos → Start import, or nightly by the damplips-import cron job.",
     },
     {
       name: "Resend",
@@ -241,7 +241,7 @@ export default async function SystemHealthAdmin() {
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
         <p className="text-[11px] text-ink-3">
           Last checked: {new Date().toLocaleString()} — real diagnostic requests are performed for
-          Database, ad slot inventory, creative storage, the ad review queue and the Pornhub catalog.
+          Database, ad slot inventory, creative storage, the ad review queue and the damplips catalog.
           Use “Test OpenRouter” to prove the AI metadata key with a live call. PayPal payments are
           checked manually in your PayPal account from Ad Review.
         </p>

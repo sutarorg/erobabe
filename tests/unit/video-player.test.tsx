@@ -95,23 +95,18 @@ describe("video player", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("frames Pornhub's player for an imported Pornhub row", () => {
+  it("plays a damplips file in our own element instead of a frame", () => {
     const { container } = render(
       <VideoPlayer
         {...props}
-        provider="pornhub"
-        playableUrl={null}
-        embedUrl="https://www.pornhub.com/embed/68a1b2c3d4e5f"
+        provider="damplips"
+        playableUrl="https://video.damplips.com/video7/717/79.mp4"
+        embedUrl={null}
       />,
     );
-    const frame = container.querySelector("iframe");
-    expect(frame).toHaveAttribute("src", "https://www.pornhub.com/embed/68a1b2c3d4e5f");
-    // The frame is sandboxed and never gets more than a player needs.
-    expect(frame).toHaveAttribute(
-      "sandbox",
-      "allow-scripts allow-same-origin allow-forms allow-presentation",
-    );
-    expect(container.querySelector("video")).toBeNull();
+    // No iframe anywhere: an imported row plays through us, with our poster.
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector("video, [data-playback-kind='direct']")).toBeTruthy();
   });
 
   it("prefers native video over any advertising iframe", () => {

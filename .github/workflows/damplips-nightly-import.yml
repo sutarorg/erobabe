@@ -1,0 +1,60 @@
+name: Nightly damplips import
+
+# 00:00 Asia/Kolkata = 18:30 UTC the previous calendar day.
+on:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: damplips-nightly-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Import new damplips posts for every category
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -uo pipefail
+          if [ -z "${SITE_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Configure SITE_URL and CRON_SECRET repository secrets for the nightly damplips import."
+            exit 1
+          fi
+
+          # The route walks its own plan for up to 220 s per call, three listing
+          # pages and ten posts at a time, and never applies a quota. A second
+          # call in the same night therefore picks up posts published later in
+          # the run; already-imported rows are skipped by identity.
+          slugs="amateur lesbian milf japanese teen-18plus hentai ebony pov big-ass threesome hardcore massage"
+          failures=0
+          for round in 1 2; do
+            for slug in $slugs; do
+              echo "Pass ${round}: importing ${slug}…"
+              body="$(curl --silent --show-error --max-time 300 \
+                -H "Authorization: Bearer ${CRON_SECRET}" \
+                -w '\n%{http_code}' \
+                "${SITE_URL%/}/api/cron/damplips-import?category=${slug}")" || true
+              status="${body##*$'\n'}"
+              payload="${body%$'\n'*}"
+              echo "${payload}"
+              if [ "${status}" != "200" ]; then
+                echo "::warning::${slug} answered HTTP ${status}; continuing with the other categories."
+                failures=$((failures + 1))
+              fi
+            done
+          done
+
+          # A single refused category must not fail the whole night, but a night
+          # where nothing worked should be visible in the Actions list.
+          if [ "${failures}" -ge $((2 * 12)) ]; then
+            echo "::error::Every category request failed. Check SITE_URL, CRON_SECRET and damplips reachability."
+            exit 1
+          fi

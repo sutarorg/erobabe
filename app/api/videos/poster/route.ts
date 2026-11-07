@@ -46,12 +46,8 @@ function miss(): Response {
   return new Response("Not found", { status: 404, headers: MISS_HEADERS });
 }
 
-/** The referer each CDN expects, so a hotlink-protected path still answers. */
-function refererFor(hostname: string): string {
-  const host = hostname.toLowerCase();
-  if (host.endsWith("pornhub.com") || host.endsWith("phncdn.com")) {
-    return "https://www.pornhub.com/";
-  }
+/** The referer the media host expects, so a hotlink-protected path still answers. */
+function refererFor(): string {
   return "https://www.damplips.com/";
 }
 
@@ -66,7 +62,7 @@ export async function GET(request: NextRequest) {
     const upstream = await fetch(target.toString(), {
       headers: {
         "user-agent": USER_AGENT,
-        referer: refererFor(target.hostname),
+        referer: refererFor(),
         accept: "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.5",
       },
       // A redirect that lands off the allowlist is refused below.
