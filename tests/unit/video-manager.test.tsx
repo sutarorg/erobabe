@@ -51,9 +51,13 @@ describe("VideoManager", () => {
     render(<VideoManager initialVideos={[VIDEO]} />);
     expect(screen.getByText("Evening in Velvet")).toBeTruthy();
     expect(screen.getByText(/Boudoir · Legacy damplips/)).toBeTruthy();
+    // The admin table asks this origin's poster proxy for the picture, the same
+    // way the public grid does — a blocked CDN must not blank the row here.
     expect(
       document.querySelector(
-        'img[src="https://video.damplips.com/pics/thumb.jpg"]',
+        `img[src="/api/videos/poster?src=${encodeURIComponent(
+          "https://video.damplips.com/pics/thumb.jpg",
+        )}"]`,
       ),
     ).toBeTruthy();
   });

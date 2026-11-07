@@ -42,6 +42,8 @@ export type PornhubCard = {
   title: string;
   thumbnailUrl: string | null;
   durationSeconds: number | null;
+  /** Views the listing advertises ("1.2M" → 1_200_000), when it advertises one. */
+  views: number | null;
   /**
    * `true`  — the listing labels the video HD;
    * `false` — the listing labels cards and this one is not HD;
@@ -143,11 +145,23 @@ export function embedUrlFor(viewkey: string): string {
   return `${PORNHUB_EMBED_BASE}${encodeURIComponent(viewkey)}`;
 }
 
-/** Search the way a visitor would: the category name in the site's search box. */
-export function searchUrl(term: string, page = 1, baseUrl: string = PORNHUB_BASE_URL): string {
+/**
+ * Search the way a visitor would: the category name in the site's search box.
+ *
+ * `order` is Pornhub's own "Sort by" value — `mv` most viewed, `tr` top rated,
+ * `cm` most commented, `mr` most recent. It is what lets an import take the
+ * category's popular videos first instead of whatever happens to be newest.
+ */
+export function searchUrl(
+  term: string,
+  page = 1,
+  baseUrl: string = PORNHUB_BASE_URL,
+  order = "",
+): string {
   const base = baseUrl.replace(/\/$/, "");
   const params = new URLSearchParams({ search: term });
   if (page > 1) params.set("page", String(page));
+  if (order) params.set("o", order);
   return `${base}/video/search?${params.toString()}`;
 }
 
@@ -193,6 +207,33 @@ export function parseDuration(value: unknown): number | null {
     return seconds > 0 && seconds < 86_400 ? seconds : null;
   }
   return null;
+}
+
+/**
+ * A view label as a number: `1,234`, `1.2M`, `12K`, `1 234 views`.
+ *
+ * Pornhub prints counts abbreviated, so the exact figure is not recoverable —
+ * but the magnitude is, which is what "popular first" needs (and what the card
+ * shows as a real number rather than a guess).
+ */
+export function parseViews(value: unknown): number | null {
+  if (value == null) return null;
+  const text = String(value).trim().replace(/\u00a0/g, " ");
+  if (!text) return null;
+
+  const match = /([\d][\d.,\s]*)\s*([kKmMbB])?/.exec(text);
+  if (!match) return null;
+  const magnitude = match[2] ? { k: 1_000, m: 1_000_000, b: 1_000_000_000 }[match[2].toLowerCase() as "k" | "m" | "b"] : 1;
+
+  const raw = match[1].replace(/\s/g, "");
+  // `1.2M` uses a dot as the decimal separator; `1,234` uses commas as grouping.
+  const digits = magnitude > 1 ? raw.replace(/,/g, ".") : raw.replace(/[.,]/g, "");
+  const numeric = magnitude > 1
+    ? Number(digits.split(".").slice(0, 2).join("."))
+    : Number(digits);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  const total = Math.round(numeric * magnitude);
+  return total > 0 && total < 1_000_000_000_000 ? total : null;
 }
 
 /** Every position in the document where a card starts. */
@@ -247,21 +288,74 @@ function titleFromChunk(chunk: string): string {
   return "";
 }
 
+/** The widest candidate in a `srcset` value, or its first URL. */
+function fromSrcset(value: string | null, base?: string): string | null {
+  if (!value) return null;
+  const candidates = value
+    .split(",")
+    .map((entry) => {
+      const [url, descriptor] = entry.trim().split(/\s+/);
+      const width = descriptor ? Number(/\.?(\d+(?:\.\d+)?)[wx]/i.exec(descriptor)?.[1]) : NaN;
+      return { url, width: Number.isFinite(width) ? width : 0 };
+    })
+    .filter((entry) => Boolean(entry.url));
+  candidates.sort((a, b) => b.width - a.width);
+  for (const candidate of candidates) {
+    const normalized = normalizeThumbnail(candidate.url, base);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
 function thumbnailFromChunk(chunk: string, base?: string): string | null {
   for (const name of [
     "data-thumb_url",
     "data-mediumthumb",
     "data-image",
+    "data-img",
     "data-src",
     "data-original",
-    "src",
+    "data-posters",
+    "poster",
   ]) {
     const candidate = normalizeThumbnail(attribute(chunk, name), base);
     if (candidate) return candidate;
   }
-  // Unquoted/lazy variants: any absolute CDN URL in the chunk.
-  const embedded = /https?:\/\/[^\s"'<>\\]+?phncdn\.com[^\s"'<>\\]*\.(?:jpe?g|png|webp)/i.exec(chunk);
+
+  const set = fromSrcset(attribute(chunk, "srcset") || attribute(chunk, "data-srcset"), base);
+  if (set) return set;
+
+  const direct = normalizeThumbnail(attribute(chunk, "src"), base);
+  if (direct) return direct;
+
+  // A poster painted as a CSS background (`style="background-image:url(…)"`).
+  const background = /background(?:-image)?\s*:\s*url\(\s*['"]?([^'")]+)['"]?\s*\)/i.exec(chunk)?.[1];
+  const fromBackground = normalizeThumbnail(background, base);
+  if (fromBackground) return fromBackground;
+
+  // Last resort: any absolute or protocol-relative CDN image URL in the chunk.
+  const embedded =
+    /(?:https?:)?\/\/[^\s"'<>\\]+?phncdn\.com[^\s"'<>\\]*\.(?:jpe?g|png|webp)[^\s"'<>\\]*/i.exec(
+      chunk,
+    );
   return embedded ? normalizeThumbnail(embedded[0], base) : null;
+}
+
+function viewsFromChunk(chunk: string): number | null {
+  for (const name of ["data-video-views", "data-views", "data-view-count"]) {
+    const direct = parseViews(attribute(chunk, name));
+    if (direct != null) return direct;
+  }
+  const label = /<span\b[^>]*class\s*=\s*["'][^"']*\bviews\b[^"']*["'][^>]*>([\s\S]{0,120}?)<\/span>/i.exec(
+    chunk,
+  )?.[1];
+  const fromLabel = parseViews(label ? stripTags(label) : null);
+  if (fromLabel != null) return fromLabel;
+  const json = /"views"\s*:\s*"?([\d.,]+\s*[KkMmBb]?)"?/.exec(chunk)?.[1];
+  const fromJson = parseViews(json);
+  if (fromJson != null) return fromJson;
+  const inline = /([\d][\d.,]*\s*[KkMmBb]?)\s*(?:views|view)\b/i.exec(stripTags(chunk))?.[1];
+  return parseViews(inline);
 }
 
 function durationFromChunk(chunk: string): number | null {
@@ -326,6 +420,7 @@ export function parseSearchListing(html: string, pageUrl: string = PORNHUB_BASE_
     const thumbnailUrl = thumbnailFromChunk(chunk, pageUrl);
     const durationSeconds = durationFromChunk(chunk);
     const hd = hdFromChunk(chunk);
+    const views = viewsFromChunk(chunk);
 
     const existing = byKey.get(start.viewkey);
     if (!existing) {
@@ -334,6 +429,7 @@ export function parseSearchListing(html: string, pageUrl: string = PORNHUB_BASE_
         title,
         thumbnailUrl,
         durationSeconds,
+        views,
         hd,
         sourceUrl: watchUrlFor(start.viewkey),
       });
@@ -345,6 +441,7 @@ export function parseSearchListing(html: string, pageUrl: string = PORNHUB_BASE_
       existing.durationSeconds = durationSeconds;
     }
     if (existing.hd == null && hd != null) existing.hd = hd;
+    if (existing.views == null && views != null) existing.views = views;
   }
 
   if (!hdSignal) hdSignal = [...byKey.values()].some((card) => card.hd === true);

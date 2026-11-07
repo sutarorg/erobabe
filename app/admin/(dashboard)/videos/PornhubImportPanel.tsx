@@ -12,6 +12,7 @@ type SliceReport = {
   label?: string;
   imported: number;
   duplicates: number;
+  repaired: number;
   pagesRead: number;
   cursor: Cursor;
   exhausted: boolean;
@@ -24,31 +25,61 @@ type CategoryTotal = {
   label: string;
   imported: number;
   duplicates: number;
+  repaired: number;
   pages: number;
-  exhausted: boolean;
+  /** Completed passes over every search of this category. */
+  passes: number;
+  state: "running" | "waiting" | "error";
 };
 
 /** Search pages the server reads per call. Mirrors the route's default. */
 const PAGES_PER_SLICE = 4;
 /** Pause between slices so a long run stays a polite visitor. */
 const SLICE_PAUSE_MS = 350;
+/**
+ * Pause before starting another pass once every search has been walked.
+ *
+ * The run does not stop there — the operator asked for it to keep going until
+ * Stop — but hammering the same exhausted result pages would be rude and
+ * pointless. A pass that finds nothing new waits longer each time, up to
+ * `MAX_ROUND_PAUSE_MS`, and the Stop button stays live throughout.
+ */
+const ROUND_PAUSE_MS = 60_000;
+const MAX_ROUND_PAUSE_MS = 600_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Fills the catalog from Pornhub.
  *
- * The operator ticks the categories they want and presses one button: the panel
- * then asks the server for one slice at a time and keeps going until Pornhub's
- * search for that category is exhausted. There is deliberately no "how many"
- * field — an import is not quota-bound, and the cursor in each response is what
- * lets the run continue past any single request's timeout.
+ * The operator ticks the categories they want and presses one button. The panel
+ * then asks the server for one slice at a time and **does not stop on its own**:
+ * when a category has walked every one of its searches (and every sort order),
+ * it pauses briefly and starts another pass, picking up whatever Pornhub has
+ * published since. Only the Stop button ends the run — it finishes the slice in
+ * flight and leaves every imported video in place.
  *
- * Pressing Stop finishes the slice that is already in flight and leaves every
- * imported video in place; a later run simply continues from wherever the search
- * has got to, because anything already in the catalog is skipped as a duplicate.
+ * There is deliberately no "how many" field: an import is not quota-bound, and
+ * the cursor in each response is what lets the run continue past any single
+ * request's timeout. Searches are ordered most-viewed first, so the videos that
+ * land first are the category's popular ones.
  */
-export default function PornhubImportPanel({ counts }: { counts: CategoryCount[] }) {
+export type PornhubImportPanelProps = {
+  counts: CategoryCount[];
+  /** Pause between slices. Tests shorten it; production keeps it polite. */
+  slicePauseMs?: number;
+  /** Pause before another pass once every search has been walked. */
+  roundPauseMs?: number;
+  /** Ceiling for the backoff while passes keep coming back empty. */
+  maxRoundPauseMs?: number;
+};
+
+export default function PornhubImportPanel({
+  counts,
+  slicePauseMs = SLICE_PAUSE_MS,
+  roundPauseMs = ROUND_PAUSE_MS,
+  maxRoundPauseMs = MAX_ROUND_PAUSE_MS,
+}: PornhubImportPanelProps) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(counts.map((entry) => entry.slug)),
@@ -57,6 +88,7 @@ export default function PornhubImportPanel({ counts }: { counts: CategoryCount[]
   const [dryRun, setDryRun] = useState(false);
   const [running, setRunning] = useState(false);
   const [current, setCurrent] = useState("");
+  const [waitingFor, setWaitingFor] = useState<number | null>(null);
   const [progress, setProgress] = useState<CategoryTotal[]>([]);
   const [error, setError] = useState("");
   const stopped = useRef(false);
@@ -64,8 +96,12 @@ export default function PornhubImportPanel({ counts }: { counts: CategoryCount[]
   const publishedTotal = counts.reduce((sum, entry) => sum + entry.published, 0);
   const catalogTotal = counts.reduce((sum, entry) => sum + entry.total, 0);
   const runningTotal = progress.reduce(
-    (sum, entry) => ({ imported: sum.imported + entry.imported, duplicates: sum.duplicates + entry.duplicates }),
-    { imported: 0, duplicates: 0 },
+    (sum, entry) => ({
+      imported: sum.imported + entry.imported,
+      duplicates: sum.duplicates + entry.duplicates,
+      repaired: sum.repaired + entry.repaired,
+    }),
+    { imported: 0, duplicates: 0, repaired: 0 },
   );
 
   const toggle = (slug: string) => {
@@ -85,6 +121,18 @@ export default function PornhubImportPanel({ counts }: { counts: CategoryCount[]
     });
   }, []);
 
+  /** One cancellable pause: Stop must work while the panel is waiting. */
+  async function pause(ms: number): Promise<void> {
+    const startedAt = Date.now();
+    let remaining = ms;
+    while (remaining > 0 && !stopped.current) {
+      setWaitingFor(remaining);
+      await sleep(Math.min(500, remaining));
+      remaining = ms - (Date.now() - startedAt);
+    }
+    setWaitingFor(null);
+  }
+
   async function run() {
     const queue = counts.filter((entry) => selected.has(entry.slug));
     if (!queue.length) {
@@ -97,51 +145,104 @@ export default function PornhubImportPanel({ counts }: { counts: CategoryCount[]
     setError("");
     setProgress([]);
 
-    try {
-      for (const category of queue) {
-        setCurrent(category.label);
-        let cursor: Cursor = { source: 0, page: 1 };
-        const total: CategoryTotal = {
+    type RunState = { cursor: Cursor; total: CategoryTotal; walkedPlan: boolean };
+    const states = new Map<string, RunState>();
+    for (const category of queue) {
+      states.set(category.slug, {
+        cursor: { source: 0, page: 1 },
+        walkedPlan: false,
+        total: {
           slug: category.slug,
           label: category.label,
           imported: 0,
           duplicates: 0,
+          repaired: 0,
           pages: 0,
-          exhausted: false,
-        };
+          passes: 0,
+          state: "running",
+        },
+      });
+    }
 
-        while (!stopped.current) {
-          const response = await fetch("/api/admin/pornhub/import", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              category: category.slug,
-              cursor,
-              pages: PAGES_PER_SLICE,
-              dryRun,
-              rightsStatus: stageForReview ? "pending" : "cleared",
-            }),
-          });
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            throw new Error(payload?.error || `Import failed for ${category.label}`);
-          }
+    // Every selected category advances one slice at a time in rotation, so one
+    // busy category never starves the others and each keeps making progress.
+    let index = 0;
+    let pauseBeforeNextRound = roundPauseMs;
+    let importedSinceRound = 0;
 
-          const slice = payload.report as SliceReport;
-          total.imported += slice.imported;
-          total.duplicates += slice.duplicates;
-          total.pages += slice.pagesRead;
-          total.exhausted = slice.exhausted;
-          cursor = slice.cursor;
-          updateProgress({ ...total });
-          setCurrent(`${category.label} · page ${total.pages}`);
+    try {
+      while (!stopped.current) {
+        const category = queue[index % queue.length];
+        index += 1;
+        const state = states.get(category.slug)!;
+        const total = state.total;
+        setCurrent(`${category.label} · page ${total.pages + PAGES_PER_SLICE}`);
+        total.state = "running";
+        updateProgress({ ...total });
 
-          if (slice.exhausted) break;
-          // A slice that read nothing and imported nothing is the end of the
-          // road for this category, whatever the pagination claims.
-          if (slice.pagesRead === 0) break;
-          await sleep(SLICE_PAUSE_MS);
+        const response = await fetch("/api/admin/pornhub/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            category: category.slug,
+            cursor: state.cursor,
+            pages: PAGES_PER_SLICE,
+            dryRun,
+            // Repair stored rows with a missing poster once per run, on the very
+            // first slice, so a grid imported before the poster rule fills in.
+            repair: total.pages === 0,
+            rightsStatus: stageForReview ? "pending" : "cleared",
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload?.error || `Import failed for ${category.label}`);
         }
+
+        const slice = payload.report as SliceReport;
+        total.imported += slice.imported;
+        total.duplicates += slice.duplicates;
+        total.repaired += slice.repaired || 0;
+        total.pages += slice.pagesRead;
+        importedSinceRound += slice.imported;
+
+        // The plan is walked when the server says so, or when a slice cannot
+        // read a single page. Either way the next pass starts at the top.
+        if (slice.exhausted || slice.pagesRead === 0) {
+          state.cursor = { source: 0, page: 1 };
+          state.walkedPlan = true;
+          total.passes += 1;
+          total.state = "waiting";
+        } else {
+          state.cursor = slice.cursor;
+          state.walkedPlan = false;
+          total.state = "running";
+        }
+        updateProgress({ ...total });
+
+        const everyCategoryWalked = queue.every(
+          (entry) => states.get(entry.slug)!.walkedPlan,
+        );
+
+        if (everyCategoryWalked) {
+          // Nothing left to read right now — but the run does not stop. Wait,
+          // then start another pass over every search; anything published since
+          // the last pass is new. The pause grows while passes stay empty.
+          for (const entry of queue) states.get(entry.slug)!.walkedPlan = false;
+          if (importedSinceRound > 0) pauseBeforeNextRound = roundPauseMs;
+          await pause(pauseBeforeNextRound);
+          if (importedSinceRound === 0) {
+            pauseBeforeNextRound = Math.min(maxRoundPauseMs, pauseBeforeNextRound * 2);
+          }
+          importedSinceRound = 0;
+        } else {
+          await sleep(slicePauseMs);
+        }
+      }
+
+      for (const state of states.values()) {
+        state.total.state = "waiting";
+        updateProgress({ ...state.total });
       }
       router.refresh();
     } catch (failure) {
@@ -149,6 +250,7 @@ export default function PornhubImportPanel({ counts }: { counts: CategoryCount[]
     } finally {
       setRunning(false);
       setCurrent("");
+      setWaitingFor(null);
     }
   }
 
@@ -175,11 +277,13 @@ export default function PornhubImportPanel({ counts }: { counts: CategoryCount[]
           <p className="mt-0.5 max-w-[760px] text-[11.5px] text-ink-3">
             Searches Pornhub for each selected category name and imports every
             matching video it finds — there is no number to set and no ceiling.
-            Videos stream from Pornhub&apos;s own embed player, so each row keeps
-            its poster, duration and HD badge. Only videos Pornhub marks HD (or
-            whose page serves 720p or better) are imported, and a video already in
-            the catalog is never added twice. The run keeps going until the search
-            is exhausted; press Stop to end it early.{" "}
+            Each category is searched <strong className="font-medium text-ink-2">most
+            viewed first</strong>, so the popular videos land first, and the run
+            keeps working until you press Stop: when every search has been walked
+            it pauses and starts another pass, picking up anything published
+            since. Only videos Pornhub marks HD (or whose page serves 720p or
+            better) with a real poster are imported, and a video already in the
+            catalog is never added twice.{" "}
             {publishedTotal.toLocaleString("en-US")} published{" "}
             {publishedTotal === 1 ? "video" : "videos"} across these categories
             {catalogTotal !== publishedTotal
@@ -253,7 +357,9 @@ export default function PornhubImportPanel({ counts }: { counts: CategoryCount[]
             <RefreshCw aria-hidden="true" className="h-4 w-4" />
           )}
           {running
-            ? `Importing ${current || "…"}`
+            ? waitingFor != null
+              ? `Next pass in ${Math.ceil(waitingFor / 1000)}s`
+              : `Importing ${current || "…"}`
             : dryRun
               ? "Run dry run"
               : "Start import"}
@@ -282,9 +388,9 @@ export default function PornhubImportPanel({ counts }: { counts: CategoryCount[]
         <>
           <p className="mt-3 text-[11.5px] text-ink-3">
             This run: <span className="text-emerald-400">+{runningTotal.imported} new</span>{" "}
-            {dryRun ? "(would import)" : ""} ·{" "}
-            {runningTotal.duplicates} already present
-            {stopped.current && running ? " · stopping after this slice" : ""}
+            {dryRun ? "(would import)" : ""} · {runningTotal.duplicates} already present
+            {runningTotal.repaired > 0 ? ` · ${runningTotal.repaired} poster(s) repaired` : ""}
+            {running && stopped.current ? " · stopping after this slice" : ""}
           </p>
           <ul className="mt-2 space-y-1.5">
             {progress.map((entry) => (
@@ -294,12 +400,17 @@ export default function PornhubImportPanel({ counts }: { counts: CategoryCount[]
               >
                 <p className="flex flex-wrap items-center gap-x-2">
                   <span className="font-semibold">{entry.label}</span>
-                  <span className={entry.exhausted ? "text-emerald-400" : "text-amber-300"}>
-                    {entry.exhausted ? "search exhausted" : "in progress"}
+                  <span className={entry.state === "running" ? "text-amber-300" : "text-emerald-400"}>
+                    {entry.state === "running"
+                      ? "importing"
+                      : entry.passes > 0
+                        ? `pass ${entry.passes + 1}`
+                        : "in progress"}
                   </span>
                   <span className="text-ink-3">
                     +{entry.imported} new · {entry.duplicates} already present ·{" "}
                     {entry.pages} page{entry.pages === 1 ? "" : "s"} read
+                    {entry.repaired > 0 ? ` · ${entry.repaired} poster(s) repaired` : ""}
                   </span>
                 </p>
               </li>

@@ -29,7 +29,7 @@ the importer:
 
 1. types the category's name into Pornhub's search
    (`https://www.pornhub.com/video/search?search=<category name>`), exactly as a
-   visitor would;
+   visitor would, and asks for it in Pornhub's own **most-viewed** order first;
 2. reads the result pages in order, collecting each card's viewkey, title,
    poster and duration;
 3. keeps only videos Pornhub marks **HD** — or, when a listing carries no HD
@@ -39,8 +39,31 @@ the importer:
 
 There is **no target and no cap**. The dashboard asks the server for one slice at
 a time (`pages` search pages per request, four by default, twenty-five at most)
-and continues from the cursor each slice returns until the response says
-`exhausted`.
+and continues from the cursor each slice returns.
+
+### Popular first
+
+Each category's searches are walked in Pornhub's own sort orders, in this order:
+
+| Pass | `o=` | Means |
+| --- | --- | --- |
+| 1 | `mv` | most viewed — the category's popular videos |
+| 2 | `tr` | top rated |
+| 3 | `cm` | most commented |
+| 4 | *(none)* | the site's relevance order |
+
+Every phrase of the category (the plain name first, then narrower phrases) is
+walked inside a pass, so the catalog fills with popular videos before it ever
+looks at an obscure ordering. Within one page the accepted videos are written in
+view order, and `videos.view_count` is the real count Pornhub printed.
+
+### The run only stops when the operator says so
+
+Walking every search is not the end of a run. The panel pauses — one minute,
+doubling up to ten while passes keep coming back empty — and then starts another
+pass from the top of the plan, which picks up anything published since. The Stop
+button ends the run after the slice in flight, keeps everything already imported,
+and works while the panel is waiting.
 
 ### What it writes
 
@@ -103,6 +126,39 @@ select provider_file_id, count(*) from videos
   where provider = 'pornhub'
   group by 1 having count(*) > 1;                            -- must return no rows
 ```
+
+## Posters
+
+Every card, in both the public grid and the admin table, asks this site for its
+picture:
+
+```
+<img src="/api/videos/poster?src=https%3A%2F%2Fei.phncdn.com%2F…">
+```
+
+That is not indirection for its own sake. A thumbnail loaded straight from an
+adult CDN fails in three ordinary ways:
+
+1. **Ad blockers** — `phncdn.com` (and `damplips.com` before it) is on the block
+   lists, so the request never leaves the page and the card is an empty box.
+2. **Hotlink protection** — some poster paths answer a foreign `Referer` with
+   `403`.
+3. **A stale value** — a row whose `thumbnail_url` is a watch page or a host that
+   no longer serves the image.
+
+`/api/videos/poster` fetches the image with the referer the CDN expects and
+returns it from our origin, where none of the three applies. The route is
+deliberately narrow: an allowlist of CDN hosts (`*.phncdn.com`, `pornhub.com`,
+`damplips.com`), `https` only, an image extension in the path, an `image/*`
+response type, a 6 MB cap, a 10-second header budget, and a re-check of the final
+URL after redirects so it can never be pointed at another host. A hit is cached
+for a year (`immutable`); a miss answers `404` with a 60-second cache so the card
+falls back to the CDN URL and then to the erobabe mark.
+
+Rows imported before this rule — or whose listing advertised only a placeholder —
+are repaired in place: the first slice of a panel run (and the first slice of the
+nightly job) reads the watch page of up to ten such rows and writes the
+`og:image` it publishes back to `thumbnail_url`.
 
 ## Limits and failure modes
 

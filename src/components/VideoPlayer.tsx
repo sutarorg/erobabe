@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, RotateCcw } from "lucide-react";
+import ThumbImage from "./ThumbImage";
 import {
   damplipsProxyUrl,
   isDamplipsMediaUrl,
@@ -765,7 +766,9 @@ export default function VideoPlayer(props: Props) {
         />
       ) : (
         <>
-          {props.poster && <img src={props.poster} alt="" className="h-full w-full object-cover opacity-55" />}
+          {props.poster && (
+            <ThumbImage src={props.poster} alt="" className="h-full w-full object-cover opacity-55" />
+          )}
           <div className="absolute inset-0 flex items-center justify-center">
             <p className="rounded-lg bg-black/70 px-4 py-2 text-[13px] text-white">
               {source.kind === "unsupported"

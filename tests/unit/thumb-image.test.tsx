@@ -31,6 +31,31 @@ describe("ThumbImage", () => {
     expect((screen.getByAltText("Clip") as HTMLImageElement).getAttribute("src")).toBe(FALLBACK);
   });
 
+  it("asks this origin's poster proxy for a catalog poster", () => {
+    const source = "https://ei.phncdn.com/videos/202401/01/1/original.jpg";
+    render(<ThumbImage src={source} alt="Clip" />);
+    const image = screen.getByAltText("Clip") as HTMLImageElement;
+    expect(image.getAttribute("src")).toBe(
+      `/api/videos/poster?src=${encodeURIComponent(source)}`,
+    );
+    // No referer of ours leaks to the CDN, and it is never proxied twice.
+    expect(image.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("falls back to the CDN URL when the proxy misses", () => {
+    const source = "https://ei.phncdn.com/videos/202401/01/1/original.jpg";
+    render(<ThumbImage src={source} alt="Clip" />);
+    const image = screen.getByAltText("Clip") as HTMLImageElement;
+
+    fireEvent.error(image);
+    expect(image.getAttribute("src")).toBe(source);
+    expect(image.dataset.thumbFallback).toBeUndefined();
+
+    fireEvent.error(image);
+    expect(image.getAttribute("src")).toBe(FALLBACK);
+    expect(image.dataset.thumbFallback).toBe("true");
+  });
+
   it("retries when a new thumbnail is attached", () => {
     const { rerender } = render(<ThumbImage src="https://cdn.example.com/gone.jpg" alt="Clip" />);
     fireEvent.error(screen.getByAltText("Clip"));

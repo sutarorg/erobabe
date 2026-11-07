@@ -81,6 +81,7 @@ export async function GET(request: NextRequest) {
     let cursor: ImportCursor = { source: 0, page: 1 };
     let imported = 0;
     let duplicates = 0;
+    let repaired = 0;
     let pagesRead = 0;
     const errors: string[] = [];
     let exhausted = false;
@@ -92,6 +93,8 @@ export async function GET(request: NextRequest) {
           cursor,
           pagesPerRequest: PAGES_PER_SLICE,
           rightsStatus: "cleared",
+          // A nightly pass also fixes stored rows whose poster went missing.
+          repair: repaired === 0,
           baseUrl: process.env.PORNHUB_BASE_URL || undefined,
         },
         { fetchPage, service: importService, categoryId: category.id },
@@ -99,6 +102,7 @@ export async function GET(request: NextRequest) {
 
       imported += report.imported;
       duplicates += report.duplicates;
+      repaired += report.repaired;
       pagesRead += report.pagesRead;
       errors.push(...report.errors);
       cursor = report.cursor;
@@ -118,6 +122,7 @@ export async function GET(request: NextRequest) {
         label: category.label,
         imported,
         duplicates,
+        repaired,
         pagesRead,
         cursor,
         exhausted,

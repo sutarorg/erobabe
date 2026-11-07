@@ -294,7 +294,12 @@ viewkey unique index. Videos are embedded from Pornhub; full detail is in
 6. **Playback** frames `https://www.pornhub.com/embed/<viewkey>`; nothing is
    copied to storage or the server, and no request is proxied for Pornhub.
    Legacy damplips rows still stream through `/api/videos/stream?src=…`.
-7. **Rights and takedowns**: imported rows are written
+7. **Posters** are served by `/api/videos/poster?src=…` — the browser never
+   fetches the CDN directly, so an ad blocker or a hotlink-protected path cannot
+   blank the grid. The first slice of an import also repairs stored rows whose
+   poster is missing, so nothing needs a manual backfill. No environment variable
+   is involved; the endpoint needs outbound HTTPS to the same posters it serves.
+8. **Rights and takedowns**: imported rows are written
    `rights_status='cleared'` so categories are visible immediately. Tick
    *Stage as private drafts* if you need to review first. Keep `/dmca` and
    `/content-removal` current; deleting a row keeps an operator record in

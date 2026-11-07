@@ -17,7 +17,11 @@ import { revalidatePublicTag } from "@/lib/public/revalidate";
  * reports the cursor where it stopped, and the dashboard calls again to
  * continue. That is what makes an unlimited run possible without any single
  * request running past its timeout — there is no "videos per category" cap
- * anywhere in this flow.
+ * anywhere in this flow, and the caller only stops when the operator presses
+ * Stop.
+ *
+ * `repair: true` (the panel's first slice) also resolves the poster of stored
+ * rows that have none, so a grid imported before the poster rule fills in.
  */
 
 export const runtime = "nodejs";
@@ -60,6 +64,7 @@ export async function POST(req: NextRequest) {
       Math.min(MAX_PAGES_PER_REQUEST, Math.floor(Number(body.pages) || 4)),
     );
     const dryRun = body.dryRun === true;
+    const repair = body.repair === true;
     const rightsStatus = body.rightsStatus === "pending" ? "pending" : "cleared";
 
     const { data: categories, error } = await service
@@ -79,6 +84,7 @@ export async function POST(req: NextRequest) {
         cursor: parseCursor(body.cursor),
         pagesPerRequest: pages,
         dryRun,
+        repair,
         rightsStatus,
         baseUrl: process.env.PORNHUB_BASE_URL || undefined,
       },

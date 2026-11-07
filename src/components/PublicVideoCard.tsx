@@ -4,8 +4,6 @@ import { formatDuration, formatTimeAgo } from "@/lib/site";
 import type { PublicVideo } from "@/lib/public/catalog";
 import ThumbImage from "./ThumbImage";
 
-const FALLBACK_THUMB = "https://i.postimg.cc/ZnrQD6fN/erobabe-favicon-removebg-preview.png";
-
 export default function PublicVideoCard({ video, onClick }: { video: PublicVideo; onClick?: () => void }) {
   const publishedDate = video.published_at ? new Date(video.published_at) : null;
   const dateTime = publishedDate && Number.isFinite(publishedDate.getTime())
@@ -16,7 +14,7 @@ export default function PublicVideoCard({ video, onClick }: { video: PublicVideo
     <Link href={`/video/${video.slug}`} prefetch className="group min-w-0" onClick={onClick}>
       <div className="relative aspect-video overflow-hidden rounded-lg border border-line bg-card">
         <ThumbImage
-          src={video.thumbnail_url || FALLBACK_THUMB}
+          src={video.thumbnail_url}
           alt={video.title}
           className="h-full w-full object-cover transition-transform group-hover:scale-105"
           loading="lazy"
