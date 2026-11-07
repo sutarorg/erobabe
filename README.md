@@ -52,8 +52,15 @@ transcoded.
 
 What a run does:
 
-* **No quota.** There is no "videos per category" field and no ceiling: a run
-  keeps paging until Pornhub's search for that category is exhausted. The
+* **Popular first.** Each category is searched in Pornhub's own sort orders —
+  most viewed, then top rated, then most commented, then its relevance order —
+  and the videos of one page are written in view order. A half-filled category
+  already looks like the category, and every row stores the real view count.
+* **Only Stop ends it.** The run never finishes on its own. When every search of
+  a category has been walked, the panel waits (a minute, doubling while passes
+  come back empty) and starts another pass, picking up whatever Pornhub has
+  published since. Pressing Stop ends it after the slice in flight.
+* **No quota.** There is no "videos per category" field and no ceiling. The
   dashboard asks the server for one slice at a time and continues from the
   cursor each slice returns, so no single request outlives its timeout.
 * **No duplicates.** The viewkey is the identity. It is checked against the
@@ -64,8 +71,12 @@ What a run does:
   listing carries no HD badge at all (markup change), the importer reads the
   watch page and imports only videos that serve 720p or better, recording
   `quality` (`HD`/`4K`) and `resolution` (`1080p`, …).
-* **Posters included.** A card without a thumbnail is skipped, so every row has
-  a real poster on the grid and watch page.
+* **Posters included, and served by us.** A card without a thumbnail is resolved
+  from its watch page rather than imported blank, and every card asks
+  `/api/videos/poster` for the picture instead of the CDN: adult image CDNs are
+  on the ad-block lists and some paths hotlink-protect a foreign referer, which
+  is exactly how a grid ends up full of empty boxes. The proxy is
+  allowlist-only, image-only, size-capped and cached for a year.
 * **Resumable and polite.** A short pause sits between page reads, and a phrase
   that only returns videos already in the catalog is abandoned after a dozen
   pages in favour of the next phrase.

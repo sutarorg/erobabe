@@ -6,6 +6,7 @@ import {
   parseDuration,
   parseSearchListing,
   parseVideoPage,
+  parseViews,
   pornhubSlug,
   searchUrl,
   viewkeyFromUrl,
@@ -165,6 +166,40 @@ describe("Pornhub search parsing", () => {
     expect(cards.some((card) => card.title === "Navigation link")).toBe(false);
   });
 
+  it("reads an abbreviated view count so the page can be ordered by popularity", () => {
+    const html = `<ul>
+      <li data-video-vkey="keyaaaaaaa1" data-title="Quiet clip" data-thumb_url="https://ei.phncdn.com/a.jpg" data-duration="12:00">
+        <span class="views"><var>12K</var> views</span>
+      </li>
+      <li data-video-vkey="keyaaaaaaa2" data-title="Blockbuster" data-thumb_url="https://ei.phncdn.com/b.jpg" data-duration="12:00">
+        <span class="views"><var>2.4M</var> views</span>
+      </li>
+      <li data-video-vkey="keyaaaaaaa3" data-title="No counter" data-thumb_url="https://ei.phncdn.com/c.jpg" data-duration="12:00"></li>
+    </ul>`;
+    const { cards } = parseSearchListing(html);
+    expect(cards.map((card) => card.views)).toEqual([12_000, 2_400_000, null]);
+  });
+
+  it("finds a poster that only exists in a srcset", () => {
+    const html = `<ul>
+      <li data-video-vkey="keysrcset01" data-title="Only a srcset">
+        <img srcset="https://ci.phncdn.com/videos/small.jpg 1x, https://ci.phncdn.com/videos/large.jpg 2x" />
+      </li>
+    </ul>`;
+    const { cards } = parseSearchListing(html);
+    expect(cards[0].thumbnailUrl).toBe("https://ci.phncdn.com/videos/large.jpg");
+  });
+
+  it("finds a poster painted as a CSS background", () => {
+    const html = `<ul>
+      <li data-video-vkey="keybg000001" data-title="Background poster">
+        <div style="background-image:url('https://ev.phncdn.com/videos/bg.jpg')"></div>
+      </li>
+    </ul>`;
+    const { cards } = parseSearchListing(html);
+    expect(cards[0].thumbnailUrl).toBe("https://ev.phncdn.com/videos/bg.jpg");
+  });
+
   it("reads the last page number from the pagination block", () => {
     expect(parseSearchListing(SEARCH_HTML).totalPages).toBe(42);
     expect(parseSearchListing("<html><body>nothing</body></html>")).toEqual({
@@ -182,6 +217,15 @@ describe("Pornhub links", () => {
     );
     expect(searchUrl("amateur", 3)).toBe(
       "https://www.pornhub.com/video/search?search=amateur&page=3",
+    );
+  });
+
+  it("asks for a sort order so the popular videos come first", () => {
+    expect(searchUrl("amateur", 1, "https://www.pornhub.com", "mv")).toBe(
+      "https://www.pornhub.com/video/search?search=amateur&o=mv",
+    );
+    expect(searchUrl("amateur", 2, "https://www.pornhub.com", "tr")).toBe(
+      "https://www.pornhub.com/video/search?search=amateur&page=2&o=tr",
     );
   });
 
@@ -207,6 +251,19 @@ describe("Pornhub links", () => {
       "morning-coffee-with-my-neighbour-68a1b2c3d4e5f",
     );
     expect(pornhubSlug("", "68a1b2c3d4e5f")).toBe("video-68a1b2c3d4e5f");
+  });
+});
+
+describe("Pornhub view counts", () => {
+  it("understands every abbreviation the site prints", () => {
+    expect(parseViews("1,234")).toBe(1234);
+    expect(parseViews("1.2M")).toBe(1_200_000);
+    expect(parseViews("12K")).toBe(12_000);
+    expect(parseViews("3.4B")).toBe(3_400_000_000);
+    expect(parseViews("1 234 views")).toBe(1234);
+    expect(parseViews("0")).toBeNull();
+    expect(parseViews("")).toBeNull();
+    expect(parseViews(null)).toBeNull();
   });
 });
 

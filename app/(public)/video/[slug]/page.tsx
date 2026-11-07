@@ -15,6 +15,7 @@ import {
   selectPlaybackSource,
 } from "@/lib/video/playback";
 import { SITE_URL, SITE_OG_IMAGE, formatDuration, formatTimeAgo } from "@/lib/site";
+import { proxiedPosterUrl } from "@/lib/video/poster";
 import { iso8601Duration } from "@/lib/seo/duration";
 import { videoSeo } from "@/lib/seo/pages";
 import { publicPageMetadata } from "@/lib/metadata/page";
@@ -379,8 +380,14 @@ export default async function VideoPage({
   const showsPoster = playbackSource.kind !== "embed";
   const playableUrl = video.playable_url;
 
-  // The poster is loaded straight from the media host while the document
-  // parses; warming that connection is what makes the first paint instant.
+  // The player asks our own poster proxy for its picture: the CDN is blocked by
+  // ad blockers and hotlink-protects foreign referers, and a blank player is
+  // worse than a warm connection.
+  const playerPoster = video.thumbnail_url
+    ? proxiedPosterUrl(video.thumbnail_url) ?? video.thumbnail_url
+    : null;
+
+  // Warm the CDN anyway, so the direct fallback is fast if the proxy misses.
   const posterOrigin = (() => {
     if (!video.thumbnail_url) return null;
     try {
@@ -451,20 +458,15 @@ export default async function VideoPage({
           />
         )}
         {embedOrigin && <link rel="preconnect" href={embedOrigin} />}
-        {showsPoster && video.thumbnail_url && (
-          <link
-            rel="preload"
-            as="image"
-            href={video.thumbnail_url}
-            fetchPriority="high"
-          />
+        {showsPoster && playerPoster && (
+          <link rel="preload" as="image" href={playerPoster} fetchPriority="high" />
         )}
 
         <VideoPlayer
           provider={video.provider}
           id={video.id}
           title={video.title}
-          poster={video.thumbnail_url}
+          poster={playerPoster}
           playableUrl={playableUrl}
           embedUrl={video.embed_url}
         />

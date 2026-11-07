@@ -1,5 +1,6 @@
 "use client";
 
+import ThumbImage from "@/src/components/ThumbImage";
 import { useEffect, useMemo, useState } from "react";
 import {
   ImageOff,
@@ -422,7 +423,11 @@ export default function VideoManager({
               <div key={slot} className="flex items-center gap-2.5 rounded-md border border-line bg-void p-2">
                 <div className="w-[72px] shrink-0 overflow-hidden rounded border border-line">
                   {holder?.thumbnail_url ? (
-                    <img src={holder.thumbnail_url} alt="" className="aspect-video w-full object-cover" />
+                    <ThumbImage
+                      src={holder.thumbnail_url}
+                      alt=""
+                      className="aspect-video w-full object-cover"
+                    />
                   ) : (
                     <div className="flex aspect-video w-full items-center justify-center text-ink-3">
                       <ImageOff aria-hidden="true" className="h-3.5 w-3.5" />
@@ -573,7 +578,11 @@ export default function VideoManager({
                 />
                 <div className="w-[104px] shrink-0 overflow-hidden rounded border border-line">
                   {video.thumbnail_url ? (
-                    <img src={video.thumbnail_url} alt="" className="aspect-video w-full object-cover" />
+                    <ThumbImage
+                      src={video.thumbnail_url}
+                      alt=""
+                      className="aspect-video w-full object-cover"
+                    />
                   ) : (
                     <div className="flex aspect-video w-full items-center justify-center text-ink-3">
                       <ImageOff aria-hidden="true" className="h-4 w-4" />

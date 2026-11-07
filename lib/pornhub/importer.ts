@@ -1,12 +1,13 @@
 import {
   embedUrlFor,
+  normalizeThumbnail,
   parseSearchListing,
   parseVideoPage,
   pornhubSlug,
   searchUrl,
   watchUrlFor,
 } from "./parse";
-import { categorySource } from "./categories";
+import { categorySource, searchPlan } from "./categories";
 import type { FetchPornhubPage } from "./client";
 import type { ImportService } from "@/lib/catalog/counts";
 
@@ -17,21 +18,27 @@ import type { ImportService } from "@/lib/catalog/counts";
  * advertises and the embed URL built from that viewkey. No bytes are copied,
  * transcoded or proxied.
  *
- * Three properties matter to the operator:
+ * Four properties matter to the operator:
  *
  *  - **Unlimited.** There is no "videos per category" target and no cap. A run
- *    keeps paging until the search is exhausted; the caller asks for one slice
- *    at a time so a single request always finishes inside its timeout, and the
- *    returned cursor continues exactly where the previous slice stopped.
+ *    keeps paging until the caller stops asking; the admin panel decides when
+ *    that is, and a slice boundary exists only so a single request always
+ *    finishes inside its timeout. When every search of a category has been
+ *    walked, the report says `exhausted` — the panel answers that by starting
+ *    another pass, which picks up whatever was published since.
+ *  - **Popular first.** The searches are walked in Pornhub's own sort orders
+ *    (most viewed → top rated → most commented → relevance), and the videos on
+ *    one page are inserted in view order, so a half-filled category already
+ *    looks like the category rather than like a random sample.
+ *  - **A poster on every row.** A card without a thumbnail is resolved from its
+ *    watch page instead of being imported blank, and `repairThumbnails` fixes
+ *    rows stored before that rule existed.
  *  - **No duplicates.** The viewkey is the identity. It is checked against the
  *    rows already in the catalog, against the rows of this run, and finally by
  *    a unique index in the database, so a race between two runs cannot create a
  *    second row for the same video.
  *  - **High quality.** A video is imported only when Pornhub marks it HD, or
- *    when its own watch page advertises a stream at least 720p tall. The
- *    listing's HD badge is trusted when the page has one; a page that carries no
- *    badge at all (markup change) falls back to checking the watch page rather
- *    than importing unknown-quality clips.
+ *    when its own watch page advertises a stream at least 720p tall.
  */
 
 /** Stored in `videos.provider` for every row this importer creates. */
@@ -49,7 +56,7 @@ export const MIN_DURATION_SECONDS = 60;
 export const MIN_HD_HEIGHT = 720;
 
 /**
- * Consecutive all-duplicate pages after which the next search phrase is tried.
+ * Consecutive all-duplicate pages after which the next search is tried.
  *
  * Two searches ("milf" and "milf amateur") overlap heavily; once a page brings
  * nothing new for a while, paging deeper only spends requests on the same
@@ -57,11 +64,17 @@ export const MIN_HD_HEIGHT = 720;
  */
 export const DUPLICATE_PAGES_BEFORE_NEXT_SOURCE = 12;
 
-/** Watch pages fetched to confirm quality when a listing carries no HD badge. */
-export const MAX_QUALITY_CHECKS_PER_REQUEST = 25;
+/**
+ * Watch pages one request may read to learn a video's quality or its poster.
+ * Both fallbacks share the budget, so one slow page cannot starve a whole run.
+ */
+export const MAX_DETAIL_FETCHES_PER_REQUEST = 25;
+
+/** Rows `repairThumbnails` may fix in one call. */
+export const MAX_POSTER_REPAIRS = 10;
 
 export type ImportCursor = {
-  /** Index into the category's `searches` list. */
+  /** Index into the category's search plan (phrase × sort order). */
   source: number;
   /** 1-based search result page. */
   page: number;
@@ -86,6 +99,8 @@ export type PornhubImportOptions = {
   rightsStatus?: RightsStatus;
   /** Resolve and report without writing to the catalog. */
   dryRun?: boolean;
+  /** Repair stored rows whose poster is missing before importing. */
+  repair?: boolean;
   baseUrl?: string;
 };
 
@@ -103,6 +118,7 @@ export type PornhubSample = {
   embedUrl: string;
   thumbnailUrl: string;
   quality: "HD" | "4K" | null;
+  views: number | null;
 };
 
 export type PornhubImportReport = {
@@ -110,10 +126,13 @@ export type PornhubImportReport = {
   categoryId: string;
   imported: number;
   duplicates: number;
+  /** Stored rows whose missing poster was resolved during this slice. */
+  repaired: number;
   skipped: PornhubSkipped;
   pagesRead: number;
   /** Where the next slice continues. Meaningful only while `exhausted` is false. */
   cursor: ImportCursor;
+  /** Every search in the plan has been walked; a new pass may begin. */
   exhausted: boolean;
   dryRun: boolean;
   errors: string[];
@@ -148,6 +167,7 @@ type CatalogRow = {
   duration_seconds: number | null;
   quality: "HD" | "4K" | null;
   resolution: string | null;
+  view_count: number;
   status: "published" | "pending_review";
   visibility: "public" | "private";
   rights_status: RightsStatus;
@@ -162,16 +182,18 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 const IDENTITY_BATCH = 40;
 /** Rows per insert statement. */
 const INSERT_BATCH = 50;
+/** Rows scanned when looking for stored posters that are not posters at all. */
+const POSTER_SCAN_LIMIT = 500;
 
 function clampPages(value: number | undefined): number {
   if (!Number.isFinite(value) || !value || value <= 0) return DEFAULT_PAGES_PER_REQUEST;
   return Math.min(MAX_PAGES_PER_REQUEST, Math.max(1, Math.floor(value)));
 }
 
-function normalizeCursor(cursor: ImportCursor | undefined, sourceCount: number): ImportCursor {
+function normalizeCursor(cursor: ImportCursor | undefined, planLength: number): ImportCursor {
   const source = Number.isFinite(cursor?.source) ? Math.floor(Number(cursor?.source)) : 0;
   const page = Number.isFinite(cursor?.page) ? Math.floor(Number(cursor?.page)) : 1;
-  if (source >= sourceCount) return { source: sourceCount, page: 1 };
+  if (source >= planLength) return { source: planLength, page: 1 };
   return { source: Math.max(0, source), page: Math.max(1, page) };
 }
 
@@ -234,6 +256,114 @@ async function insertRows(
   return { inserted, duplicates, errors };
 }
 
+/**
+ * True when a stored value is a poster URL the catalog can actually display.
+ *
+ * The host check (a phncdn/pornhub CDN) is not enough on its own: a *watch page*
+ * stored as a thumbnail is on `pornhub.com` too, and `<img src="…view_video.php">`
+ * is exactly the blank card this repairs. A poster must also end in an image
+ * extension.
+ */
+export function looksLikePoster(value: string | null | undefined): boolean {
+  const url = normalizeThumbnail(value);
+  if (!url) return false;
+  try {
+    return /\.(jpe?g|png|webp|avif)$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+type StoredRow = { id: string; provider_file_id: string | null; thumbnail_url: string | null };
+
+/**
+ * Resolves the real poster for stored Pornhub rows that have none.
+ *
+ * A row imported before the poster rule existed — or whose listing advertised
+ * only a placeholder — shows a blank card, which is exactly the "thumbnails are
+ * not visible" symptom. The watch page always publishes an `og:image`, so the
+ * poster is read from there and written back. Nothing else on the row changes.
+ */
+export async function repairThumbnails(
+  deps: {
+    service: ImportService;
+    fetchPage: FetchPornhubPage;
+    logger?: (message: string) => void;
+    sleep?: (ms: number) => Promise<void>;
+    delayMs?: number;
+  },
+  options: { limit?: number; dryRun?: boolean } = {},
+): Promise<{ repaired: number; failed: number }> {
+  const limit = Math.max(0, Math.min(MAX_POSTER_REPAIRS, options.limit ?? MAX_POSTER_REPAIRS));
+  if (!limit) return { repaired: 0, failed: 0 };
+  const sleep = deps.sleep ?? defaultSleep;
+  const delayMs = Math.max(0, deps.delayMs ?? 150);
+  const log = deps.logger ?? (() => {});
+
+  const candidates = new Map<string, StoredRow>();
+  const collect = (rows: StoredRow[] | null) => {
+    for (const row of rows || []) {
+      if (row.id && row.provider_file_id && !candidates.has(row.id)) candidates.set(row.id, row);
+    }
+  };
+
+  // Two shapes of broken: no poster at all, and a value that is not an image on
+  // an allowed CDN (a page URL, a stale host, a data: URI).
+  const missing = await deps.service
+    .from("videos")
+    .select("id, provider_file_id, thumbnail_url")
+    .eq("provider", PORNHUB_PROVIDER)
+    .is("thumbnail_url", null)
+    .limit(limit);
+  if (missing.error) log(`poster repair: ${missing.error.message}`);
+  else collect(missing.data as unknown as StoredRow[]);
+
+  if (candidates.size < limit) {
+    const window = await deps.service
+      .from("videos")
+      .select("id, provider_file_id, thumbnail_url")
+      .eq("provider", PORNHUB_PROVIDER)
+      .not("thumbnail_url", "is", null)
+      .order("id", { ascending: true })
+      .limit(POSTER_SCAN_LIMIT);
+    if (window.error) log(`poster repair: ${window.error.message}`);
+    else collect(window.data as unknown as StoredRow[]);
+  }
+
+  const broken = [...candidates.values()]
+    .filter((row) => row.provider_file_id && !looksLikePoster(row.thumbnail_url))
+    .slice(0, limit);
+
+  let repaired = 0;
+  let failed = 0;
+  for (const row of broken) {
+    try {
+      if (delayMs) await sleep(delayMs);
+      const page = await deps.fetchPage(watchUrlFor(String(row.provider_file_id)));
+      const detail = parseVideoPage(page.html, String(row.provider_file_id));
+      if (!detail?.thumbnailUrl) {
+        failed += 1;
+        continue;
+      }
+      if (options.dryRun) {
+        repaired += 1;
+        continue;
+      }
+      const { error } = await deps.service
+        .from("videos")
+        .update({ thumbnail_url: detail.thumbnailUrl })
+        .eq("id", row.id);
+      if (error) failed += 1;
+      else repaired += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+
+  if (repaired) log(`poster repair: ${repaired} row(s) now have a poster`);
+  return { repaired, failed };
+}
+
 export async function importCategorySlice(
   options: PornhubImportOptions,
   deps: PornhubImportDeps,
@@ -242,11 +372,12 @@ export async function importCategorySlice(
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? (() => new Date());
   const delayMs = Math.max(0, deps.delayMs ?? 150);
-  const sources = categorySource(options.categorySlug);
-  if (!sources) {
+  const source = categorySource(options.categorySlug);
+  if (!source) {
     throw new Error(`No Pornhub source is configured for "${options.categorySlug}"`);
   }
 
+  const plan = searchPlan(options.categorySlug);
   const baseUrl = (options.baseUrl || undefined) as string | undefined;
   const pagesPerRequest = clampPages(options.pagesPerRequest);
   const requireHd = options.requireHd !== false;
@@ -259,6 +390,7 @@ export async function importCategorySlice(
     categoryId: deps.categoryId,
     imported: 0,
     duplicates: 0,
+    repaired: 0,
     skipped: { notHd: 0, unknownQuality: 0, short: 0, noThumbnail: 0, failed: 0 },
     pagesRead: 0,
     cursor: { ...INITIAL_CURSOR },
@@ -268,9 +400,19 @@ export async function importCategorySlice(
     samples: [],
   };
 
-  let cursor = normalizeCursor(options.cursor, sources.searches.length);
+  // Rows stored before the poster rule existed are fixed first: the operator
+  // sees the grid fill in with pictures, not just with rows.
+  if (options.repair) {
+    const repair = await repairThumbnails(
+      { service: deps.service, fetchPage: deps.fetchPage, logger: log, sleep, delayMs },
+      { dryRun },
+    );
+    report.repaired = repair.repaired;
+  }
+
+  let cursor = normalizeCursor(options.cursor, plan.length);
   const claimed = new Set<string>();
-  let qualityChecks = 0;
+  let detailFetches = 0;
   let duplicatePagesInARow = 0;
 
   const publishedAt = rightsStatus === "cleared" ? now().toISOString() : null;
@@ -284,6 +426,7 @@ export async function importCategorySlice(
     quality: "HD" | "4K" | null;
     height: number | null;
     description: string | null;
+    views: number | null;
   }): CatalogRow {
     return {
       slug: pornhubSlug(card.title, card.viewkey),
@@ -300,6 +443,7 @@ export async function importCategorySlice(
       duration_seconds: card.durationSeconds,
       quality: card.quality,
       resolution: card.height ? `${card.height}p` : null,
+      view_count: card.views ?? 0,
       status: rightsStatus === "cleared" ? "published" : "pending_review",
       visibility: rightsStatus === "cleared" ? "public" : "private",
       rights_status: rightsStatus,
@@ -309,9 +453,9 @@ export async function importCategorySlice(
     };
   }
 
-  while (report.pagesRead < pagesPerRequest && cursor.source < sources.searches.length) {
-    const phrase = sources.searches[cursor.source];
-    const url = searchUrl(phrase, cursor.page, baseUrl);
+  while (report.pagesRead < pagesPerRequest && cursor.source < plan.length) {
+    const unit = plan[cursor.source];
+    const url = searchUrl(unit.phrase, cursor.page, baseUrl, unit.order);
     let html = "";
     try {
       if (delayMs) await sleep(delayMs);
@@ -320,7 +464,7 @@ export async function importCategorySlice(
       report.errors.push(
         `${url}: ${error instanceof Error ? error.message : "unreadable search page"}`,
       );
-      // A blocked or broken search phrase must not trap the run on one page.
+      // A blocked or broken search must not trap the run on one page.
       cursor = { source: cursor.source + 1, page: 1 };
       duplicatePagesInARow = 0;
       continue;
@@ -330,7 +474,7 @@ export async function importCategorySlice(
     const listing = parseSearchListing(html, url);
 
     if (!listing.cards.length) {
-      // No results left on this phrase: try the next one.
+      // No results left on this search: try the next one.
       cursor = { source: cursor.source + 1, page: 1 };
       duplicatePagesInARow = 0;
       continue;
@@ -346,7 +490,7 @@ export async function importCategorySlice(
       }
       claimed.add(card.viewkey);
 
-      if (!card.title || !card.thumbnailUrl) {
+      if (!card.title) {
         report.skipped.noThumbnail += 1;
         continue;
       }
@@ -362,20 +506,15 @@ export async function importCategorySlice(
       let durationSeconds = card.durationSeconds;
       let description: string | null = null;
 
-      if (card.hd === true) {
-        // The listing says HD; nothing else needs fetching.
-      } else if (listing.hdSignal) {
-        // This page labels videos and this one was not labelled: it is not HD.
-        if (requireHd) {
-          report.skipped.notHd += 1;
-          continue;
-        }
-      } else if (!requireHd) {
-        // Quality is not a requirement and the page offers no badge.
-      } else if (qualityChecks < MAX_QUALITY_CHECKS_PER_REQUEST) {
-        // No HD badge anywhere on the page (markup change). Ask the watch page,
-        // which always lists the streams it can serve.
-        qualityChecks += 1;
+      // Two reasons to read the watch page: the listing cannot say whether the
+      // video is HD, or it advertises no poster. Both are resolved from the same
+      // page, and both share one bounded budget per request.
+      const needsQuality = card.hd !== true && !listing.hdSignal && requireHd;
+      const needsPoster = !thumbnailUrl;
+      const mayFetch = needsQuality || needsPoster;
+
+      if (mayFetch && detailFetches < MAX_DETAIL_FETCHES_PER_REQUEST) {
+        detailFetches += 1;
         try {
           if (delayMs) await sleep(delayMs);
           const detailPage = await deps.fetchPage(watchUrlFor(card.viewkey));
@@ -392,19 +531,39 @@ export async function importCategorySlice(
             `${card.viewkey}: ${error instanceof Error ? error.message : "unreadable video page"}`,
           );
         }
+      }
 
-        if (height != null && height >= MIN_HD_HEIGHT) {
-          quality = height >= 2160 ? "4K" : "HD";
-        } else if (height == null) {
-          report.skipped.unknownQuality += 1;
-          continue;
-        } else {
+      if (!thumbnailUrl) {
+        // No poster anywhere: a card without a picture is worse than no card.
+        report.skipped.noThumbnail += 1;
+        continue;
+      }
+
+      if (card.hd === true) {
+        // The listing says HD; nothing else needs fetching.
+        quality = "HD";
+      } else if (listing.hdSignal) {
+        // This page labels videos and this one was not labelled: it is not HD.
+        if (requireHd) {
           report.skipped.notHd += 1;
           continue;
         }
-      } else {
-        // Quality checks are spent for this request; the next slice retries.
+      } else if (!requireHd) {
+        // Quality is not a requirement and the page offers no badge.
+      } else if (height != null && height >= MIN_HD_HEIGHT) {
+        quality = height >= 2160 ? "4K" : "HD";
+      } else if (height == null) {
+        // No answer from the watch page (or the budget is spent): the next slice
+        // retries the same video rather than importing an unknown quality.
         report.skipped.unknownQuality += 1;
+        continue;
+      } else {
+        report.skipped.notHd += 1;
+        continue;
+      }
+
+      if (durationSeconds != null && durationSeconds < minDuration) {
+        report.skipped.short += 1;
         continue;
       }
 
@@ -416,8 +575,14 @@ export async function importCategorySlice(
         quality,
         height,
         description,
+        views: card.views,
       });
     }
+
+    // Popular first: the search is already ordered by views, but the videos a
+    // page contributes are inserted in view order too, so a half-walked page
+    // still leaves the most popular ones in the catalog.
+    accepted.sort((a, b) => (b.views ?? -1) - (a.views ?? -1));
 
     // How many videos on this page were genuinely new to the catalog. A search
     // that keeps returning pages of already-imported videos is finished, no
@@ -456,6 +621,7 @@ export async function importCategorySlice(
           embedUrl: embedUrlFor(card.viewkey),
           thumbnailUrl: card.thumbnailUrl,
           quality: card.quality,
+          views: card.views,
         });
       }
     }
@@ -464,7 +630,7 @@ export async function importCategorySlice(
     duplicatePagesInARow = insertedOnPage > 0 ? 0 : duplicatePagesInARow + 1;
 
     if (duplicatePagesInARow >= DUPLICATE_PAGES_BEFORE_NEXT_SOURCE) {
-      log(`${options.categorySlug}: “${phrase}” has nothing new left; moving on`);
+      log(`${options.categorySlug}: “${unit.phrase}” (${unit.orderLabel}) has nothing new left`);
       cursor = { source: cursor.source + 1, page: 1 };
       duplicatePagesInARow = 0;
       continue;
@@ -478,11 +644,11 @@ export async function importCategorySlice(
   }
 
   report.cursor = cursor;
-  report.exhausted = cursor.source >= sources.searches.length;
+  report.exhausted = cursor.source >= plan.length;
 
   log(
     `${options.categorySlug}: +${report.imported} imported, ${report.duplicates} already known, ` +
-      `${report.pagesRead} page(s)${report.exhausted ? ", search exhausted" : ""}`,
+      `${report.pagesRead} page(s)${report.exhausted ? ", every search walked" : ""}`,
   );
 
   return report;
