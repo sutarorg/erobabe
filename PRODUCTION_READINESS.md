@@ -2,8 +2,8 @@
 
 > **Historical document (superseded 2026-10-27).** Video uploads and Bunny
 > Stream are retired. This file is kept for provenance; read
-> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips embeds,
-> `npm run import:damplips`, `/api/videos/stream`).
+> `docs/PORNHUB_EMBEDS.md` for the current catalog flow (Pornhub embeds,
+> **Admin → Videos → Import from Pornhub**, `/api/videos/stream` for legacy rows).
 
 ## Decision: HOLD — not production-ready
 

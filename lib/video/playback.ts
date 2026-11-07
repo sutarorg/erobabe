@@ -1,10 +1,11 @@
 /**
  * Which destination the watch page may hand to a player.
  *
- * The catalog now embeds damplips.com: a row stores the media URL the damplips
- * post page itself serves (an mp4/HLS file or a player URL) plus the page it
- * came from. Uploaded providers are retired, so a row still pointing at one is
- * reported as unsupported rather than handed to an iframe.
+ * The catalog embeds Pornhub: a row stores Pornhub's viewkey, from which the
+ * embed player URL is built. Legacy rows that carry a damplips.com file still
+ * play in our own player (the direct-media path below). Uploaded providers are
+ * retired, so a row still pointing at one is reported as unsupported rather
+ * than handed to an iframe.
  *
  * A **direct file** — what damplips publishes today, e.g.
  * `https://video.damplips.com/video7/717/79.mp4` — is never "prepared": the
@@ -137,7 +138,23 @@ function isRetiredMediaHost(url: URL): boolean {
   return RETIRED_MEDIA_HOSTS.test(url.hostname);
 }
 
-/** YouTube/Vimeo players are the only non-damplips embeds accepted. */
+/**
+ * Pornhub's own player, which is what the catalog embeds.
+ *
+ * Only the share player (`/embed/<viewkey>`) is accepted: it is the URL Pornhub
+ * itself hands out for embedding, it cannot be pointed at an arbitrary page, and
+ * the viewkey is the identity the importer stored.
+ */
+function isApprovedPornhubEmbed(url: URL): boolean {
+  if (url.protocol !== "https:" || url.port) return false;
+  if (url.hostname !== "www.pornhub.com" && url.hostname !== "pornhub.com") return false;
+  // No query string: the importer stores a bare embed URL, and handing extra
+  // parameters to a third-party frame is a capability this site never needs.
+  if (url.search) return false;
+  return /^\/embed\/[A-Za-z0-9]{6,32}$/.test(url.pathname);
+}
+
+/** YouTube/Vimeo players are the only other non-damplips embeds accepted. */
 function isApprovedNonDamplipsEmbed(url: URL): boolean {
   if (url.protocol !== "https:" || url.port) return false;
   if (url.hostname === "www.youtube-nocookie.com" || url.hostname === "www.youtube.com") {
@@ -174,7 +191,9 @@ export function selectPlaybackSource(
     if (isDamplipsMediaUrl(embed.toString())) {
       return { kind: "direct", url: embed.toString() };
     }
-    if (isApprovedNonDamplipsEmbed(embed)) return { kind: "embed", url: embed.toString() };
+    if (isApprovedPornhubEmbed(embed) || isApprovedNonDamplipsEmbed(embed)) {
+      return { kind: "embed", url: embed.toString() };
+    }
     return { kind: "unsupported" };
   }
 

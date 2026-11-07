@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { categoryCounts, type ImportService } from "@/lib/damplips/importer";
+import { categoryCounts, type ImportService } from "@/lib/catalog/counts";
 
 /**
  * The panel's numbers are what an operator decides on ("this category already
@@ -23,18 +23,18 @@ const CATEGORIES = [
   { id: "cat-pov", label: "POV", slug: "pov" },
 ];
 
-function damplipsVideo(categoryId: string, index: number, overrides: Row = {}): Row {
+function pornhubVideo(categoryId: string, index: number, overrides: Row = {}): Row {
   return {
     id: `${categoryId}-${index}`,
     category_id: categoryId,
-    provider: "damplips",
+    provider: "pornhub",
     status: "published",
     visibility: "public",
     rights_status: "cleared",
     moderation_status: "approved",
     requires_reupload: false,
-    playable_url: `https://video.damplips.com/videos/${index}.mp4`,
-    embed_url: null,
+    playable_url: null,
+    embed_url: `https://www.pornhub.com/embed/${categoryId}-${index}`,
     ...overrides,
   };
 }
@@ -128,15 +128,15 @@ describe("per-category counts", () => {
   it("counts every video in the category, drafts included", async () => {
     const { service } = createService({
       videos: [
-        damplipsVideo("cat-amateur", 1),
-        damplipsVideo("cat-amateur", 2),
+        pornhubVideo("cat-amateur", 1),
+        pornhubVideo("cat-amateur", 2),
         // Staged for review: in the catalog, invisible to visitors.
-        damplipsVideo("cat-amateur", 3, {
+        pornhubVideo("cat-amateur", 3, {
           status: "pending_review",
           visibility: "private",
           rights_status: "pending",
         }),
-        damplipsVideo("cat-pov", 4),
+        pornhubVideo("cat-pov", 4),
       ],
     });
 
@@ -148,7 +148,7 @@ describe("per-category counts", () => {
   });
 
   it("keeps counting past the 1 000-row page the old tally fell off", async () => {
-    const videos = Array.from({ length: 1500 }, (_, index) => damplipsVideo("cat-amateur", index));
+    const videos = Array.from({ length: 1500 }, (_, index) => pornhubVideo("cat-amateur", index));
     const { service, queries } = createService({ videos });
 
     const [amateur] = await categoryCounts(service);
@@ -162,14 +162,14 @@ describe("per-category counts", () => {
   it("only counts a video as live when a visitor could actually play it", async () => {
     const { service, queries } = createService({
       videos: [
-        damplipsVideo("cat-pov", 1),
-        damplipsVideo("cat-pov", 2, { status: "draft" }),
-        damplipsVideo("cat-pov", 3, { visibility: "private" }),
-        damplipsVideo("cat-pov", 4, { rights_status: "pending" }),
-        damplipsVideo("cat-pov", 5, { moderation_status: "pending" }),
-        damplipsVideo("cat-pov", 6, { requires_reupload: true }),
-        damplipsVideo("cat-pov", 7, { playable_url: null, embed_url: null }),
-        damplipsVideo("cat-pov", 8, { playable_url: null, embed_url: "https://www.damplips.com/embed/8" }),
+        pornhubVideo("cat-pov", 1),
+        pornhubVideo("cat-pov", 2, { status: "draft" }),
+        pornhubVideo("cat-pov", 3, { visibility: "private" }),
+        pornhubVideo("cat-pov", 4, { rights_status: "pending" }),
+        pornhubVideo("cat-pov", 5, { moderation_status: "pending" }),
+        pornhubVideo("cat-pov", 6, { requires_reupload: true }),
+        pornhubVideo("cat-pov", 7, { playable_url: null, embed_url: null }),
+        pornhubVideo("cat-pov", 8, { playable_url: null, embed_url: "https://www.pornhub.com/embed/abc12345" }),
       ],
     });
 
@@ -185,7 +185,6 @@ describe("per-category counts", () => {
     );
     expect(liveQuery?.filters).toEqual(
       expect.arrayContaining([
-        ["provider", "damplips"],
         ["category_id", "cat-pov"],
         ["status", "published"],
         ["visibility", "public"],
@@ -197,19 +196,23 @@ describe("per-category counts", () => {
     );
   });
 
-  it("ignores rows from another provider", async () => {
+  it("counts every provider, so the operator number matches the visitor number", async () => {
     const { service } = createService({
       videos: [
-        damplipsVideo("cat-amateur", 1),
-        damplipsVideo("cat-amateur", 2, { provider: "legacy" }),
+        pornhubVideo("cat-amateur", 1),
+        pornhubVideo("cat-amateur", 2, {
+          provider: "damplips",
+          playable_url: "https://video.damplips.com/video7/717/79.mp4",
+          embed_url: null,
+        }),
       ],
     });
     const [amateur] = await categoryCounts(service);
-    expect(amateur).toMatchObject({ published: 1, total: 1 });
+    expect(amateur).toMatchObject({ published: 2, total: 2 });
   });
 
   it("stays exact when the client answers without a count", async () => {
-    const videos = Array.from({ length: 2500 }, (_, index) => damplipsVideo("cat-pov", index));
+    const videos = Array.from({ length: 2500 }, (_, index) => pornhubVideo("cat-pov", index));
     const { service, queries } = createService({ videos, headCounts: false, pageSize: 1000 });
 
     const [amateur, pov] = await categoryCounts(service);

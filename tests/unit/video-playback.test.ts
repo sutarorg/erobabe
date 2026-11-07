@@ -89,6 +89,34 @@ describe("validated stored playback", () => {
     ).toBe("unsupported");
   });
 
+  it("frames Pornhub's own embed player for an imported row", () => {
+    // The importer stores this exact URL; the watch page must hand it to the
+    // iframe, not to the <video> element.
+    expect(
+      selectPlaybackSource(null, "https://www.pornhub.com/embed/68a1b2c3d4e5f", "pornhub"),
+    ).toEqual({ kind: "embed", url: "https://www.pornhub.com/embed/68a1b2c3d4e5f" });
+  });
+
+  it("accepts the bare pornhub.com host but nothing off the embed path", () => {
+    expect(
+      selectPlaybackSource(null, "https://pornhub.com/embed/68a1b2c3d4e5f", "pornhub").kind,
+    ).toBe("embed");
+    // A watch page, a search page or a lookalike host is never framed.
+    expect(
+      selectPlaybackSource(
+        null,
+        "https://www.pornhub.com/view_video.php?viewkey=68a1b2c3d4e5f",
+        "pornhub",
+      ).kind,
+    ).toBe("unsupported");
+    expect(
+      selectPlaybackSource(null, "https://pornhub.evil.example/embed/68a1b2c3d4e5f").kind,
+    ).toBe("unsupported");
+    expect(
+      selectPlaybackSource(null, "https://www.pornhub.com/embed/68a1b2c3d4e5f?redirect=evil").kind,
+    ).toBe("unsupported");
+  });
+
   it("reports rows with no media destination as missing", () => {
     expect(selectPlaybackSource(null, null, "damplips")).toEqual({ kind: "missing" });
   });
