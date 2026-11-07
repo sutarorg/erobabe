@@ -12,8 +12,7 @@
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts",
     "test:e2e": "playwright test",
-    "db:generate": "echo 'Run supabase migrations via CLI or dashboard'",
-    "import:damplips": "esbuild scripts/import-damplips.ts --bundle --platform=node --format=esm --packages=external --log-level=warning --outfile=.cache/import-damplips.mjs && node .cache/import-damplips.mjs"
+    "db:generate": "echo 'Run supabase migrations via CLI or dashboard'"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

@@ -35,8 +35,10 @@ function liveOrder(overrides: Record<string, unknown> = {}) {
     status: "live",
     payment_status: "verified",
     amount_cents: 9900,
-    starts_at: "2026-10-01T00:00:00.000Z",
-    ends_at: "2026-10-31T00:00:00.000Z",
+    // Relative to "now" so the fixture never turns into an expired ad as the
+    // calendar moves past a hard-coded date.
+    starts_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+    ends_at: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000).toISOString(),
     image_path: "orders/banner.png",
     ...overrides,
   };

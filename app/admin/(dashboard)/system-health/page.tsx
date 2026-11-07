@@ -1,6 +1,6 @@
 import { tryCreateServiceClient } from "@/lib/supabase/server";
 import { openRouterDiagnostics } from "@/lib/metadata/openrouter";
-import { categoryCounts, type ImportService } from "@/lib/damplips/importer";
+import { categoryCounts, type ImportService } from "@/lib/catalog/counts";
 import { loadInventory } from "@/lib/ads/inventory";
 import OpenRouterCheck from "./OpenRouterCheck";
 
@@ -113,10 +113,10 @@ export default async function SystemHealthAdmin() {
   const ai = openRouterDiagnostics();
   const aiStatus = ai.configured ? "Configured" : "Not configured";
 
-  // The catalog is embedded from damplips; this is the real per-category count.
+  // The catalog is embedded; this is the real per-category count a visitor sees.
   let catalogStatus = "Unavailable";
   let catalogDetail =
-    "Category counts could not be read. Apply migration 00000000000026_damplips_embeds.sql.";
+    "Category counts could not be read. Apply migration 00000000000029_pornhub_embeds.sql.";
   if (supabase) {
     try {
       const counts = await categoryCounts(supabase as unknown as ImportService);
@@ -157,7 +157,7 @@ export default async function SystemHealthAdmin() {
       desc: orderDetail,
     },
     {
-      name: "Video catalog (damplips)",
+      name: "Video catalog",
       status: catalogStatus,
       latency: "—",
       desc: catalogDetail,
@@ -166,7 +166,7 @@ export default async function SystemHealthAdmin() {
       name: "Video uploads",
       status: "Retired",
       latency: "—",
-      desc: "Uploads and the Bunny Stream pipeline are removed. The library is filled by the damplips importer from Videos → Sync from damplips, or by `npm run import:damplips`.",
+      desc: "Uploads and the Bunny Stream pipeline are removed. The library is filled by the Pornhub importer from Videos → Import from Pornhub, or nightly by the pornhub-import cron job.",
     },
     {
       name: "Resend",
@@ -241,7 +241,7 @@ export default async function SystemHealthAdmin() {
       <div className="mt-6 rounded-lg border border-line bg-pcard p-4">
         <p className="text-[11px] text-ink-3">
           Last checked: {new Date().toLocaleString()} — real diagnostic requests are performed for
-          Database, ad slot inventory, creative storage, the ad review queue and the damplips catalog.
+          Database, ad slot inventory, creative storage, the ad review queue and the Pornhub catalog.
           Use “Test OpenRouter” to prove the AI metadata key with a live call. PayPal payments are
           checked manually in your PayPal account from Ad Review.
         </p>

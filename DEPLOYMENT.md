@@ -1,19 +1,20 @@
 > **Video uploads are retired (2026-10).** Every section below that describes
-> Bunny Stream uploads, `BUNNY_*` credentials, `/admin/videos/upload`,
-> `CRON_SECRET` or `/api/cron/bunny-publish` is historical. The catalog is now
-> embedded from damplips.com; fill it with `npm run import:damplips` or
-> **Admin → Videos → Sync from damplips**, and see `docs/DAMPLIPS_EMBEDS.md`.
-> Migration `00000000000026_damplips_embeds.sql` drops the upload tables.
+> Bunny Stream uploads, `BUNNY_*` credentials, `/admin/videos/upload` or
+> `/api/cron/bunny-publish` is historical. The catalog is now embedded from
+> Pornhub: fill it from **Admin → Videos → Import from Pornhub**, or nightly via
+> `/api/cron/pornhub-import`; see `docs/PORNHUB_EMBEDS.md`. Migrations
+> `00000000000026_damplips_embeds.sql` and `00000000000029_pornhub_embeds.sql`
+> drop the upload tables and add the Pornhub provider.
 
 # DEPLOYMENT.md — Erobabe Production Setup (Click-by-Click)
 
-Deployment setup and operational checklist for Erobabe. It covers Supabase, guest PayPal advertising checkout, the damplips video catalog, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. There are no video uploads; section D documents the catalog import.
+Deployment setup and operational checklist for Erobabe. It covers Supabase, guest PayPal advertising checkout, the Pornhub video catalog, OpenRouter, Resend, hosting, domains, environment variables, testing and rollback. There are no video uploads; section D documents the catalog import.
 
 **Current launch evidence:** see PRODUCTION_READINESS.md and GO_LIVE_CHECKLIST.md. Repository checks are not account-policy approval. Follow the rollout addendum below before using historical setup steps.
 
 **Video-provider guidance audited**: October 14, 2026
 
-**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage), PayPal QR checkout, Resend, OpenRouter (NVIDIA Nemotron 3 Ultra, free route), damplips embeds, Tailwind CSS 4.
+**Stack**: Next.js 15 App Router, Supabase (Auth + Postgres + Storage), PayPal QR checkout, Resend, OpenRouter (NVIDIA Nemotron 3 Ultra, free route), Pornhub embeds, Tailwind CSS 4.
 
 ---
 
@@ -36,7 +37,7 @@ Deployment setup and operational checklist for Erobabe. It covers Supabase, gues
 - Playwright browsers: `npx playwright install`
 
 ### Decisions requiring owner authorization before production
-1. **Video source**: damplips embeds only. Confirm you have the right to embed each item, then run the import in section D.
+1. **Video source**: Pornhub embeds only. Confirm you have the right to embed each item, then run the import in section D.
 2. **Hosting provider**: Vercel Hobby is limited to personal non-commercial use and its Acceptable Use Policy restricts objectionable content. Do NOT deploy commercial Erobabe to Vercel Hobby. Choose a host whose terms explicitly permit adult content and commercial use. Document approval.
 3. **Legal identity**: Operator must provide real legal name, business address, registration, contact emails, age-verification procedures. Do not publish fictional identity.
 4. **Age assurance**: Evaluate jurisdiction-specific requirements (e.g., UK, EU, US state laws). Frontend age gate alone is not robust assurance. Implement required verification integration where legally required.
@@ -120,7 +121,7 @@ supabase migration up
 
 ### 8. Application routes, not assumed Edge Functions
 
-This checkout implements payments/IPN, metadata and the damplips catalog importer
+This checkout implements payments/IPN, metadata and the Pornhub catalog importer
 as Next.js routes. There are no checked-in Supabase Edge Functions to deploy for
 these operations. Do not create retired upload relay functions.
 
@@ -258,38 +259,46 @@ payment-gateway environment variable.
 - A live order appears in public inventory and expires at its server-set `ends_at`.
 - A permitted test payment triggers the exact live-email subject in staging.
 
-## D. Video catalog — damplips embeds
+## D. Video catalog — Pornhub embeds
 
 Uploads are retired. Migration `00000000000026_damplips_embeds.sql` drops the
 upload tables, the Bunny columns and the upload functions, and the code has no
-upload adapter, upload route or cron sweep. Videos are embedded from
-damplips.com; full detail is in `docs/DAMPLIPS_EMBEDS.md`.
+upload adapter, upload route or cron sweep. Migration
+`00000000000029_pornhub_embeds.sql` makes `pornhub` a valid provider and adds the
+viewkey unique index. Videos are embedded from Pornhub; full detail is in
+`docs/PORNHUB_EMBEDS.md`.
 
-1. **Apply the migration**: run every file in `supabase/migrations/` in order,
-   including `00000000000026_damplips_embeds.sql`.
-2. **Check reachability** from the machine that will run the import:
+1. **Apply every migration**, in order, including
+   `00000000000026_damplips_embeds.sql` and
+   `00000000000029_pornhub_embeds.sql`.
+2. **Check reachability** from the machine that will run the import — Pornhub
+   refuses many datacenter addresses, and the panel reports that as a `403`, not
+   as "no new videos":
    ```bash
-   npm run import:damplips -- --probe=https://www.damplips.com/p/67284/
+   curl -sS -o /dev/null -w '%{http_code}\n' \
+     -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36' \
+     'https://www.pornhub.com/video/search?search=amateur'
    ```
-   `media: NOT FOUND` means damplips changed its player markup; capture the page
-   HTML and update `lib/damplips/parse.ts`.
-3. **Fill every category** (100+ each, 110 by default):
-   ```bash
-   NEXT_PUBLIC_SUPABASE_URL=… SUPABASE_SERVICE_ROLE_KEY=… \
-     npm run import:damplips -- --categories=all --per-category=110
-   ```
-   Or use **Admin → Videos → Sync from damplips**, which runs one category per
-   request. Both are idempotent; re-run to top a category up.
-4. **Confirm the target** in **Admin → System Health** (per-category published
-   counts) or with `select * from damplips_category_counts;`.
-5. **Playback** goes through `/api/videos/stream?src=…`, which only fetches
-   `*.damplips.com` over https, sends the referer the media host expects and
-   forwards range requests. Nothing is copied to storage or the server.
-6. **Rights and takedowns**: imported rows are written `rights_status='cleared'`
-   so categories are visible immediately. If you need review first, import with
-   `--rights=pending` (or tick *Stage as private drafts* in the dashboard). Keep
-   `/dmca` and `/content-removal` current; deleting a row keeps an operator
-   record in `media_retention`.
+3. **Fill the catalog**: **Admin → Videos → Import from Pornhub** → tick
+   categories → **Start import**. There is no target to set; the run continues
+   until Pornhub's search for each category is exhausted, and can be stopped at
+   any time. Re-running is always safe — everything already imported is skipped.
+4. **Or run it nightly**: set the repository secrets `SITE_URL` and
+   `CRON_SECRET`; `.github/workflows/pornhub-nightly-import.yml` then calls
+   `/api/cron/pornhub-import?category=<slug>` for every category at 00:00 IST
+   until the route reports `exhausted`.
+5. **Confirm the result** in **Admin → System Health** (per-category published
+   counts) or with `select * from pornhub_category_counts;`. Duplicate check:
+   `select provider_file_id, count(*) from videos where provider = 'pornhub'
+   group by 1 having count(*) > 1;` must return no rows.
+6. **Playback** frames `https://www.pornhub.com/embed/<viewkey>`; nothing is
+   copied to storage or the server, and no request is proxied for Pornhub.
+   Legacy damplips rows still stream through `/api/videos/stream?src=…`.
+7. **Rights and takedowns**: imported rows are written
+   `rights_status='cleared'` so categories are visible immediately. Tick
+   *Stage as private drafts* if you need to review first. Keep `/dmca` and
+   `/content-removal` current; deleting a row keeps an operator record in
+   `media_retention` with the original Pornhub URL.
 
 ## D2. Video admin tools
 
@@ -310,7 +319,7 @@ no uploader, no encoder queue and no server-side thumbnail generation.
   and `videos.carousel_description`. If `OPENROUTER_API_KEY` is missing or the
   model answers unusably, the listing title is shortened to the same budget, the
   slot is still saved, and the row says a fallback was used.
-- **Sync from damplips** — the panel above the table fills categories from the
+- **Import from Pornhub** — the panel above the table fills categories from the
   catalog importer (section D).
 - **Retired here**: the upload page, `PublishVideoButton`, automatic
   frame/thumbnail generation (ffmpeg), the thumbnail ranking pipeline, the
@@ -499,7 +508,7 @@ fly deploy
 | `RESEND_API_KEY` | Resend API key | No | https://resend.com → API Keys | Hosting secrets, Supabase SMTP password | prod | Test via contact form | Yes |
 | `RESEND_FROM_EMAIL` | Sender email, must be from verified domain | No | Your verified domain email | Hosting env | prod | Must be verified in Resend | Yes |
 | `SUPPORT_EMAIL` | Support inbox for notifications | No | Your support email | Hosting env | prod | Receives ticket emails | Yes |
-| `DAMPLIPS_BASE_URL` | Optional mirror/base for the catalog importer | No | `https://www.damplips.com` (default) | Hosting env or the import shell | optional | `npm run import:damplips -- --probe=/p/67284/` resolves against it | No |
+| `PORNHUB_BASE_URL` | Optional base override for the catalog importer (test fixture only) | No | `https://www.pornhub.com` (default) | Hosting env | optional | The import reads search pages from this host | No |
 
 **Security**: Never place `SUPABASE_SECRET_KEY`, `OPENROUTER_API_KEY`, `RESEND_API_KEY` in `NEXT_PUBLIC_*` variables. They must be server-only. Check build output for accidental exposure.
 
@@ -532,8 +541,8 @@ npx playwright test
 - [ ] Admin sign-in → `/admin` dashboard shows real counts (no mock)
 - [ ] Device uploads at `/admin/videos/upload` → multiple local files, real progress, local thumbnails and verified completion.
 - [ ] `/admin/videos` offers no upload control, and `app/admin/(dashboard)/videos/upload` returns 404.
-- [ ] **Sync from damplips** fills a category: the report shows a target, the imported count, and a poster and title for every row; `select * from damplips_category_counts` shows 100+ for every category.
-- [ ] A published damplips video plays on `/video/<slug>` through `/api/videos/stream`, seeks (range request), and an HLS row plays every segment through the same route (playlists are rewritten; no request goes to damplips from the browser).
+- [ ] **Import from Pornhub** fills a category: the panel shows the running counts, every imported row has a poster and a title, `select * from pornhub_category_counts` rises, and the duplicate query above returns no rows.
+- [ ] A published Pornhub video plays on `/video/<slug>` inside Pornhub's embed player, and a legacy damplips row still plays through `/api/videos/stream` (with range seeking).
 - [ ] `curl -o /dev/null -w '%{http_code}' 'https://your-domain/api/videos/stream?src=https://example.com/x.mp4'` returns 403.
 - [ ] Category management at `/admin/categories` → list categories, add new category, and edit label/slug/description/icon
 - [ ] Ad slots at `/admin/ad-slots` → the homepage rail layout: five slot cards left, five plus the inventory summary right; sold slots show the live creative, open slots carry the **Available** tag
@@ -654,7 +663,7 @@ curl http://localhost:3000/robots.txt
 grep -R "pexels\|INITIAL_VIDEOS\|mock\|demo" --include="*.tsx" --include="*.ts" app/ | grep -v "node_modules" | grep -v "IMPLEMENTATION_AUDIT"
 
 # Prove the catalog: one post resolves, and the stream proxy refuses foreign hosts
-npm run import:damplips -- --probe=/p/67284/
+curl -sS -o /dev/null -w '%{http_code}\n' 'https://www.pornhub.com/video/search?search=amateur'  # 200 = reachable
 curl -o /dev/null -w '%{http_code}\n' "https://your-domain/api/videos/stream?src=https://example.com/x.mp4"   # expect 403
 ```
 
@@ -664,9 +673,9 @@ curl -o /dev/null -w '%{http_code}\n' "https://your-domain/api/videos/stream?src
 1. Stop new bookings/uploads during schema rollout. Back up DB and Storage metadata; restore and test the backup in an isolated staging project. Run `docs/LAUNCH_PREFLIGHT.sql`. Resolve overlaps and unsafe historical records deliberately; migrations do not silently delete or relabel payment history.
 2. Verify applied migration history. Apply only unapplied SQL in order: **14 launch_integrity**, **15 measured_events**, **16 video_review_and_retention**, **17 operator_actions**, **18 payment_recovery**. Do not edit/reapply 00–13. Migration 14 restricts browser permissions immediately; deploy matching application code in the same maintenance window. All five have transaction wrappers. Use the Supabase CLI's reviewed migration process so migration history stays accurate; dashboard execution alone does not populate CLI history automatically.
 3. Backfill/review historic confirmed payments before enabling ads. `eligible_ads` now requires paid/approved/associated/in-date/active-account records. Legacy provider records are retained, not automatically trusted by a new checkout. Current migration 14 adds one-hour holds to existing campaign rows; reconcile pending invoices before exposing inventory. Campaign dates use **[start_date,end_date)** in UTC; a month is the existing 30-day product definition.
-4. Use Node **22.x**, `npm ci`, and the full commands in PRODUCTION_READINESS.md. Lint now uses supported ESLint CLI directly. FFmpeg is no longer packaged and no video bytes pass through Next/Supabase; the catalog is embedded from damplips, and the import needs outbound HTTPS to damplips.com.
+4. Use Node **22.x**, `npm ci`, and the full commands in PRODUCTION_READINESS.md. Lint now uses supported ESLint CLI directly. FFmpeg is no longer packaged and no video bytes pass through Next/Supabase; the catalog is embedded from Pornhub, and the import needs outbound HTTPS to pornhub.com.
 5. Set NEXT_PUBLIC_SITE_URL to the approved HTTPS domain. SITE_URL is not a runtime environment variable. Register `/auth/callback` and `/auth/callback?next=/auth/update-password` for both staging and production Auth redirect allowlists; test PKCE verification/recovery emails from a real inbox. Never use wildcard production redirects.
-6. Fill the catalog before launch (`npm run import:damplips -- --categories=all --per-category=110`, or the dashboard sync), then confirm `damplips_category_counts` reports 100+ for every category. Since the media is embedded, the takedown path is `/dmca` plus deleting the row, which writes a `media_retention` record.
+6. Fill the catalog before launch (**Admin → Videos → Import from Pornhub**, or the nightly cron), then confirm `pornhub_category_counts` rises for every category for which Pornhub returns results. Since the media is embedded, the takedown path is `/dmca` plus deleting the row, which writes a `media_retention` record.
 7. Configure a dedicated random ANALYTICS_HASH_SECRET (server-only, preferably 32+ random bytes). The service credential is a fallback. The trusted reverse proxy **must overwrite x-real-ip**. Without a trusted client IP, fallback clients share an abuse budget. Bot/WAF and multi-instance acceptance are launch gates, not supplied by browser events. Schedule `select public.prune_measured_events();` daily under a service/DB operator identity: 7-day pseudonymous events, 2-day rate-key retention. Campaign totals remain after pruning. Impressions mean loaded creative >=50% visible for 1s in a foreground tab; watch-page views mean 5 foreground seconds, not proven playback. Counts are deduplicated (ad type/campaign/creative/visitor/hour; video/visitor/day) and not independently audited human traffic.
 8. Guest checkout recovery: inspect the `ad_orders` row and the actual PayPal receipt before taking action. Do not create a duplicate order to retry moderation. Use **Admin → Ad Review** so verification, go-live, slot occupancy, and audit updates stay atomic. Historical provider recovery SQL remains only for legacy records and has no active application endpoint.
 9. The ad-creatives bucket is provisioned with image MIME/10MB limits. Browser object overwrite/deletion is denied; creative edits must submit new media for review. Pending assets in this public bucket are accessible by exact object URL; select/implement private premoderation storage if required by your content/data policy before accepting untrusted uploads. MIME declarations alone are not byte-level content scanning.
@@ -698,7 +707,7 @@ Migration **00000000000024_recommendations.sql** is a new forward migration and 
 3. Confirm `.github/workflows/recommendation-retention.yml` is enabled, run it manually, verify `/api/cron/recommendation-retention` returns 2xx only with the secret, and verify expired rows are removed. It runs daily; cleanup failure is a privacy incident. The retention RPC removes event rows older than 30 days and feedback/profile rows after their 180-day lifetime.
 4. Stage the default-on profile flow (cookie requested by `RecommendationProfileInit` on the first public page view), profile cookie attributes, disable/reset deletion, feedback suppression, cold-start browsing, API origin/rate validation, and no-store cache headers. Confirm recommendation tables are inaccessible to `anon` and `authenticated` and only trusted server RPCs can write.
 5. Run `EXPLAIN (ANALYZE, BUFFERS)` against a representative staging catalog for latest, category, like, popularity and tag candidate queries. No production query plan or p95 value is available from this session. Do not report the documented 250 ms/150 ms targets as measured.
-6. Verify the embedded player's `play/timeupdate/ended/error` milestones against a real damplips video and a direct-file clip, including the same-origin proxy and a range-seeking browser.
+6. Verify the embedded player's `play/timeupdate/ended/error` milestones against a real Pornhub embed and a legacy damplips clip, including the same-origin proxy and a range-seeking browser.
 7. Confirm user-facing privacy copy, 18+ controls, legal age assurance, rights/moderation review and adult-content provider approval with the responsible privacy/legal/operator owners. The current localStorage age declaration is not remote age verification.
 
 See `docs/RECOMMENDATION_PRIVACY.md` and `docs/RECOMMENDATION_ALGORITHM.md` for retention boundaries, signals, configuration, evaluation targets and known pagination limitations.

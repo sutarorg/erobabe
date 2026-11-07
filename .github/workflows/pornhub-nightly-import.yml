@@ -1,0 +1,69 @@
+name: Pornhub catalog import
+
+# Every night at 00:00 Asia/Kolkata (18:30 UTC the previous calendar day) the
+# catalog is topped up from Pornhub. Each request to the cron route imports as
+# much of one category as it can inside its own time budget and reports whether
+# the search is exhausted; this job calls it again until it is. Nothing here
+# caps the number of videos — the loop simply stops when Pornhub has nothing new
+# left for that category.
+
+on:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+    inputs:
+      category:
+        description: "Single category slug (blank = all)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pornhub-nightly-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Import every new video for each category
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          ONLY_CATEGORY: ${{ github.event.inputs.category }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SITE_URL:-}" ] || [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Configure the SITE_URL and CRON_SECRET repository secrets (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+          slugs="amateur lesbian milf japanese teen-18plus hentai ebony pov big-ass threesome hardcore massage"
+          if [ -n "${ONLY_CATEGORY:-}" ]; then
+            slugs="${ONLY_CATEGORY}"
+          fi
+
+          for slug in $slugs; do
+            echo "::group::${slug}"
+            # Up to 40 slices per category per night (each slice is a handful of
+            # search pages). A category that runs out earlier stops on the
+            # server's `exhausted` flag instead of waiting for the cap.
+            for attempt in $(seq 1 40); do
+              body=$(curl --silent --show-error --fail-with-body --max-time 300 \
+                -H "Authorization: Bearer ${CRON_SECRET}" \
+                "${SITE_URL%/}/api/cron/pornhub-import?category=${slug}") || {
+                  echo "::warning::${slug}: request failed on slice ${attempt}"
+                  break
+                }
+              echo "${body}"
+              if echo "${body}" | grep -q '"exhausted":true'; then
+                echo "${slug}: search exhausted after ${attempt} slice(s)"
+                break
+              fi
+              sleep 2
+            done
+            echo "::endgroup::"
+          done

@@ -95,6 +95,25 @@ describe("video player", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("frames Pornhub's player for an imported Pornhub row", () => {
+    const { container } = render(
+      <VideoPlayer
+        {...props}
+        provider="pornhub"
+        playableUrl={null}
+        embedUrl="https://www.pornhub.com/embed/68a1b2c3d4e5f"
+      />,
+    );
+    const frame = container.querySelector("iframe");
+    expect(frame).toHaveAttribute("src", "https://www.pornhub.com/embed/68a1b2c3d4e5f");
+    // The frame is sandboxed and never gets more than a player needs.
+    expect(frame).toHaveAttribute(
+      "sandbox",
+      "allow-scripts allow-same-origin allow-forms allow-presentation",
+    );
+    expect(container.querySelector("video")).toBeNull();
+  });
+
   it("prefers native video over any advertising iframe", () => {
     const { container } = render(
       <VideoPlayer {...props} playableUrl="https://cdn.example.com/a.mp4" />,

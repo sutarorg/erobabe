@@ -1,6 +1,6 @@
 # Erobabe — Premium Adult Entertainment Platform
 
-Next.js application under production-readiness review with Supabase backend, guest PayPal advertising checkout, a video catalog embedded from damplips.com, Resend email, AI metadata (NVIDIA Nemotron 3 Ultra free route via OpenRouter), and SEO optimization.
+Next.js application under production-readiness review with Supabase backend, guest PayPal advertising checkout, a video catalog embedded from Pornhub, Resend email, AI metadata (NVIDIA Nemotron 3 Ultra free route via OpenRouter), and SEO optimization.
 
 ## Quick Start
 
@@ -32,44 +32,58 @@ Open http://localhost:3000
 - PayPal QR checkout with manual staff payment verification
 - Resend (transactional email)
 - OpenRouter API, NVIDIA Nemotron 3 Ultra (free route; server-generated video metadata)
-- damplips.com embeds (HLS/mp4 playback through a same-origin proxy, `hls.js`)
+- Pornhub embeds (`https://www.pornhub.com/embed/<viewkey>`), plus legacy damplips playback through a same-origin proxy and `hls.js`
 - Tailwind CSS 4
 
-## Video Catalog — damplips embeds
+## Video Catalog — Pornhub embeds
 
 There are no uploads any more. `app/admin/(dashboard)/videos/upload`, the Bunny
 Stream adapter, its API routes and the publish-sweep cron were removed, and
 migration `00000000000026_damplips_embeds.sql` drops the upload tables and the
 Bunny library column.
 
-The catalog is filled from damplips.com. For each fixed category the importer
-reads damplips' listing pages and post pages and stores the title, poster,
-duration, source page and the media destination the page serves:
+The catalog is filled from **Pornhub**. An operator ticks categories at
+**Admin → Videos → Import from Pornhub** and presses one button; for every
+selected category the importer types that category's name into Pornhub's own
+search, pages through the results and stores the title, poster, duration and the
+video's `viewkey`. The watch page then frames Pornhub's own player at
+`https://www.pornhub.com/embed/<viewkey>` — nothing is copied, re-hosted or
+transcoded.
 
-```bash
-npm run import:damplips -- --categories=all --per-category=110   # 100+ per category
-npm run import:damplips -- --categories=hardcore --dry-run      # resolve only
-```
+What a run does:
 
-The same job is available in the dashboard at **Admin → Videos → Sync from
-damplips** (one request per category, with per-category progress). It is
-idempotent: a post already in the catalog is skipped, so a category can be
-topped up by re-running it. A post's direct host file (for example
-`https://video.damplips.com/video7/717/79.mp4`) is played by the browser
-straight from that host — nothing is prepared, and no "Preparing video…" overlay
-is ever drawn over a file — and `/api/videos/stream` is the fallback, plus the
-only path for a post page and for HLS playlists (whose segments have to be
-rewritten; `hls.js` plays them where the browser has no native support).
+* **No quota.** There is no "videos per category" field and no ceiling: a run
+  keeps paging until Pornhub's search for that category is exhausted. The
+  dashboard asks the server for one slice at a time and continues from the
+  cursor each slice returns, so no single request outlives its timeout.
+* **No duplicates.** The viewkey is the identity. It is checked against the
+  rows already in the catalog, against the rows of the current run, and finally
+  by the unique index `videos_pornhub_identity_idx`, so two runs racing on the
+  same result page cannot both insert the same video.
+* **High quality only.** A video is imported when Pornhub marks it HD. When a
+  listing carries no HD badge at all (markup change), the importer reads the
+  watch page and imports only videos that serve 720p or better, recording
+  `quality` (`HD`/`4K`) and `resolution` (`1080p`, …).
+* **Posters included.** A card without a thumbnail is skipped, so every row has
+  a real poster on the grid and watch page.
+* **Resumable and polite.** A short pause sits between page reads, and a phrase
+  that only returns videos already in the catalog is abandoned after a dozen
+  pages in favour of the next phrase.
 
-`npm run import:damplips -- --repair` re-resolves any row that is not already
-storing a direct media file (an older post-page or proxy URL) and writes the
-file the post publishes; healthy rows are never re-fetched.
+The same job runs nightly through `GET /api/cron/pornhub-import?category=<slug>`
+(Bearer `CRON_SECRET`); `.github/workflows/pornhub-nightly-import.yml` calls it
+for every category until it reports `exhausted`. Imported rows are written as
+published and public with `rights_status = 'cleared'` so the category is
+immediately visible; the panel's **Stage as private drafts** option stages them
+as private `pending_review` rows instead. Use the existing DMCA / content-removal
+pages as the takedown path for embedded content.
 
-Imported rows are written as published and public with `rights_status =
-'cleared'` so the category is immediately visible. Use `--rights=pending` (or
-the dashboard's Rights selector) to stage imports as private drafts, and use the
-existing DMCA / content-removal pages as the takedown path for embedded content.
-See `docs/DAMPLIPS_EMBEDS.md` for the full behaviour and limits.
+Legacy rows imported from damplips still play: a stored direct host file is
+streamed by our own player (with `/api/videos/stream` as the proxy fallback and
+for HLS playlists whose segments have to be rewritten). Nothing in that path
+imports anything new.
+
+See `docs/PORNHUB_EMBEDS.md` for the full behaviour and limits.
 
 ## Homepage carousel
 

@@ -55,7 +55,9 @@ describe("retired video providers have no active integration", () => {
     const env = readFileSync(".env.example", "utf8");
     expect(env).not.toMatch(/BUNNY_STREAM_API_KEY/);
     expect(env).not.toMatch(/BUNNY_STREAM_LIBRARY_ID/);
-    expect(env).not.toMatch(/CRON_SECRET/);
+    // The Bunny publish sweep is gone; the only cron left in the env file is
+    // the catalog importer, which the retirement assertions below cover.
+    expect(env).not.toMatch(/bunny-publish/);
 
     // The admin dashboard no longer offers a file upload control.
     const manager = readFileSync(
@@ -66,13 +68,33 @@ describe("retired video providers have no active integration", () => {
     expect(manager).not.toContain("/api/videos/storage-token");
   });
 
-  it("only ever embeds damplips for new catalog rows", () => {
-    const migration = readFileSync(
+  it("retires damplips as a source and embeds Pornhub for every new catalog row", () => {
+    const retired = readFileSync(
       "supabase/migrations/00000000000026_damplips_embeds.sql",
       "utf8",
     );
-    expect(migration).toContain("alter table public.videos alter column provider set default 'damplips'");
-    expect(migration).toContain("drop table if exists public.bunny_uploads");
-    expect(migration).toContain("drop table if exists public.upload_jobs");
+    expect(retired).toContain("drop table if exists public.bunny_uploads");
+    expect(retired).toContain("drop table if exists public.upload_jobs");
+
+    // damplips keeps its provider value (old rows still play) but is no longer
+    // the default and no longer has an importer of its own.
+    const current = readFileSync(
+      "supabase/migrations/00000000000029_pornhub_embeds.sql",
+      "utf8",
+    );
+    expect(current).toContain("set default 'pornhub'");
+    for (const retiredSource of [
+      "lib/damplips/importer.ts",
+      "lib/damplips/categories.ts",
+      "lib/damplips/client.ts",
+      "app/api/admin/damplips",
+      "app/api/cron/damplips-import",
+      "app/admin/(dashboard)/videos/DamplipsImportPanel.tsx",
+      ".github/workflows/damplips-nightly-import.yml",
+    ]) {
+      expect(existsSync(retiredSource), retiredSource).toBe(false);
+    }
+    // The parser survives only to resolve a legacy row's stored media URL.
+    expect(existsSync("lib/damplips/parse.ts")).toBe(true);
   });
 });
