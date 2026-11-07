@@ -27,6 +27,10 @@ export type DamplipsDetail = {
   description: string | null;
   thumbnailUrl: string | null;
   durationSeconds: number | null;
+  /** Tallest rendition the page advertises (1080, 720, …), or null. */
+  maxHeight: number | null;
+  /** Views the page advertises, when it prints one. */
+  views: number | null;
   media: DamplipsMedia | null;
 };
 
@@ -156,6 +160,32 @@ export function postIdFromUrl(value: string): string | null {
   return match[1];
 }
 
+/**
+ * A poster URL a card can actually paint.
+ *
+ * `og:image` is usually the post's poster, but themes also point it at a
+ * placeholder, a GIF or a tracking pixel. A value that is not an image file on
+ * an http(s) host is refused here, so the poster repair below knows a row really
+ * has no usable picture.
+ */
+export function bestPoster(value: string | null | undefined): string | null {
+  const url = toSafeUrl(value ?? "");
+  if (!url) return null;
+  if (/\.(gif|svg)(?:[?#]|$)/i.test(url)) return null;
+  return url;
+}
+
+/** True when a stored value is a poster the grid can display. */
+export function looksLikePoster(value: string | null | undefined): boolean {
+  const url = bestPoster(value);
+  if (!url) return false;
+  try {
+    return /\.(jpe?g|png|webp|avif)$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 function bestImageFrom(html: string): string | null {
   const images = html.match(/<img\b[^>]*>/gi) || [];
   for (const image of images) {
@@ -265,6 +295,84 @@ export function advanceSearchPage(pageUrl: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The next page of any damplips listing.
+ *
+ * `rel=next` wins when the theme prints it. A search falls back to
+ * `?s=term&paged=N`. A path listing (`/c/milf/`, `/most-popular/`) falls back to
+ * the theme's own `/page/N/` shape, which is what WordPress archives use.
+ */
+export function nextListingPage(pageUrl: string, html: string): string | null {
+  const declared = parseNextPageUrl(html, pageUrl);
+  if (declared) return declared;
+
+  const search = advanceSearchPage(pageUrl);
+  if (search) return search;
+
+  try {
+    const url = new URL(pageUrl);
+    const match = /^(.*?)\/page\/(\d+)\/?$/.exec(url.pathname);
+    const basePath = (match ? match[1] : url.pathname.replace(/\/$/, "")) || "";
+    const nextPage = match ? Number(match[2]) + 1 : 2;
+    if (!Number.isFinite(nextPage) || nextPage > 5_000) return null;
+    url.pathname = `${basePath}/page/${nextPage}/`;
+    url.search = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** Tallest quality a post page advertises, in pixels. */
+export function maxQualityHeight(html: string): number | null {
+  let max: number | null = null;
+  const consider = (value: number) => {
+    if (!Number.isFinite(value) || value < 240 || value > 4320) return;
+    if (max == null || value > max) max = value;
+  };
+
+  for (const match of html.matchAll(/"height"\s*:\s*"?(\d{3,4})"?/gi)) consider(Number(match[1]));
+  for (const match of html.matchAll(/<meta\b[^>]*property\s*=\s*["']og:video:height["'][^>]*>/gi)) {
+    consider(Number(attribute(match[0], "content")));
+  }
+  for (const match of html.matchAll(/\b(2160|1440|1080|720|480|360)p\b/g)) consider(Number(match[1]));
+  return max;
+}
+
+/** A view counter as a number: `1,204`, `12K`, `1.4M`. */
+export function parseViews(value: unknown): number | null {
+  if (value == null) return null;
+  const text = String(value).trim().replace(/\u00a0/g, " ");
+  if (!text) return null;
+
+  const match = /([\d][\d.,\s]*)\s*([kKmMbB])?/.exec(text);
+  if (!match) return null;
+  const magnitude = match[2]
+    ? ({ k: 1_000, m: 1_000_000, b: 1_000_000_000 } as const)[
+        match[2].toLowerCase() as "k" | "m" | "b"
+      ]
+    : 1;
+  const raw = match[1].replace(/\s/g, "");
+  const digits = magnitude > 1 ? raw.replace(/,/g, ".") : raw.replace(/[.,]/g, "");
+  const numeric =
+    magnitude > 1 ? Number(digits.split(".").slice(0, 2).join(".")) : Number(digits);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  const total = Math.round(numeric * magnitude);
+  return total > 0 && total < 1_000_000_000_000 ? total : null;
+}
+
+function viewsFromPage(html: string): number | null {
+  const patterns = [
+    /"views"\s*:\s*"?([\d.,]+\s*[KkMmBb]?)"?/i,
+    /\b([\d][\d.,]*\s*[KkMmBb]?)\s*(?:views|view)\b/i,
+  ];
+  for (const pattern of patterns) {
+    const value = parseViews(pattern.exec(stripTags(html))?.[1] ?? pattern.exec(html)?.[1] ?? null);
+    if (value != null) return value;
+  }
+  return null;
 }
 
 /** `PT12M34S`, `00:12:34`, `754` → seconds. */
@@ -434,8 +542,12 @@ export function parseVideoPage(html: string, pageUrl: string): DamplipsDetail | 
     sourceUrl: `${DAMPLIPS_BASE_URL}/p/${sourceId}/`,
     title,
     description: description ? description.slice(0, 1200) : null,
-    thumbnailUrl: ogImageTag ? toSafeUrl(attribute(ogImageTag, "content")) : bestImageFrom(html),
+    thumbnailUrl: ogImageTag
+      ? bestPoster(attribute(ogImageTag, "content")) || bestImageFrom(html)
+      : bestImageFrom(html),
     durationSeconds,
+    maxHeight: maxQualityHeight(html),
+    views: viewsFromPage(html),
     media: parseMedia(html, pageUrl),
   };
 }

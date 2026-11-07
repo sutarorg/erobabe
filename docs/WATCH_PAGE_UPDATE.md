@@ -2,8 +2,8 @@
 
 > **Historical document (superseded 2026-10-27).** Video uploads and Bunny
 > Stream are retired. This file is kept for provenance; read
-> `docs/PORNHUB_EMBEDS.md` for the current catalog flow (Pornhub embeds,
-> **Admin → Videos → Import from Pornhub**, `/api/videos/stream` for legacy rows).
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips imports,
+> **Admin → Videos → tick categories → Start**, `/api/videos/stream` for playback).
 
 Apply the pending migrations in order, including `00000000000021_fixed_categories_and_community.sql` and `00000000000022_unique_anonymous_comment_profiles.sql`, before deploying the matching application. No live database migration is performed by editing this repository.
 

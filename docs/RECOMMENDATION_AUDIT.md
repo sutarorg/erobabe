@@ -2,8 +2,8 @@
 
 > **Historical document (superseded 2026-10-27).** Video uploads and Bunny
 > Stream are retired. This file is kept for provenance; read
-> `docs/PORNHUB_EMBEDS.md` for the current catalog flow (Pornhub embeds,
-> **Admin → Videos → Import from Pornhub**, `/api/videos/stream` for legacy rows).
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips imports,
+> **Admin → Videos → tick categories → Start**, `/api/videos/stream` for playback).
 
 **Audited:** 16 October 2026. **Checkout:** `arena/ed424d83-erobabe`, based on `af2734b` (merge commit from main); clean before this work. Repository history has 24 forward migrations through `00000000000023_remove_comment_cooldown.sql`. No production database credentials or live data were available, so live schema drift and actual catalog size remain unverified. The existing `docs/WORKFLOW_MAP.md`, `docs/ENVIRONMENT_AUDIT.md`, implementation/launch audits, migrations, routes, components, and tests were inspected.
 

@@ -2,8 +2,8 @@
 
 > **Historical document (superseded 2026-10-27).** Video uploads and Bunny
 > Stream are retired. This file is kept for provenance; read
-> `docs/PORNHUB_EMBEDS.md` for the current catalog flow (Pornhub embeds,
-> **Admin → Videos → Import from Pornhub**, `/api/videos/stream` for legacy rows).
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips imports,
+> **Admin → Videos → tick categories → Start**, `/api/videos/stream` for playback).
 
 Baseline: fetched origin/main fe46b33460d83a86cf9af44a251284067ce86b05.
 Runtime: Next App Router (`app`), shared production UI/utilities in `src`, Supabase SSR cookie auth, privileged server client for publishing/payment/public catalog. The hash SPA has no Next entry point.

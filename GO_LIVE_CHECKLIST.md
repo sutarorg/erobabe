@@ -2,8 +2,8 @@
 
 > **Historical document (superseded 2026-10-27).** Video uploads and Bunny
 > Stream are retired. This file is kept for provenance; read
-> `docs/PORNHUB_EMBEDS.md` for the current catalog flow (Pornhub embeds,
-> **Admin → Videos → Import from Pornhub**, `/api/cron/pornhub-import`).
+> `docs/DAMPLIPS_EMBEDS.md` for the current catalog flow (damplips.com imports,
+> **Admin → Videos → tick categories → Start**, `/api/cron/damplips-import`).
 
 **Release: HOLD.** PASS means verified in the named environment only. BLOCKED requires credentials/approval/external action; NOT TESTED means no valid acceptance evidence. Do not infer production PASS from local tests. Final command evidence: `PRODUCTION_READINESS.md`.
 
