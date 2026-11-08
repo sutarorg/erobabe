@@ -6,11 +6,12 @@
  *   npm run import:damplips -- --categories=all --passes=2
  *
  * This is the same importer the admin dashboard calls, run from a shell so the
- * first fill does not depend on a browser tab staying open. There is no
- * per-category target: a pass walks every listing of the category (popular
- * feeds, taxonomy pages, searches) and stops when it runs out. It reads
- * .env.local / the process environment, writes only to the catalog, and never
- * copies media files.
+ * first fill does not depend on a browser tab staying open. Work is measured in
+ * **rounds of 100 new videos**: a round keeps reading listings (popular feeds,
+ * the category's own pages, searches, the site's newest archives and the related
+ * videos of everything it just read) until it has written its 100, and a new
+ * round starts immediately after. It reads .env.local / the process
+ * environment, writes only to the catalog, and never copies media files.
  */
 
 import { createClient } from "@supabase/supabase-js";
@@ -18,6 +19,8 @@ import { DAMPLIPS_CATEGORY_SOURCES } from "../lib/damplips/categories";
 import { createDamplipsFetcher, type FetchDamplipsPage } from "../lib/damplips/client";
 import {
   DEFAULT_POSTS_PER_REQUEST,
+  IMPORT_TARGET,
+  MAX_IMPORT_TARGET,
   MAX_POSTS_PER_REQUEST,
   importCategorySlice,
   repairThumbnails,
@@ -30,8 +33,10 @@ type Args = {
   categories: string[];
   dryRun: boolean;
   rightsStatus: "cleared" | "pending";
-  /** Post pages opened per slice. */
+  /** Post pages one call may open (a safety valve, not a quota). */
   posts: number;
+  /** New videos one round imports. */
+  target: number;
   /** Full passes over every listing of each category. */
   passes: number;
   delayMs: number;
@@ -52,6 +57,7 @@ export function parseArgs(argv: string[]): Args {
     dryRun: false,
     rightsStatus: "cleared",
     posts: DEFAULT_POSTS_PER_REQUEST,
+    target: IMPORT_TARGET,
     passes: 1,
     delayMs: 120,
     posters: false,
@@ -73,6 +79,9 @@ export function parseArgs(argv: string[]): Args {
     } else if (raw.startsWith("--posts=")) {
       const value = Math.floor(Number(raw.slice("--posts=".length)));
       if (Number.isFinite(value) && value > 0) args.posts = value;
+    } else if (raw.startsWith("--target=")) {
+      const value = Math.floor(Number(raw.slice("--target=".length)));
+      if (Number.isFinite(value) && value > 0) args.target = value;
     } else if (raw.startsWith("--passes=")) {
       const value = Math.floor(Number(raw.slice("--passes=".length)));
       if (Number.isFinite(value) && value > 0) args.passes = value;
@@ -90,6 +99,7 @@ export function parseArgs(argv: string[]): Args {
     }
   }
   args.posts = Math.max(1, Math.min(MAX_POSTS_PER_REQUEST, args.posts));
+  args.target = Math.max(1, Math.min(MAX_IMPORT_TARGET, args.target));
   return args;
 }
 
@@ -97,7 +107,8 @@ const HELP = `Fill the catalog from damplips.com
 
   --categories=all|slug,slug   fixed categories to fill (default: all)
   --passes=<n>                 full passes over every listing (default: 1)
-  --posts=<n>                  post pages opened per request, 1-${MAX_POSTS_PER_REQUEST} (default: ${DEFAULT_POSTS_PER_REQUEST})
+  --target=<n>                 new videos per round, 1-${MAX_IMPORT_TARGET} (default: ${IMPORT_TARGET})
+  --posts=<n>                  post pages one call may open, 1-${MAX_POSTS_PER_REQUEST} (default: ${DEFAULT_POSTS_PER_REQUEST})
   --rights=cleared|pending     publish now, or stage as private drafts (default: cleared)
   --dry-run                    resolve and report without writing
   --posters                    fix stored rows whose poster is missing, then exit
@@ -412,11 +423,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
     for (let pass = 1; pass <= args.passes; pass += 1) {
       let cursor: ImportCursor = { source: 0, page: 1, skip: 0 };
+      let roundImported = 0;
       for (;;) {
         const report = await importCategorySlice(
           {
             categorySlug: category.slug,
             cursor,
+            // Fill the round that is open, nothing more.
+            importTarget: Math.max(1, args.target - roundImported),
             postsPerRequest: args.posts,
             dryRun: args.dryRun,
             rightsStatus: args.rightsStatus,
@@ -438,12 +452,18 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         postsRead += report.postsRead;
         errors.push(...report.errors);
         cursor = report.cursor;
+        roundImported += report.imported;
         if (report.exhausted) break;
         if (report.pagesRead === 0 && report.postsRead === 0) break;
-        process.stdout.write(
-          `  ${category.slug}: +${imported} new · ${postsRead} videos read · ` +
-            `listing ${report.cursor.source + 1}\n`,
-        );
+        if (roundImported >= args.target) {
+          process.stdout.write(`  ${category.slug}: round complete · +${roundImported} new\n`);
+          roundImported = 0;
+        } else {
+          process.stdout.write(
+            `  ${category.slug}: round ${roundImported}/${args.target} · +${imported} new · ` +
+              `${postsRead} videos read\n`,
+          );
+        }
       }
     }
 
@@ -487,7 +507,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   process.stdout.write(
     failed
       ? "\nFinished with errors — see the messages above.\n"
-      : "\nFinished: every listing was walked.\n",
+      : "\nFinished: every listing was walked and each round was filled.\n",
   );
   return failed ? 2 : 0;
 }

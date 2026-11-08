@@ -4,9 +4,9 @@ import { NextRequest } from "next/server";
 import { createHarness } from "./helpers/video-route-harness";
 
 /**
- * The nightly job is the unattended half of the importer: it must loop slices
- * until every listing of a category has been walked, keep whatever it imported
- * when the site starts refusing pages, and never run without its secret.
+ * The nightly job is the unattended half of the importer: it must complete a
+ * round of 100 new videos, keep whatever it imported when the site starts
+ * refusing pages, and never run without its secret.
  */
 
 const harnessState = vi.hoisted(() => ({ service: null as any }));
@@ -52,6 +52,9 @@ function slice(overrides: Record<string, unknown> = {}) {
   return {
     category: "hardcore",
     categoryId: "cat-hardcore",
+    target: 100,
+    targetReached: false,
+    uncategorised: 0,
     imported: 3,
     duplicates: 1,
     repaired: 0,
@@ -80,7 +83,38 @@ describe("GET /api/cron/damplips-import", () => {
     vi.unstubAllEnvs();
   });
 
-  it("loops slices until the category's listings are exhausted", async () => {
+  it("loops short slices until the round of 100 is complete", async () => {
+    importCategorySlice
+      .mockResolvedValueOnce(slice({ imported: 40, cursor: { source: 1, page: 2, skip: 0 } }))
+      .mockResolvedValueOnce(slice({ imported: 30, cursor: { source: 4, page: 1, skip: 1 } }))
+      .mockResolvedValueOnce(
+        slice({ imported: 30, targetReached: true, cursor: { source: 4, page: 2, skip: 0 } }),
+      );
+
+    const response = await GET(request("/api/cron/damplips-import?category=hardcore", "nightly-secret"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.report).toMatchObject({
+      imported: 100,
+      target: 100,
+      targetReached: true,
+      exhausted: false,
+    });
+
+    // Each call asks for what the round still needs, from the cursor the
+    // previous call returned.
+    const targets = importCategorySlice.mock.calls.map((call) => call[0].importTarget);
+    expect(targets).toEqual([100, 60, 30]);
+    const cursors = importCategorySlice.mock.calls.map((call) => call[0].cursor);
+    expect(cursors[0]).toEqual({ source: 0, page: 1, skip: 0 });
+    expect(cursors[1]).toEqual({ source: 1, page: 2, skip: 0 });
+    expect(cursors[2]).toEqual({ source: 4, page: 1, skip: 1 });
+    // The first slice also repairs stored posters.
+    expect(importCategorySlice.mock.calls[0][0].repair).toBe(true);
+    expect(importCategorySlice.mock.calls[0][1].categoryId).toBe("cat-hardcore");
+  });
+
+  it("stops and reports when the category's listings are all walked", async () => {
     importCategorySlice
       .mockResolvedValueOnce(slice({ imported: 3, cursor: { source: 1, page: 2, skip: 0 } }))
       .mockResolvedValueOnce(slice({ imported: 2, cursor: { source: 4, page: 1, skip: 1 } }))
@@ -91,7 +125,7 @@ describe("GET /api/cron/damplips-import", () => {
     const response = await GET(request("/api/cron/damplips-import?category=hardcore", "nightly-secret"));
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.report).toMatchObject({ imported: 5, exhausted: true });
+    expect(body.report).toMatchObject({ imported: 5, exhausted: true, targetReached: false });
 
     // The cursor of each call is the one the previous call returned.
     const cursors = importCategorySlice.mock.calls.map((call) => call[0].cursor);

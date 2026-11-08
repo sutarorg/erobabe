@@ -5,12 +5,15 @@ import { useRouter } from "next/navigation";
 import { LoaderCircle, RefreshCw, Square } from "lucide-react";
 import type { CategoryCount } from "@/lib/catalog/counts";
 
-type Cursor = { source: number; page: number; skip: number; url?: string };
+type Cursor = { source: number; page: number; skip: number; url?: string; queue?: string[] };
 
 type SliceReport = {
   category: string;
   label?: string;
   imported: number;
+  target: number;
+  targetReached: boolean;
+  uncategorised: number;
   duplicates: number;
   repaired: number;
   pagesRead: number;
@@ -24,28 +27,35 @@ type SliceReport = {
 type CategoryTotal = {
   slug: string;
   label: string;
+  /** New videos this run, across every round. */
   imported: number;
+  /** New videos in the round that is being filled right now. */
+  roundImported: number;
+  /** Completed rounds of 100 in this run. */
+  rounds: number;
+  uncategorised: number;
   duplicates: number;
   repaired: number;
   posts: number;
-  /** Completed passes over every listing of this category. */
-  passes: number;
-  state: "running" | "waiting";
+  /** True while the category is waiting for something new to appear. */
+  waiting: boolean;
 };
 
+/** New videos one round imports. The operator's "100 videos a round". */
+const ROUND_SIZE = 100;
 /** Listing pages the server reads per call. Mirrors the route's default. */
-const PAGES_PER_SLICE = 3;
-/** Post pages the server opens per call — the real cost of a slice. */
-const POSTS_PER_SLICE = 10;
-/** Pause between slices so a long run stays a polite visitor. */
+const PAGES_PER_SLICE = 12;
+/** Post pages the server may open per call. */
+const POSTS_PER_SLICE = 400;
+/** Pause between slices, so a long run stays a polite visitor. */
 const SLICE_PAUSE_MS = 350;
 /**
- * Pause before starting another pass once every listing has been walked.
+ * Pause while a category has nothing new to read.
  *
- * The run does not stop there — the operator asked for it to keep going until
- * Stop — but re-reading the same listings immediately would be rude and
- * pointless. A pass that finds nothing new waits longer each time, up to
- * `MAX_ROUND_PAUSE_MS`, and the Stop button stays live throughout.
+ * Every listing has been walked and the related frontier is empty, so the round
+ * cannot be finished until damplips publishes something. The run waits — a
+ * minute, doubling up to ten — and keeps the round open. It never reports an
+ * empty round and never ends on its own; Stop is the only exit.
  */
 const ROUND_PAUSE_MS = 60_000;
 const MAX_ROUND_PAUSE_MS = 600_000;
@@ -56,26 +66,27 @@ export type DamplipsImportPanelProps = {
   counts: CategoryCount[];
   /** Pause between slices. Tests shorten it; production keeps it polite. */
   slicePauseMs?: number;
-  /** Pause before another pass once every listing has been walked. */
+  /** Pause while a category has nothing new to read. */
   roundPauseMs?: number;
-  /** Ceiling for the backoff while passes keep coming back empty. */
+  /** Ceiling for that backoff. */
   maxRoundPauseMs?: number;
 };
 
 /**
- * Fills the catalog from damplips.
+ * Fills the catalog from damplips, 100 videos a round.
  *
  * The operator ticks the categories they want and presses one button. The panel
- * then asks the server for one slice at a time and **does not stop on its own**:
- * when a category has walked every listing of its plan (popular feeds, then its
- * taxonomy, then its search terms), it pauses briefly and starts another pass,
- * picking up whatever damplips has published since. Only the Stop button ends
- * the run — it finishes the slice in flight and leaves every imported video in
- * place.
+ * then asks the server for one round at a time and **does not stop on its own**:
+ * a round is only finished when it holds 100 new videos, so a call that comes
+ * back short is extended with more listings, the related videos of the posts it
+ * just read, and the site's newest archives. When even that is used up the round
+ * stays open and the panel waits (with backoff) for something new to appear
+ * instead of reporting a round of zero. Only the Stop button ends the run — it
+ * finishes the call in flight and leaves every imported video in place.
  *
  * There is deliberately no "how many videos" field: an import is not
- * quota-bound, and the cursor in each response is what lets the run continue
- * past any single request's timeout.
+ * quota-bound, and the cursor in each response is what lets a run of thousands
+ * continue past any single request's timeout.
  */
 export default function DamplipsImportPanel({
   counts,
@@ -95,16 +106,20 @@ export default function DamplipsImportPanel({
   const [progress, setProgress] = useState<CategoryTotal[]>([]);
   const [error, setError] = useState("");
   const stopped = useRef(false);
+  /** The request in flight, so Stop can cancel it instead of waiting it out. */
+  const inFlight = useRef<AbortController | null>(null);
 
   const publishedTotal = counts.reduce((sum, entry) => sum + entry.published, 0);
   const catalogTotal = counts.reduce((sum, entry) => sum + entry.total, 0);
   const runningTotal = progress.reduce(
     (sum, entry) => ({
       imported: sum.imported + entry.imported,
+      rounds: sum.rounds + entry.rounds,
+      uncategorised: sum.uncategorised + entry.uncategorised,
       duplicates: sum.duplicates + entry.duplicates,
       repaired: sum.repaired + entry.repaired,
     }),
-    { imported: 0, duplicates: 0, repaired: 0 },
+    { imported: 0, rounds: 0, uncategorised: 0, duplicates: 0, repaired: 0 },
   );
 
   const toggle = (slug: string) => {
@@ -119,7 +134,7 @@ export default function DamplipsImportPanel({
   const updateProgress = useCallback((entry: CategoryTotal) => {
     setProgress((rows) => {
       const next = rows.filter((row) => row.slug !== entry.slug);
-      next.push(entry);
+      next.push({ ...entry });
       return next;
     });
   }, []);
@@ -147,81 +162,110 @@ export default function DamplipsImportPanel({
     setRunning(true);
     setError("");
     setProgress([]);
+    const controller = new AbortController();
+    inFlight.current = controller;
+    /**
+     * Rejects the moment Stop is pressed, whatever the request is doing.
+     *
+     * `fetch` honours the signal, but a request that hangs before its first
+     * byte would otherwise keep the run waiting for it; racing the two makes
+     * Stop immediate in both cases.
+     */
+    const cancelled = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener("abort", () =>
+        reject(new DOMException("Aborted", "AbortError")),
+      );
+    });
+    // A rejection nobody is waiting for must not surface as an unhandled one.
+    cancelled.catch(() => undefined);
 
-    type RunState = { cursor: Cursor; total: CategoryTotal; walkedPlan: boolean };
-    const states = new Map<string, RunState>();
+    const totals = new Map<string, CategoryTotal>();
     for (const category of queue) {
-      states.set(category.slug, {
-        cursor: { source: 0, page: 1, skip: 0 },
-        walkedPlan: false,
-        total: {
-          slug: category.slug,
-          label: category.label,
-          imported: 0,
-          duplicates: 0,
-          repaired: 0,
-          posts: 0,
-          passes: 0,
-          state: "running",
-        },
+      totals.set(category.slug, {
+        slug: category.slug,
+        label: category.label,
+        imported: 0,
+        roundImported: 0,
+        rounds: 0,
+        uncategorised: 0,
+        duplicates: 0,
+        repaired: 0,
+        posts: 0,
+        waiting: false,
       });
     }
+    const cursors = new Map<string, Cursor>(
+      queue.map((category) => [category.slug, { source: 0, page: 1, skip: 0 }]),
+    );
 
-    // Every selected category advances one slice at a time in rotation, so one
-    // busy category never starves the others and each keeps making progress.
     let index = 0;
-    let pauseBeforeNextRound = roundPauseMs;
-    let importedSinceRound = 0;
-    /** Consecutive failed slices; drives the retry backoff below. */
+    let waitingPause = roundPauseMs;
     let consecutiveFailures = 0;
-    const nextFailurePause = () => {
+    let repairPending = true;
+    let dryRunPending = dryRun;
+
+    /** The pause a failed call waits before retrying the same round. */
+    const retryPause = () => {
       consecutiveFailures += 1;
-      return Math.min(
-        maxRoundPauseMs,
-        roundPauseMs * 2 ** Math.min(consecutiveFailures - 1, 6),
-      );
+      return Math.min(maxRoundPauseMs, roundPauseMs * 2 ** Math.min(consecutiveFailures - 1, 6));
     };
 
     try {
       while (!stopped.current) {
         const category = queue[index % queue.length];
         index += 1;
-        const state = states.get(category.slug)!;
-        const total = state.total;
-        setCurrent(`${category.label} · ${total.posts} videos read`);
-        total.state = "running";
-        updateProgress({ ...total });
+        const total = totals.get(category.slug)!;
+        const cursor = cursors.get(category.slug)!;
+        const remainingInRound = Math.max(1, ROUND_SIZE - total.roundImported);
+
+        total.waiting = false;
+        setCurrent(
+          `${category.label} — round ${total.rounds + 1}, ${total.roundImported}/${ROUND_SIZE}`,
+        );
+        updateProgress(total);
 
         let response: Response;
         try {
-          response = await fetch("/api/admin/damplips/import", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              category: category.slug,
-              cursor: state.cursor,
-              pages: PAGES_PER_SLICE,
-              posts: POSTS_PER_SLICE,
-              dryRun,
-              // Repair stored rows with a missing poster once per run, on the
-              // very first slice, so a grid imported before the poster rule
-              // fills in.
-              repair: total.posts === 0,
-              rightsStatus: stageForReview ? "pending" : "cleared",
+          response = await Promise.race([
+            fetch("/api/admin/damplips/import", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                category: category.slug,
+                cursor,
+                // Ask for exactly what the open round still needs, so no call is
+                // spent importing past the round the operator is watching.
+                target: remainingInRound,
+                pages: PAGES_PER_SLICE,
+                posts: POSTS_PER_SLICE,
+                dryRun: dryRunPending,
+                // Repair stored rows with a missing poster once per run, on the
+                // very first slice, so a grid imported before the poster rule
+                // fills in.
+                repair: repairPending,
+                rightsStatus: stageForReview ? "pending" : "cleared",
+              }),
+              signal: controller.signal,
             }),
-          });
-        } catch (networkFailure) {
-          // A dropped connection is not a reason to end the run the operator
-          // asked to keep going: log it, wait, and try the same slice again.
-          const retryIn = nextFailurePause();
+            cancelled,
+          ]);
+        } catch {
+          // Stop aborts the call in flight: the run is over, not broken.
+          if (stopped.current) break;
+          // A dropped connection is not a reason to end a run the operator asked
+          // to keep going: wait, then retry the same round.
+          const retryIn = retryPause();
+          total.waiting = true;
+          updateProgress(total);
           setError(
-            `Network error on ${category.label} — retrying in ${Math.round(
+            `Network error on ${category.label} — retrying the round in ${Math.round(
               retryIn / 1000,
             )}s. Press Stop to end the run.`,
           );
           await pause(retryIn);
           continue;
         }
+
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
           const message = String(payload?.error || `Import failed for ${category.label}`);
@@ -231,65 +275,74 @@ export default function DamplipsImportPanel({
             throw new Error(message);
           }
           // Anything else — damplips throttling or refusing this address, a
-          // timeout — is transient as far as the run is concerned. Pausing and
-          // retrying is what keeps a long import alive; only Stop ends it.
-          const retryIn = nextFailurePause();
+          // timeout — is transient as far as the round is concerned.
+          const retryIn = retryPause();
+          total.waiting = true;
+          updateProgress(total);
           setError(
-            `${message} — retrying in ${Math.round(retryIn / 1000)}s. Press Stop to end the run.`,
+            `${message} — retrying the round in ${Math.round(retryIn / 1000)}s. Press Stop to end the run.`,
           );
           await pause(retryIn);
           continue;
         }
+
         consecutiveFailures = 0;
+        repairPending = false;
+        dryRunPending = false;
         setError("");
 
         const slice = payload.report as SliceReport;
         total.imported += slice.imported;
+        total.roundImported += slice.imported;
+        total.uncategorised += slice.uncategorised || 0;
         total.duplicates += slice.duplicates;
         total.repaired += slice.repaired || 0;
         total.posts += slice.postsRead;
-        importedSinceRound += slice.imported;
+        cursors.set(category.slug, slice.cursor);
 
-        // The plan is walked when the server says so, or when a slice could not
-        // read a single page. Either way the next pass starts at the top.
-        if (slice.exhausted || (slice.pagesRead === 0 && slice.postsRead === 0)) {
-          state.cursor = { source: 0, page: 1, skip: 0 };
-          state.walkedPlan = true;
-          total.passes += 1;
-          total.state = "waiting";
-        } else {
-          state.cursor = slice.cursor;
-          state.walkedPlan = false;
-          total.state = "running";
-        }
-        updateProgress({ ...total });
-
-        const everyCategoryWalked = queue.every((entry) => states.get(entry.slug)!.walkedPlan);
-
-        if (everyCategoryWalked) {
-          // Nothing left to read right now — but the run does not stop. Wait,
-          // then start another pass over every listing; anything published since
-          // the last pass is new. The pause grows while passes stay empty.
-          for (const entry of queue) states.get(entry.slug)!.walkedPlan = false;
-          if (importedSinceRound > 0) pauseBeforeNextRound = roundPauseMs;
-          await pause(pauseBeforeNextRound);
-          if (importedSinceRound === 0) {
-            pauseBeforeNextRound = Math.min(maxRoundPauseMs, pauseBeforeNextRound * 2);
+        if (total.roundImported >= ROUND_SIZE) {
+          // The round is complete: exactly what the operator asked for. A call
+          // may overshoot its target by one concurrency window, and those extra
+          // videos belong to the next round rather than being lost.
+          while (total.roundImported >= ROUND_SIZE) {
+            total.rounds += 1;
+            total.roundImported -= ROUND_SIZE;
           }
-          importedSinceRound = 0;
-        } else {
-          await sleep(slicePauseMs);
+          waitingPause = roundPauseMs;
+        } else if (slice.imported > 0) {
+          // Real progress: the next wait, if any, starts small again.
+          waitingPause = roundPauseMs;
         }
+        updateProgress(total);
+
+        if (slice.exhausted) {
+          // Every listing walked and no related ids left, with the round still
+          // short. The round stays open — the run waits for damplips to publish
+          // something and tries again, growing the pause while that stays empty.
+          total.waiting = true;
+          updateProgress(total);
+          setCurrent(
+            `${category.label} — round ${total.rounds + 1}, ${total.roundImported}/${ROUND_SIZE} · waiting for new posts`,
+          );
+          await pause(waitingPause);
+          waitingPause = Math.min(maxRoundPauseMs, waitingPause * 2);
+          continue;
+        }
+
+        // A short call that still read pages means there is more to read right
+        // now: continue the same round immediately.
+        await sleep(slicePauseMs);
       }
 
-      for (const state of states.values()) {
-        state.total.state = "waiting";
-        updateProgress({ ...state.total });
+      for (const total of totals.values()) {
+        total.waiting = false;
+        updateProgress(total);
       }
       router.refresh();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "The import could not finish");
     } finally {
+      inFlight.current = null;
       setRunning(false);
       setCurrent("");
       setWaitingFor(null);
@@ -317,12 +370,15 @@ export default function DamplipsImportPanel({
             Import from damplips
           </h2>
           <p className="mt-0.5 max-w-[760px] text-[11.5px] text-ink-3">
-            Walks damplips for each selected category — its popular listings first, then the
-            category&apos;s own pages, then the same searches you would type on the site. There is
-            no number to set and no ceiling. The run keeps working until you press Stop: when every
-            listing has been walked it pauses and starts another pass, picking up anything published
-            since. A video already in the catalog is never added twice, and a post with no poster or
-            no playable file is skipped rather than imported broken.{" "}
+            Imports <strong className="text-ink-2">{ROUND_SIZE} videos a round</strong> — popular
+            listings first, then the category&apos;s own pages, the same searches you would type on
+            the site, and finally its newest archives and the related videos of everything it just
+            read, so a round is not cut short. There is no number to set and no ceiling, and the run
+            keeps working until you press Stop: if damplips has nothing new for a moment the round
+            stays open and the run waits for it rather than finishing with nothing. A video already
+            in the catalog is never added twice, a post with no poster or no playable file is
+            skipped rather than imported broken, and a video that turns out not to belong to the
+            category is imported anyway — with no category tag.{" "}
             {publishedTotal.toLocaleString("en-US")} published{" "}
             {publishedTotal === 1 ? "video" : "videos"} across these categories
             {catalogTotal !== publishedTotal
@@ -397,7 +453,7 @@ export default function DamplipsImportPanel({
           )}
           {running
             ? waitingFor != null
-              ? `Next pass in ${Math.ceil(waitingFor / 1000)}s`
+              ? `Waiting ${Math.ceil(waitingFor / 1000)}s`
               : `Importing ${current || "…"}`
             : dryRun
               ? "Run dry run"
@@ -408,6 +464,9 @@ export default function DamplipsImportPanel({
             type="button"
             onClick={() => {
               stopped.current = true;
+              // Cancels the call in flight instead of waiting for it, so Stop
+              // is immediate even while damplips is slow to answer.
+              inFlight.current?.abort();
             }}
             className="inline-flex h-9 items-center gap-2 rounded-md border border-line px-3 text-[12.5px] font-medium text-ink-2 hover:text-ink"
           >
@@ -426,10 +485,20 @@ export default function DamplipsImportPanel({
       {progress.length > 0 && (
         <>
           <p className="mt-3 text-[11.5px] text-ink-3">
-            This run: <span className="text-emerald-400">+{runningTotal.imported} new</span>{" "}
-            {dryRun ? "(would import)" : ""} · {runningTotal.duplicates} already present
+            This run:{" "}
+            <span className="text-emerald-400">
+              {runningTotal.imported > 0
+                ? `+${runningTotal.imported} new`
+                : "filling the first round"}
+            </span>
+            {dryRun ? " (would import)" : ""} · {runningTotal.rounds}{" "}
+            {runningTotal.rounds === 1 ? "round" : "rounds"} of {ROUND_SIZE} complete
+            {runningTotal.uncategorised > 0
+              ? ` · ${runningTotal.uncategorised} with no category`
+              : ""}{" "}
+            · {runningTotal.duplicates} already present
             {runningTotal.repaired > 0 ? ` · ${runningTotal.repaired} poster(s) repaired` : ""}
-            {running && stopped.current ? " · stopping after this slice" : ""}
+            {running && stopped.current ? " · stopping after this round" : ""}
           </p>
           <ul className="mt-2 space-y-1.5">
             {progress.map((entry) => (
@@ -439,18 +508,23 @@ export default function DamplipsImportPanel({
               >
                 <p className="flex flex-wrap items-center gap-x-2">
                   <span className="font-semibold">{entry.label}</span>
-                  <span className={entry.state === "running" ? "text-amber-300" : "text-emerald-400"}>
-                    {entry.state === "running"
-                      ? "importing"
-                      : entry.passes > 0
-                        ? `pass ${entry.passes + 1}`
-                        : "in progress"}
+                  <span
+                    className={entry.waiting ? "text-amber-300" : "text-emerald-400"}
+                    data-state={entry.waiting ? "waiting" : "importing"}
+                  >
+                    {entry.waiting ? "waiting for new posts" : "importing"}
                   </span>
                   <span className="text-ink-3">
-                    +{entry.imported} new · {entry.duplicates} already present ·{" "}
-                    {entry.posts} video{entry.posts === 1 ? "" : "s"} read
-                    {entry.repaired > 0 ? ` · ${entry.repaired} poster(s) repaired` : ""}
+                    round {entry.rounds + 1} · {entry.roundImported}/{ROUND_SIZE} ·{" "}
+                    {entry.rounds} {entry.rounds === 1 ? "round" : "rounds"} done
                   </span>
+                </p>
+                <p className="mt-0.5 text-ink-3">
+                  +{entry.imported} new
+                  {entry.uncategorised > 0 ? ` (${entry.uncategorised} with no category)` : ""} ·{" "}
+                  {entry.duplicates} already present · {entry.posts} video
+                  {entry.posts === 1 ? "" : "s"} read
+                  {entry.repaired > 0 ? ` · ${entry.repaired} poster(s) repaired` : ""}
                 </p>
               </li>
             ))}

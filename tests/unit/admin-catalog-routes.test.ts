@@ -123,14 +123,32 @@ describe("POST /api/admin/damplips/import", () => {
     });
   });
 
-  it("clamps a nonsense slice budget instead of trusting the caller", async () => {
+  it("clamps a nonsense round budget instead of trusting the caller", async () => {
     importCategorySlice.mockResolvedValueOnce({ imported: 0, pagesRead: 0, postsRead: 0, exhausted: false });
     await importDamplips(
-      jsonRequest("/api/admin/damplips/import", { category: "hardcore", pages: 10_000, posts: -4 }),
+      jsonRequest("/api/admin/damplips/import", {
+        category: "hardcore",
+        pages: 10_000,
+        posts: -4,
+        target: 10_000,
+      }),
     );
     const [options] = importCategorySlice.mock.calls[0];
-    expect(options.pagesPerRequest).toBeLessThanOrEqual(25);
+    expect(options.pagesPerRequest).toBeLessThanOrEqual(60);
     expect(options.postsPerRequest).toBeGreaterThan(0);
+    // A round of 100 is the default; nobody can ask for thousands at once.
+    expect(options.importTarget).toBe(400);
+  });
+
+  it("asks for a round of 100 new videos by default", async () => {
+    importCategorySlice.mockResolvedValueOnce({ imported: 100, pagesRead: 5, postsRead: 100 });
+    const response = await importDamplips(
+      jsonRequest("/api/admin/damplips/import", { category: "hardcore" }),
+    );
+    expect(response.status).toBe(200);
+    expect(importCategorySlice.mock.calls[0][0].importTarget).toBe(100);
+    // The round is what the caller asked the importer for, not a page budget.
+    expect(importCategorySlice.mock.calls[0][0]).not.toHaveProperty("perCategory");
   });
 
   it("rejects unknown and malformed categories", async () => {

@@ -29,10 +29,10 @@ jobs:
             exit 1
           fi
 
-          # The route walks its own plan for up to 220 s per call, three listing
-          # pages and ten posts at a time, and never applies a quota. A second
-          # call in the same night therefore picks up posts published later in
-          # the run; already-imported rows are skipped by identity.
+          # The route fills its own round of 100 new videos per call (12 listing
+          # pages, up to 400 post pages, six post pages at a time, 240 s budget)
+          # and never applies a quota. A second pass in the same night therefore
+          # adds the next round; already-imported rows are skipped by identity.
           slugs="amateur lesbian milf japanese teen-18plus hentai ebony pov big-ass threesome hardcore massage"
           failures=0
           for round in 1 2; do
