@@ -68,14 +68,14 @@ found but no media destination (`media: NOT FOUND`), `4` the media URL parsed bu
 the host did not answer (`reachable: NO`).
 
 ```bash
-# every category, one full pass over each category's listings
+# every category, rounds of 100 new videos
 npm run import:damplips -- --categories=all
 
 # two categories, resolve only, no writes
 npm run import:damplips -- --categories=hardcore,lesbian --dry-run
 
-# a deeper pass: smaller slices, more passes
-npm run import:damplips -- --categories=all --posts=20 --passes=2
+# bigger rounds, and more than one pass over each category
+npm run import:damplips -- --categories=all --target=200 --passes=2
 
 # fix stored rows whose poster is missing, then exit
 npm run import:damplips -- --posters --dry-run
@@ -91,8 +91,9 @@ npm run import:damplips -- --repair --dry-run   # report only
 npm run import:damplips -- --repair             # write playable_url
 ```
 
-There is no per-category target and no cap: `--posts` sizes one request (a
-"slice"), `--passes` is how many times the script walks a category's whole plan.
+There is no cap on how much a category may hold. `--target` is **new videos per
+round** (default 100), `--posts` is the safety valve for post pages opened in one
+call, and `--passes` is how many times the script walks a category's whole plan.
 The dashboard is the same importer with an endless loop around it.
 
 `--repair` walks the catalog and, for every row whose `playable_url` is not a
@@ -105,15 +106,22 @@ re-fetched**. Exit code `2` means at least one row could not be resolved
 Environment: `NEXT_PUBLIC_SUPABASE_URL` plus `SUPABASE_SERVICE_ROLE_KEY` (or
 `SUPABASE_SECRET_KEY`). `DAMPLIPS_BASE_URL` may point at a mirror.
 
-The dashboard is the same importer: **Admin → Videos** posts one *slice* per
-request to `/api/admin/damplips/import` (admin session required; `pages` clamped
-to 25 and `posts` to 60 per slice), continues from the cursor each slice returns,
-and rotates through the ticked categories. When a category reports `exhausted` —
-every listing walked — the panel waits and starts another pass, so **only the
-Stop button ends a run**. A refused or throttled answer pauses the run (60 s,
-doubling to 600 s) instead of ending it. The same panel shows the exact published
-count per category, and the first slice of a run also repairs stored rows whose
-poster went missing.
+The dashboard is the same importer: **Admin → Videos** asks for one **round of
+100** per request at `/api/admin/damplips/import` (admin session required;
+`target` clamped to 400, `pages` to 60, `posts` to 600 per call), continues from
+the cursor each response returns, and rotates through the ticked categories.
+A call that comes back short does not close the round — the panel asks for
+exactly what the round still needs, from the same cursor. When a category reports
+`exhausted` — every listing walked and no related ids left — the round stays open
+and the panel waits (60 s, doubling to 600 s) for damplips to publish something
+rather than reporting a round of zero, so **only the Stop button ends a run**;
+Stop also cancels the call in flight. A refused or throttled answer pauses and
+retries instead of ending the run; an expired admin session is the one thing that
+stops it, because retrying cannot fix it.
+
+The panel shows the exact published count per category, the open round as
+`round 3 · 47/100`, and how many imported videos came in **with no category**.
+The first call of a run also repairs stored rows whose poster went missing.
 
 The number beside each category in that panel is counted by Postgres, one exact
 count per category, and it is the figure the public category page shows: a
@@ -134,17 +142,37 @@ slugs, in preference order, plus search terms as a fallback:
 ```
 
 `sourcePlan()` turns that mapping into an ordered plan of listing URLs:
-popular feeds first (`/most-popular/`, then the taxonomy slug's own popular
-ordering), then the taxonomy listing itself, then `?s=<term>&paged=N` search
-pages. The cursor records which plan entry it is on (`source`), how deep
-(`page`) and how far into that page it got (`skip`), **and the resolved listing
-URL** — damplips paginates differently per section (`rel="next"`, `/page/N/`,
-`?paged=N`), so the URL the page itself advertises is what gets followed and
-never a URL built from a page number.
+
+1. the category's own taxonomy pages (`/c/<slug>/`), so a round fills the
+   category the operator selected;
+2. damplips' popular feeds (`/most-popular/`, `/popular/`), so popular videos
+   come next — before search results and before the archive;
+3. `?s=<term>&paged=N` search pages;
+4. the newest archives (`/latest-updates/`, `/new/`, `/videos/`), which are the
+   depth that keeps a round of 100 filling after the rest is used up.
+
+The cursor records which plan entry it is on (`source`), how deep (`page`) and
+how far into that page it got (`skip`), **the resolved listing URL** — damplips
+paginates differently per section (`rel="next"`, `/page/N/`, `?paged=N`), so the
+URL the page itself advertises is what gets followed and never a URL built from a
+page number — and the **related-video frontier** (`queue`): post ids discovered
+on the pages it has read. The frontier is drained before the next listing page,
+which is how a run keeps finding videos once the listings are used up.
 
 A category that has no popular feed simply costs one request: a miss is skipped,
 not treated as an error. When damplips renames a slug, update
 `lib/damplips/categories.ts`; no other code changes.
+
+### Videos that are not from the category
+
+A popular feed, a search hit or a related link is no promise that a post belongs
+to the category it was found through. Such a video is **still imported** — the
+catalogue wants it — but with `category_id = null`, so it appears in Latest,
+Popular, search and the sitemap without a category tag rather than being filed
+under a category it is not part of. `matchesCategory()` decides, using the post's
+own taxonomy (`rel="category tag"` links, `article:section`, JSON-LD `genre`) and
+then its title and tags against the category's own words. The importer reports
+the count as `uncategorised`, and the panel shows it.
 
 ### Counting and deduplication
 
@@ -157,9 +185,12 @@ not treated as an error. When damplips renames a slug, update
 - A post is skipped when it has no poster, no media file, or a duration under a
   minute (`skipped.missingThumbnail`, `skipped.missingMedia`, `skipped.short`);
   unreadable pages are reported in `errors` and never abort a run.
-- Nothing caps how much a category can hold. A pass that finds nothing new still
-  costs the same listing reads, which is why the panel backs off between empty
-  passes instead of hammering the site.
+- Nothing caps how much a category can hold. A round that finds nothing new
+  backs off (60 s, doubling to 600 s) instead of hammering the site, and never
+  reports itself as finished.
+- Post pages are read six at a time, rows are written in batches of 25, and a
+  unique-index clash inside a batch falls back to per-row inserts so a single
+  race does not cost the rest of the batch.
 
 ## Playback
 

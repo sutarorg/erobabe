@@ -162,21 +162,26 @@ const loadWatchVideo = cache(async (slug: string) => {
 /** More like this: the current category first, then ranked suggestions. */
 async function loadRelatedVideos(video: WatchVideo): Promise<PublicVideo[]> {
   const supabase = await createClient();
-  const { data: related } = await supabase
-    .from("videos")
-    .select(
-      "id, slug, title, thumbnail_url, duration_seconds, quality, view_count, published_at",
-    )
-    .eq("requires_reupload", false)
-    .eq("status", "published")
-    .eq("visibility", "public")
-    .eq("rights_status", "cleared")
-    .eq("moderation_status", "approved")
-    .or("playable_url.not.is.null,embed_url.not.is.null")
-    .eq("category_id", video.category_id)
-    .neq("id", video.id)
-    .order("published_at", { ascending: false })
-    .limit(SHELF_VIDEO_LIMIT);
+  // A video imported without a category (it was not from the category it was
+  // found through) has no category shelf to borrow; the ranked feed below is
+  // its whole "more like this".
+  const { data: related } = video.category_id
+    ? await supabase
+        .from("videos")
+        .select(
+          "id, slug, title, thumbnail_url, duration_seconds, quality, view_count, published_at",
+        )
+        .eq("requires_reupload", false)
+        .eq("status", "published")
+        .eq("visibility", "public")
+        .eq("rights_status", "cleared")
+        .eq("moderation_status", "approved")
+        .or("playable_url.not.is.null,embed_url.not.is.null")
+        .eq("category_id", video.category_id)
+        .neq("id", video.id)
+        .order("published_at", { ascending: false })
+        .limit(SHELF_VIDEO_LIMIT)
+    : { data: [] as any[] };
 
   const relatedVideos: PublicVideo[] = (related || [])
     .slice(0, SHELF_VIDEO_LIMIT)

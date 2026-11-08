@@ -284,14 +284,21 @@ recreates the damplips identity index, the category indexes and the
      'https://www.damplips.com/most-popular/'
    ```
 3. **Fill the catalog**: **Admin → Videos** → tick categories → **Start import**.
-   There is no target to set; the run continues — another pass after each
-   category's listings have been walked — and can be stopped at any time.
+   Each round imports **100 new videos**; there is no target to set and the run
+   continues — another round straight after the previous one — until you press
+   Stop. A round that cannot be filled because damplips has nothing new for the
+   moment stays open and the run waits for it rather than finishing on zero.
    Re-running is always safe: everything already imported is skipped.
+
+   A video found through a category it does not actually belong to (a popular
+   feed's front page, a related link) is imported too, but **with no category**,
+   so nothing on the site is mislabelled; such rows appear in Latest and Popular
+   and simply have no category tag.
 4. **Or run it nightly**: set the repository secrets `SITE_URL` and
    `CRON_SECRET`; `.github/workflows/damplips-nightly-import.yml` calls
-   `/api/cron/damplips-import` at 00:00 IST, and the route loops slices itself
-   (three listing pages and ten posts per slice, 220 s budget) until the plan has
-   been walked or the budget runs out.
+   `/api/cron/damplips-import` at 00:00 IST, and the route loops its own calls
+   (12 listing pages and up to 400 post pages per call, six post pages at a time,
+   240 s budget) until the round of 100 is complete or the budget runs out.
 5. **Confirm the result** in **Admin → System Health** (per-category published
    counts) or with `select * from damplips_category_counts;`. Duplicate check:
    `select provider_file_id, count(*) from videos where provider = 'damplips'
@@ -331,9 +338,10 @@ no uploader, no encoder queue and no server-side thumbnail generation.
   model answers unusably, the listing title is shortened to the same budget, the
   slot is still saved, and the row says a fallback was used.
 - **Import from damplips** — the panel above the table fills categories from the
-  catalog importer (section D). Tick the categories, choose *Stage as private
-  drafts* if you want review first, press **Start import**, and press **Stop**
-  when you have enough.
+  catalog importer (section D), 100 videos a round. Tick the categories, choose
+  *Stage as private drafts* if you want review first, press **Start import**, and
+  press **Stop** when you have enough. The panel shows the open round as
+  `round 3 · 47/100` and how many videos came in with no category.
 - **Retired here**: the upload page, `PublishVideoButton`, automatic
   frame/thumbnail generation (ffmpeg), the thumbnail ranking pipeline, the
   storage-token session route and `/api/cron/bunny-publish`. Migration 26 drops

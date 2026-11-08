@@ -5,6 +5,8 @@ import { createDamplipsFetcher } from "@/lib/damplips/client";
 import {
   DEFAULT_PAGES_PER_REQUEST,
   DEFAULT_POSTS_PER_REQUEST,
+  IMPORT_TARGET,
+  MAX_IMPORT_TARGET,
   MAX_PAGES_PER_REQUEST,
   MAX_POSTS_PER_REQUEST,
   importCategorySlice,
@@ -16,12 +18,13 @@ import { revalidatePublicTag } from "@/lib/public/revalidate";
 /**
  * Admin-triggered damplips import.
  *
- * One **slice** per request: the importer reads a few listing pages, opens the
- * post pages that need resolving, and reports the cursor where it stopped; the
- * dashboard calls again to continue. That is what makes an unlimited run
- * possible without any single request running past its timeout — there is no
- * "videos per category" cap anywhere in this flow, and the caller only stops when
- * the operator presses Stop.
+ * One **round** per request: the importer keeps reading listings and opening
+ * post pages until it has written 100 new videos (or has genuinely walked
+ * everything), then reports the cursor where it stopped. The dashboard calls
+ * again to continue, so a run of any length is a sequence of finished rounds and
+ * no single request runs past its timeout. There is no "videos per category"
+ * cap anywhere in this flow, and the caller only stops when the operator presses
+ * Stop.
  *
  * `repair: true` (the panel's first slice) also resolves the poster of stored
  * rows that have none, so a grid imported before the poster rule fills in.
@@ -44,7 +47,13 @@ function clamp(value: unknown, fallback: number, max: number): number {
 
 function parseCursor(raw: unknown): ImportCursor | undefined {
   if (!raw || typeof raw !== "object") return undefined;
-  const value = raw as { source?: unknown; page?: unknown; skip?: unknown; url?: unknown };
+  const value = raw as {
+    source?: unknown;
+    page?: unknown;
+    skip?: unknown;
+    url?: unknown;
+    queue?: unknown;
+  };
   const source = Number(value.source);
   const page = Number(value.page);
   const skip = Number(value.skip ?? 0);
@@ -59,7 +68,19 @@ function parseCursor(raw: unknown): ImportCursor | undefined {
     return undefined;
   }
   const url = typeof value.url === "string" && value.url ? value.url : undefined;
-  return { source, page, skip, ...(url ? { url } : {}) };
+  const queue = Array.isArray(value.queue)
+    ? value.queue
+        .map((entry) => String(entry ?? "").trim())
+        .filter((entry) => /^\d{1,12}$/.test(entry))
+        .slice(0, 160)
+    : undefined;
+  return {
+    source,
+    page,
+    skip,
+    ...(url ? { url } : {}),
+    ...(queue && queue.length ? { queue } : {}),
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -77,6 +98,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const target = clamp(body.target, IMPORT_TARGET, MAX_IMPORT_TARGET);
     const pages = clamp(body.pages, DEFAULT_PAGES_PER_REQUEST, MAX_PAGES_PER_REQUEST);
     const posts = clamp(body.posts, DEFAULT_POSTS_PER_REQUEST, MAX_POSTS_PER_REQUEST);
     const dryRun = body.dryRun === true;
@@ -98,10 +120,14 @@ export async function POST(req: NextRequest) {
       {
         categorySlug: category.slug,
         cursor: parseCursor(body.cursor),
+        importTarget: target,
         pagesPerRequest: pages,
         postsPerRequest: posts,
         dryRun,
         repair,
+        // The host probe costs one extra request per video and the URL was
+        // already parsed from a page that serves it; playback follows redirects.
+        verifyMedia: body.verifyMedia === true,
         rightsStatus,
         baseUrl: process.env.DAMPLIPS_BASE_URL || undefined,
       },

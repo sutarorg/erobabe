@@ -52,43 +52,55 @@ damplips page itself is never framed.
 
 What a run does:
 
-* **Popular first.** Each category starts with damplips' own popular ordering
-  and only then falls back to its other listings and to search, so a half-filled
-  category already looks like the category. Every row stores the real view count
-  and the grid can sort on it.
-* **Only Stop ends it.** A run never finishes on its own. When every listing of
-  a category has been walked (the report says `exhausted`), the panel waits — a
-  minute, doubling while passes come back empty, capped at ten — and starts
-  another pass, picking up whatever damplips has published since. Throttled or
-  empty answers pause the run rather than end it. Pressing Stop ends it after
-  the slice in flight.
+* **100 videos a round.** Work is measured in rows written, not pages read: a
+  round keeps reading listings and opening post pages — skipping everything
+  already in the catalogue, every teaser and every post without a poster —
+  until 100 new videos are in. A round that would come up short is extended with
+  more listings, the related videos of the posts it just read, and finally the
+  site's newest archives, so a round does not end on "+0 new" while damplips has
+  anything left to give.
+* **The selected category fills first, popular videos next.** A round starts on
+  the category's own damplips pages, then walks damplips' popular feeds, then the
+  same searches a visitor would type, then the newest archives. Popular videos
+  are therefore imported before search results and before the archive.
+* **Nothing is misfiled.** A video found through a category that does not
+  actually belong to it (a popular feed's front page, a related link) is still
+  imported — with **no category** — instead of being labelled with a category it
+  is not part of. The row is published like any other and appears in Latest,
+  Popular and search; it simply has no category tag.
+* **Fast.** Post pages are opened six at a time, listing ids are checked against
+  the catalogue in one batched query per page, rows are inserted in batches, and
+  no media host is probed per video. A round of 100 takes seconds.
+* **Only Stop ends it.** A run never finishes on its own. When a round cannot be
+  filled because every listing has been walked, the round stays open and the run
+  waits — a minute, doubling while it stays empty, capped at ten — then tries
+  again, picking up whatever damplips has published since. Pressing Stop ends it
+  after the call in flight (and cancels that call rather than waiting for it).
 * **No quota.** There is no "videos per category" field and no ceiling. The
-  dashboard asks the server for one slice at a time and continues from the
-  cursor each slice returns, so no single request outlives its timeout. The
-  cursor carries the resolved listing URL, so uneven damplips pagination
-  (`rel=next`, `/page/N/`, `?paged=N`) never has to be guessed.
+  dashboard asks the server for one round at a time and continues from the
+  cursor each response returns, so no single request outlives its timeout. The
+  cursor carries the resolved listing URL and the related-video frontier, so
+  uneven damplips pagination never has to be guessed.
 * **No duplicates.** The damplips post id is the identity. It is claimed for the
-  run before anything is fetched twice, checked against the rows already in the
-  catalogue, and finally enforced by the unique index
+  run before its page is fetched, checked against the rows already in the
+  catalogue in batches, and finally enforced by the unique index
   `videos_damplips_identity_idx`, so two runs racing on the same listing cannot
   both insert the same video.
 * **High quality.** A post is imported when it advertises a real media file and
   a duration of at least a minute; the tallest rendition the page advertises is
   what gets stored. A post without a usable file is skipped, not imported blank.
 * **Posters included, and served by us.** A post without a usable poster is
-  skipped, and rows stored before the poster rule are repaired by the first
-  slice of a run (`repair`). Every card then asks `/api/videos/poster` for the
-  picture instead of the CDN: adult image CDNs are on the ad-block lists and
-  some paths hotlink-protect a foreign referer, which is exactly how a grid ends
-  up full of empty boxes. The proxy is allowlist-only (`damplips.com`),
-  image-only, size-capped and cached for a year.
-* **Resumable and polite.** A short pause sits between requests; the cursor is
-  what makes a run resumable, so a closed tab loses at most one slice.
+  skipped, and rows stored before the poster rule are repaired by the first call
+  of a run. Every card then asks `/api/videos/poster` for the picture instead of
+  the CDN: adult image CDNs are on the ad-block lists and some paths
+  hotlink-protect a foreign referer, which is exactly how a grid ends up full of
+  empty boxes. The proxy is allowlist-only (`damplips.com`), image-only,
+  size-capped and cached for a year.
 
 The same job runs nightly through `GET /api/cron/damplips-import` (Bearer
-`CRON_SECRET`); `.github/workflows/damplips-nightly-import.yml` calls it, and the
-route loops slices on its own until the plan has been walked or its time budget
-runs out. Imported rows are written as published and public with
+`CRON_SECRET`); `.github/workflows/damplips-nightly-import.yml` calls it for every
+category, and the route loops calls on its own until the round of 100 is
+complete or its time budget runs out. Imported rows are written as published and public with
 `rights_status = 'cleared'` so the category is immediately visible; the panel's
 **Stage as private drafts** option stages them as private `pending_review` rows
 instead. Use the existing DMCA / content-removal pages as the takedown path.

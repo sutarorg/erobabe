@@ -10,7 +10,9 @@ import {
   parseNextPageUrl,
   advanceSearchPage,
   parseVideoPage,
+  postCategorySignals,
   postIdFromUrl,
+  relatedPostIds,
   toSafeUrl,
 } from "@/lib/damplips/parse";
 
@@ -261,5 +263,54 @@ describe("helpers", () => {
   it("only accepts http(s) URLs", () => {
     expect(toSafeUrl("javascript:alert(1)")).toBeNull();
     expect(toSafeUrl("https://www.damplips.com/p/1/")).toBe("https://www.damplips.com/p/1/");
+  });
+});
+
+describe("category signals and the related frontier", () => {
+  const POST = `
+    <html><head>
+      <meta property="og:title" content="Charli Rose gets a hard lesson in the study" />
+      <meta property="og:image" content="${POSTER}" />
+      <meta property="og:video" content="https://video.damplips.com/video7/709/02.mp4" />
+      <meta property="article:tag" content="hardcore, brunette" />
+    </head><body>
+      <nav class="menu">
+        <a href="/c/milf/">MILF</a>
+        <a href="/c/lesbian/">Lesbian</a>
+        <a href="/c/hentai/">Hentai</a>
+      </nav>
+      <p class="entry-categories">
+        <a rel="category tag" href="/c/hardcore/">Hardcore</a>
+      </p>
+      <div class="related-videos">
+        <a href="/p/67285/">Another scene</a>
+        <a href="https://www.damplips.com/p/67286/">And another</a>
+        <a href="/p/67284/#comments">12 comments</a>
+      </div>
+    </body></html>`;
+
+  it("reads the taxonomy a post files itself under, and ignores the site menu", () => {
+    const detail = parseVideoPage(POST, "https://www.damplips.com/p/67284/");
+    expect(detail?.categorySlugs).toEqual(["hardcore"]);
+    expect(detail?.tags).toEqual(["hardcore", "brunette"]);
+    expect(detail?.categorySlugs).not.toContain("milf");
+    expect(detail?.categorySlugs).not.toContain("hentai");
+  });
+
+  it("collects related post ids without the post itself or its comment links", () => {
+    expect(relatedPostIds(POST, "67284")).toEqual(["67285", "67286"]);
+  });
+
+  it("keeps a page with no taxonomy and no related links working", () => {
+    const bare = `<html><head>
+      <meta property="og:title" content="A plain page with a title" />
+      <meta property="og:image" content="${POSTER}" />
+      <meta property="og:video" content="https://video.damplips.com/video7/1/2.mp4" />
+    </head></html>`;
+    const detail = parseVideoPage(bare, "https://www.damplips.com/p/60001/");
+    expect(detail?.categorySlugs).toEqual([]);
+    expect(detail?.tags).toEqual([]);
+    expect(detail?.relatedIds).toEqual([]);
+    expect(detail?.media).toEqual({ kind: "direct", url: "https://video.damplips.com/video7/1/2.mp4" });
   });
 });

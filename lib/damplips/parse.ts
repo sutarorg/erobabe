@@ -31,6 +31,17 @@ export type DamplipsDetail = {
   maxHeight: number | null;
   /** Views the page advertises, when it prints one. */
   views: number | null;
+  /**
+   * damplips taxonomy slugs the post files itself under (`/c/<slug>/` links it
+   * marks as categories, `article:section`, JSON-LD `genre`). This is how the
+   * importer decides whether the post belongs to the erobabe category it was
+   * found through, or should be catalogued with no category at all.
+   */
+  categorySlugs: string[];
+  /** Tags/keywords the post prints, matched against the category's own words. */
+  tags: string[];
+  /** Other post ids this page links to — the related-video frontier. */
+  relatedIds: string[];
   media: DamplipsMedia | null;
 };
 
@@ -117,6 +128,15 @@ function attribute(tag: string, name: string): string | null {
   if (!match) return null;
   const raw = match[2] ?? match[3] ?? match[4] ?? "";
   return decodeEntities(raw.trim());
+}
+
+/** Origin a page was served from, so a mirror (or a test fixture) keeps working. */
+function originOf(pageUrl: string): string {
+  try {
+    return new URL(pageUrl).origin;
+  } catch {
+    return DAMPLIPS_BASE_URL;
+  }
 }
 
 function hostOf(value: string, base = DAMPLIPS_BASE_URL): string | null {
@@ -231,7 +251,7 @@ export function parseListing(html: string, pageUrl = DAMPLIPS_BASE_URL): {
     if (!existing) {
       byId.set(sourceId, {
         sourceId,
-        sourceUrl: `${DAMPLIPS_BASE_URL}/p/${sourceId}/`,
+        sourceUrl: `${originOf(pageUrl)}/p/${sourceId}/`,
         title: cleanTitle(title),
         thumbnailUrl: thumbnail,
       });
@@ -537,9 +557,11 @@ export function parseVideoPage(html: string, pageUrl: string): DamplipsDetail | 
       null,
   );
 
+  const signals = postCategorySignals(html);
+
   return {
     sourceId,
-    sourceUrl: `${DAMPLIPS_BASE_URL}/p/${sourceId}/`,
+    sourceUrl: `${originOf(pageUrl)}/p/${sourceId}/`,
     title,
     description: description ? description.slice(0, 1200) : null,
     thumbnailUrl: ogImageTag
@@ -548,8 +570,95 @@ export function parseVideoPage(html: string, pageUrl: string): DamplipsDetail | 
     durationSeconds,
     maxHeight: maxQualityHeight(html),
     views: viewsFromPage(html),
+    categorySlugs: signals.categorySlugs,
+    tags: signals.tags,
+    relatedIds: relatedPostIds(html, sourceId),
     media: parseMedia(html, pageUrl),
   };
+}
+
+/**
+ * The taxonomy a post page files itself under, plus its tags.
+ *
+ * A site-wide navigation menu links every category too, so anchors only count
+ * when WordPress marks them as the post's own (`rel="category tag"` /
+ * `rel="tag"`); the menu cannot accidentally make every post look like it
+ * belongs everywhere. `article:section`, `keywords` and JSON-LD `genre` are the
+ * same claim in machine-readable form.
+ */
+export function postCategorySignals(html: string): {
+  categorySlugs: string[];
+  tags: string[];
+} {
+  const categorySlugs = new Set<string>();
+  const tags = new Set<string>();
+
+  const seenTags = new Set<string>();
+  const addTag = (value: string) => {
+    const tag = stripTags(value);
+    if (!tag) return;
+    const key = tag.toLowerCase();
+    if (seenTags.has(key)) return;
+    seenTags.add(key);
+    tags.add(tag);
+  };
+  const addWords = (value: string) => {
+    for (const part of value.split(/[,|]/)) addTag(part);
+  };
+
+  for (const tag of html.match(/<meta\b[^>]*>/gi) || []) {
+    const key = (attribute(tag, "property") || attribute(tag, "name") || "").toLowerCase();
+    const content = attribute(tag, "content");
+    if (!content) continue;
+    if (key === "article:section" || key === "keywords" || key === "article:tag") addWords(content);
+  }
+
+  for (const anchor of html.match(/<a\b[^>]*>[\s\S]*?<\/a>/gi) || []) {
+    const rel = (attribute(anchor, "rel") || "").toLowerCase();
+    if (!rel.includes("category") && !rel.includes("tag")) continue;
+    const href = attribute(anchor, "href");
+    const slug = href ? /\/c\/([a-z0-9-]+)\/?/i.exec(href)?.[1] : undefined;
+    if (slug) {
+      const normalised = slug.toLowerCase();
+      categorySlugs.add(normalised);
+      // The slug already says it; the visible label would only repeat it.
+      if (normalised.split("-").join(" ") !== stripTags(anchor.replace(/^<a\b[^>]*>/i, "")).toLowerCase()) {
+        addTag(anchor.replace(/^<a\b[^>]*>/i, "").replace(/<\/a>$/i, ""));
+      }
+      continue;
+    }
+    addTag(anchor.replace(/^<a\b[^>]*>/i, "").replace(/<\/a>$/i, ""));
+  }
+
+  for (const block of html.match(
+    /<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi,
+  ) || []) {
+    for (const match of block.matchAll(/"genre"\s*:\s*(?:\[([^\]]*)\]|"([^"]+)")/gi)) {
+      for (const value of [match[1], match[2]]) {
+        if (!value) continue;
+        for (const part of value.matchAll(/"([^"]+)"/g)) addWords(part[1]);
+      }
+    }
+  }
+
+  return { categorySlugs: [...categorySlugs], tags: [...tags] };
+}
+
+/**
+ * Every other post id a page links to.
+ *
+ * Post pages carry a related-videos block, and those links are new post ids the
+ * importer has not seen on any listing. They are what keeps a long run finding
+ * videos after the listings themselves have been walked.
+ */
+export function relatedPostIds(html: string, selfId?: string | null): string[] {
+  const ids = new Set<string>();
+  for (const match of html.matchAll(/\/p\/(\d+)(?:[/?#"'<\s]|$)/gi)) {
+    const id = String(match[1]);
+    if (selfId && id === String(selfId)) continue;
+    ids.add(id);
+  }
+  return [...ids];
 }
 
 /**
